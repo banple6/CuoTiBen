@@ -1,0 +1,16 @@
+.DS_Store
+._*
+*.baiduyun.uploading.cfg
+
+# Xcode user state
+xcuserdata/
+*.xcuserstate
+*.xcbkptlist
+
+# Build artifacts
+DerivedData/
+.codex-derived/
+
+# Backend
+backend/node_modules/
+backend/.env

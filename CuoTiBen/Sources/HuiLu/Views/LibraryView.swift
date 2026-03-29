@@ -1,0 +1,894 @@
+import SwiftUI
+
+struct LibraryView: View {
+    @EnvironmentObject var viewModel: AppViewModel
+    @State private var searchText = ""
+    @State private var selectedFilter: LibraryFilter = .recent
+    @State private var selectedDocument: SourceDocument?
+    @State private var showingImport = false
+
+    enum LibraryFilter: String, CaseIterable {
+        case recent = "最近"
+        case weak = "薄弱"
+        case subjects = "学科"
+    }
+
+    private var filteredDocuments: [SourceDocument] {
+        let documents = viewModel.sourceDocuments.filter {
+            searchText.isEmpty || $0.title.localizedCaseInsensitiveContains(searchText)
+        }
+
+        switch selectedFilter {
+        case .recent:
+            return documents.sorted { $0.importDate > $1.importDate }
+        case .weak:
+            return documents.sorted { lhs, rhs in
+                lhs.generatedCardCount > rhs.generatedCardCount
+            }
+        case .subjects:
+            return documents.sorted { $0.title < $1.title }
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            AppBackground(style: .light)
+
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 22) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("活跃知识库")
+                            .font(.system(size: 32, weight: .bold, design: .rounded))
+                            .foregroundStyle(Color.black.opacity(0.82))
+
+                        Text("把导入资料整理成可随时检索、回看的知识地图。")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(Color.black.opacity(0.5))
+                    }
+
+                    HStack(spacing: 12) {
+                        SearchBar(text: $searchText)
+
+                        Button {
+                            showingImport = true
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.system(size: 18, weight: .bold))
+                                .foregroundStyle(Color.black.opacity(0.75))
+                                .frame(width: 48, height: 48)
+                                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                        .stroke(Color.white.opacity(0.7), lineWidth: 1)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    SegmentedGlassControl(
+                        items: LibraryFilter.allCases,
+                        selected: $selectedFilter,
+                        label: \.rawValue
+                    )
+
+                    HStack(spacing: 14) {
+                        LibraryToolbarChip(icon: "slider.horizontal.3", title: "筛选")
+                        LibraryToolbarChip(icon: "arrow.up.arrow.down", title: "排序")
+                        LibraryToolbarChip(icon: "tag", title: "标签")
+                    }
+
+                    ForEach(Array(filteredDocuments.enumerated()), id: \.element.id) { index, document in
+                        Button {
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.88)) {
+                                selectedDocument = document
+                            }
+                        } label: {
+                            LibraryDocumentCard(document: document, paletteIndex: index)
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    Spacer(minLength: 150)
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 58)
+            }
+
+            if let selectedDocument {
+                Color.black.opacity(0.22)
+                    .ignoresSafeArea()
+                    .transition(.opacity)
+                    .onTapGesture {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.9)) {
+                            self.selectedDocument = nil
+                        }
+                    }
+
+                SourceDetailView(document: selectedDocument) {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.9)) {
+                        self.selectedDocument = nil
+                    }
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .zIndex(1)
+            }
+        }
+        .ignoresSafeArea()
+        .fullScreenCover(isPresented: $showingImport) {
+            ImportMaterialView()
+                .environmentObject(viewModel)
+        }
+        .onAppear {
+            presentPendingPreviewIfNeeded()
+        }
+        .onChange(of: viewModel.pendingPreviewDocumentID) { _ in
+            presentPendingPreviewIfNeeded()
+        }
+    }
+
+    private func presentPendingPreviewIfNeeded() {
+        guard let pendingID = viewModel.pendingPreviewDocumentID,
+              let document = viewModel.sourceDocuments.first(where: { $0.id == pendingID }) else { return }
+
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.88)) {
+            selectedDocument = document
+        }
+        viewModel.pendingPreviewDocumentID = nil
+    }
+}
+
+struct SearchBar: View {
+    @Binding var text: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Color.black.opacity(0.35))
+
+            TextField("搜索知识库", text: $text)
+                .font(.system(size: 16, weight: .medium))
+                .textInputAutocapitalization(.never)
+
+            Image(systemName: "mic.fill")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Color.black.opacity(0.35))
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 48)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.white.opacity(0.72), lineWidth: 1)
+        )
+    }
+}
+
+struct SegmentedGlassControl<T: Hashable>: View {
+    let items: [T]
+    @Binding var selected: T
+    let label: KeyPath<T, String>
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(items, id: \.self) { item in
+                Button {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
+                        selected = item
+                    }
+                } label: {
+                    Text(item[keyPath: label])
+                        .font(.system(size: 16, weight: selected == item ? .semibold : .medium))
+                        .foregroundStyle(Color.black.opacity(selected == item ? 0.82 : 0.6))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(selected == item ? Color.white.opacity(0.88) : .clear)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(6)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.white.opacity(0.7), lineWidth: 1)
+        )
+    }
+}
+
+struct LibraryToolbarChip: View {
+    let icon: String
+    let title: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 16, weight: .semibold))
+
+            Text(title)
+                .font(.system(size: 14, weight: .semibold))
+        }
+        .foregroundStyle(Color.black.opacity(0.6))
+        .padding(.horizontal, 14)
+        .frame(height: 42)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.white.opacity(0.75), lineWidth: 1)
+        )
+    }
+}
+
+struct LibraryDocumentCard: View {
+    let document: SourceDocument
+    let paletteIndex: Int
+
+    private var palette: [Color] {
+        switch paletteIndex % 4 {
+        case 0:
+            return [Color(red: 0.62, green: 0.82, blue: 1.0), Color(red: 0.37, green: 0.61, blue: 0.98)]
+        case 1:
+            return [Color(red: 1.0, green: 0.86, blue: 0.62), Color(red: 1.0, green: 0.71, blue: 0.46)]
+        case 2:
+            return [Color(red: 0.9, green: 0.73, blue: 1.0), Color(red: 0.69, green: 0.47, blue: 0.96)]
+        default:
+            return [Color(red: 0.69, green: 0.96, blue: 1.0), Color(red: 0.39, green: 0.8, blue: 0.91)]
+        }
+    }
+
+    private var status: (label: String, icon: String, color: Color) {
+        switch document.processingStatus {
+        case .imported:
+            return ("已导入", "tray.full.fill", Color.blue.opacity(0.85))
+        case .parsing:
+            return ("解析中", "sparkles", Color.orange.opacity(0.9))
+        case .ready:
+            return ("已就绪", "checkmark.circle.fill", Color.green.opacity(0.85))
+        case .failed:
+            return ("失败", "exclamationmark.triangle.fill", Color.red.opacity(0.82))
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top, spacing: 14) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(document.title)
+                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.black.opacity(0.84))
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    HStack(spacing: 8) {
+                        LibraryMetaPill(title: document.documentType.displayName)
+                        LibraryMetaPill(title: document.chunkCount > 0 ? "\(document.chunkCount) 个知识块" : "\(document.pageCount) 页")
+                        if document.generatedCardCount > 0 {
+                            LibraryMetaPill(title: "\(document.generatedCardCount) 张草稿")
+                        } else if document.chunkCount > 0 {
+                            LibraryMetaPill(title: "结构化预览")
+                        }
+                    }
+                }
+
+                Spacer(minLength: 0)
+
+                ZStack {
+                    Circle()
+                        .fill(Color.white.opacity(0.24))
+                        .frame(width: 68, height: 68)
+                        .blur(radius: AppPerformance.prefersReducedEffects ? 3 : 8)
+
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(Color.white.opacity(0.34))
+                        .frame(width: 44, height: 58)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(Color.white.opacity(0.55), lineWidth: 1)
+                        )
+                        .rotationEffect(.degrees(-10))
+
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.74), palette[0].opacity(0.42)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .frame(width: 46, height: 60)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(Color.white.opacity(0.66), lineWidth: 1)
+                        )
+                        .rotationEffect(.degrees(10))
+
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.black.opacity(0.1))
+                        .frame(width: 22, height: 4)
+                        .offset(y: -8)
+
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.black.opacity(0.1))
+                        .frame(width: 18, height: 4)
+                        .offset(y: 2)
+                }
+                .padding(.top, 4)
+            }
+
+            HStack {
+                HStack(spacing: 8) {
+                    Image(systemName: status.icon)
+                        .font(.system(size: 15, weight: .semibold))
+                    Text(status.label)
+                        .font(.system(size: 15, weight: .medium))
+                }
+                .foregroundStyle(status.color)
+
+                Spacer()
+
+                HStack(spacing: 8) {
+                    LibraryMetaPill(title: "候选点 \(document.candidateKnowledgePoints.count)")
+                    Image(systemName: document.processingStatus.icon)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Color.black.opacity(0.3))
+                }
+            }
+        }
+        .padding(22)
+        .frame(maxWidth: .infinity, minHeight: 166)
+        .background(
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .fill(LinearGradient(colors: palette, startPoint: .topLeading, endPoint: .bottomTrailing))
+                .overlay(alignment: .topTrailing) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.white.opacity(0.38))
+                            .frame(width: 72, height: 72)
+                            .blur(radius: AppPerformance.prefersReducedEffects ? 6 : 16)
+                            .offset(x: 14, y: -18)
+
+                        RoundedRectangle(cornerRadius: 30, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [Color.white.opacity(0.32), .clear],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .frame(width: 130, height: 84)
+                            .rotationEffect(.degrees(-18))
+                            .offset(x: 30, y: -22)
+
+                        RoundedRectangle(cornerRadius: 28, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [Color.white.opacity(0.18), .clear],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .frame(width: 150, height: 96)
+                            .rotationEffect(.degrees(28))
+                            .offset(x: 16, y: 26)
+                    }
+                }
+                .overlay(
+                    RoundedRectangle(cornerRadius: 28, style: .continuous)
+                        .stroke(Color.white.opacity(0.55), lineWidth: 1)
+                )
+                .shadow(color: palette[1].opacity(0.14), radius: AppPerformance.prefersReducedEffects ? 12 : 24, y: AppPerformance.prefersReducedEffects ? 6 : 12)
+        )
+    }
+}
+
+struct KnowledgeDetailOverlay: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+    let document: SourceDocument
+    let onClose: () -> Void
+    @State private var isGeneratingDrafts = false
+    @State private var generationNote: String?
+    @State private var isExpanded = false
+    @State private var dragOffset: CGFloat = 0
+
+    private var liveDocument: SourceDocument {
+        viewModel.sourceDocuments.first(where: { $0.id == document.id }) ?? document
+    }
+
+    private var previewChunks: [KnowledgeChunk] {
+        viewModel.chunks(for: liveDocument)
+    }
+
+    private var conceptTags: [String] {
+        let fallback = [liveDocument.documentType.displayName, "重点整理", "深度复习"]
+        return Array((liveDocument.topicTags + fallback).prefix(6))
+    }
+
+    private var sectionTitles: [String] {
+        Array((liveDocument.sectionTitles.isEmpty ? ["等待解析章节输出"] : liveDocument.sectionTitles).prefix(6))
+    }
+
+    private var candidatePoints: [String] {
+        Array((liveDocument.candidateKnowledgePoints.isEmpty ? ["等待候选知识点输出"] : liveDocument.candidateKnowledgePoints).prefix(6))
+    }
+
+    private var generatedDraftCount: Int {
+        max(liveDocument.generatedCardCount, viewModel.generatedCards(for: liveDocument).count)
+    }
+
+    private var detailPrimaryTitle: String {
+        if isGeneratingDrafts {
+            return "生成中..."
+        }
+        if generatedDraftCount > 0 {
+            return "开始复习"
+        }
+        return "生成卡片"
+    }
+
+    private var detailPrimaryIcon: String {
+        if isGeneratingDrafts {
+            return "hourglass"
+        }
+        if generatedDraftCount > 0 {
+            return "play.fill"
+        }
+        return "rectangle.stack.fill"
+    }
+
+    private var canGenerateDrafts: Bool {
+        liveDocument.processingStatus == .ready && liveDocument.chunkCount > 0 && !isGeneratingDrafts
+    }
+
+    private var dismissProgress: CGFloat {
+        min(max(dragOffset / 220, 0), 1)
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let safeBottom = max(proxy.safeAreaInsets.bottom, 14)
+            let collapsedHeight = min(max(proxy.size.height * 0.72, 560), proxy.size.height * 0.84)
+            let expandedHeight = proxy.size.height * 0.93
+            let baseHeight = isExpanded ? expandedHeight : collapsedHeight
+            let liveHeight = min(max(baseHeight - dragOffset, collapsedHeight), expandedHeight)
+
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+
+                GlassPanel(tone: .light, cornerRadius: 34, padding: 0) {
+                    VStack(spacing: 0) {
+                        overlayHeader
+                            .padding(.horizontal, 24)
+                            .padding(.top, 14)
+                            .padding(.bottom, 18)
+                            .contentShape(Rectangle())
+                            .gesture(sheetDragGesture(collapsedHeight: collapsedHeight, expandedHeight: expandedHeight))
+
+                        ScrollView(showsIndicators: false) {
+                            overlayBody
+                            .padding(.horizontal, 24)
+                            .padding(.bottom, safeBottom + 118)
+                        }
+
+                        overlayActionBar(safeBottom: safeBottom)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                }
+                .frame(height: liveHeight)
+            }
+        }
+        .ignoresSafeArea()
+    }
+
+    private var overlayHeader: some View {
+        HStack(alignment: .center) {
+            Capsule()
+                .fill(Color.black.opacity(0.14))
+                .frame(width: 66, height: 6)
+
+            Spacer()
+
+            Text(isExpanded ? "下拉收起" : "上拉展开")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.black.opacity(0.38))
+
+            Spacer()
+
+            Button(action: onClose) {
+                HStack(spacing: 6) {
+                    Image(systemName: "xmark.circle.fill")
+                    Text("关闭")
+                }
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(Color.black.opacity(0.48))
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var overlayBody: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            Text("资料详情")
+                .font(.system(size: 26, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.black.opacity(0.82))
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("资料来源")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(Color.black.opacity(0.74))
+
+                HStack(alignment: .top, spacing: 12) {
+                    FrostedOrb(icon: liveDocument.documentType.icon, size: 42, tone: .light)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(liveDocument.title)
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(Color.black.opacity(0.82))
+
+                        Text("\(liveDocument.pageCount) 页 • 导入于 \(formattedDate)")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(Color.black.opacity(0.48))
+                    }
+                }
+            }
+
+            HStack(spacing: 10) {
+                LibraryMetaPill(title: liveDocument.processingStatus.displayName)
+                if liveDocument.chunkCount > 0 {
+                    LibraryMetaPill(title: "\(liveDocument.chunkCount) 个知识块")
+                }
+                if generatedDraftCount > 0 {
+                    LibraryMetaPill(title: "\(generatedDraftCount) 张草稿")
+                } else if liveDocument.chunkCount > 0 {
+                    LibraryMetaPill(title: "结构化预览")
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("结构化预览")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(Color.black.opacity(0.74))
+
+                if previewChunks.isEmpty {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(Color.white.opacity(0.5))
+                        .frame(maxWidth: .infinity, minHeight: 120)
+                        .overlay {
+                            VStack(spacing: 8) {
+                                Image(systemName: "doc.text.magnifyingglass")
+                                    .font(.system(size: 24, weight: .semibold))
+                                    .foregroundStyle(Color.blue.opacity(0.65))
+
+                                Text("解析完成后，这里会展示知识块预览。")
+                                    .font(.system(size: 15, weight: .medium))
+                                    .foregroundStyle(Color.black.opacity(0.5))
+                            }
+                            .padding(18)
+                        }
+                } else {
+                    LazyVStack(spacing: 12) {
+                        ForEach(previewChunks) { chunk in
+                            StructuredPreviewCard(
+                                title: displayTitle(for: chunk),
+                                locator: displayLocator(for: chunk),
+                                content: displaySnippet(for: chunk),
+                                tags: Array(chunk.candidateKnowledgePoints.prefix(3))
+                            )
+                        }
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("主题标签")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(Color.black.opacity(0.74))
+
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 10)], spacing: 10) {
+                    ForEach(conceptTags, id: \.self) { tag in
+                        Text(tag)
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(Color.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 9)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(
+                                Capsule(style: .continuous)
+                                    .fill(
+                                        LinearGradient(
+                                            colors: [Color.blue.opacity(0.55), Color.purple.opacity(0.55)],
+                                            startPoint: .leading,
+                                            endPoint: .trailing
+                                        )
+                                    )
+                            )
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("解析章节")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(Color.black.opacity(0.74))
+
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 10)], spacing: 10) {
+                    ForEach(sectionTitles, id: \.self) { section in
+                        Text(section)
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(Color.black.opacity(0.72))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .fill(Color.white.opacity(0.52))
+                            )
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("候选知识点")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(Color.black.opacity(0.74))
+
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 10)], spacing: 10) {
+                    ForEach(candidatePoints, id: \.self) { point in
+                        Text(point)
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(Color.black.opacity(0.75))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .fill(Color.blue.opacity(0.08))
+                            )
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("解析说明")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(Color.black.opacity(0.74))
+
+                Text(detailDescription)
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(Color.black.opacity(0.75))
+                    .lineSpacing(6)
+            }
+        }
+    }
+
+    private func overlayActionBar(safeBottom: CGFloat) -> some View {
+        VStack(spacing: 12) {
+            if let generationNote {
+                Text(generationNote)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(Color.blue.opacity(0.72))
+                    .lineSpacing(3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            HStack {
+                DetailActionButton(title: "分享", icon: "square.and.arrow.up") {}
+                DetailActionButton(
+                    title: detailPrimaryTitle,
+                    icon: detailPrimaryIcon,
+                    isDisabled: !canGenerateDrafts && generatedDraftCount == 0
+                ) {
+                    handlePrimaryAction()
+                }
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 16)
+        .padding(.bottom, safeBottom)
+        .background(
+            Rectangle()
+                .fill(Color.white.opacity(0.78))
+                .overlay(alignment: .top) {
+                    Rectangle()
+                        .fill(Color.white.opacity(0.9))
+                        .frame(height: 1)
+                }
+        )
+    }
+
+    private var formattedDate: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "M月d日"
+        return formatter.string(from: liveDocument.importDate)
+    }
+
+    private func displayTitle(for chunk: KnowledgeChunk) -> String {
+        let trimmed = chunk.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "未命名知识块" : trimmed
+    }
+
+    private func displayLocator(for chunk: KnowledgeChunk) -> String {
+        if let locator = chunk.sourceLocator?.trimmingCharacters(in: .whitespacesAndNewlines), !locator.isEmpty {
+            return locator
+        }
+        if let startPosition = chunk.startPosition {
+            return "原文第 \(startPosition) 页"
+        }
+        return "原文定位待补充"
+    }
+
+    private func displaySnippet(for chunk: KnowledgeChunk) -> String {
+        let normalized = chunk.content
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "  ", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !normalized.isEmpty else {
+            return "当前知识块暂时没有正文摘要。"
+        }
+
+        if normalized.count > 120 {
+            return String(normalized.prefix(120)) + "…"
+        }
+        return normalized
+    }
+
+    private var detailDescription: String {
+        switch liveDocument.processingStatus {
+        case .imported:
+            return "资料记录已经创建，但还没有进入完整解析。下一步会抽取正文、章节定位、标签和候选知识点。"
+        case .parsing:
+            return "系统正在异步抽取正文文本，并把内容整理成带来源定位的结构化预览。解析完成后你可以在确认预览后，再手动生成问答卡、填空卡和判断/选择卡草稿。"
+        case .ready:
+            if generatedDraftCount > 0 {
+                return "这份资料已经完成结构化预览，并已生成 \(generatedDraftCount) 张卡片草稿。你可以直接进入复习，也可以继续检查章节、标签和候选知识点。"
+            }
+
+            return "这份资料已经完成结构化预览，共输出 \(liveDocument.chunkCount) 个知识块、\(liveDocument.candidateKnowledgePoints.count) 个候选知识点。确认这些结果没有问题后，再手动生成卡片草稿。"
+        case .failed:
+            return liveDocument.lastProcessingError ?? "这份资料在解析阶段失败，需要重新导入或检查源文件格式。"
+        }
+    }
+
+    private func handlePrimaryAction() {
+        if generatedDraftCount > 0 {
+            NotificationCenter.default.post(name: .switchToReviewTab, object: nil)
+            onClose()
+            return
+        }
+
+        guard canGenerateDrafts else { return }
+
+        generationNote = nil
+        isGeneratingDrafts = true
+
+        Task {
+            do {
+                let count = try await viewModel.generateDraftCards(for: liveDocument)
+                await MainActor.run {
+                    generationNote = "已生成 \(count) 张卡片草稿，现在可以开始复习。"
+                    isGeneratingDrafts = false
+                }
+            } catch {
+                await MainActor.run {
+                    generationNote = error.localizedDescription
+                    isGeneratingDrafts = false
+                }
+            }
+        }
+    }
+
+    private func sheetDragGesture(collapsedHeight: CGFloat, expandedHeight: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 8)
+            .onChanged { value in
+                dragOffset = value.translation.height
+            }
+            .onEnded { value in
+                let predictedHeight = (isExpanded ? expandedHeight : collapsedHeight) - value.predictedEndTranslation.height
+
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                    if value.translation.height > 160 || value.predictedEndTranslation.height > 220 {
+                        if isExpanded {
+                            isExpanded = false
+                        } else {
+                            onClose()
+                        }
+                    } else if predictedHeight > (collapsedHeight + expandedHeight) * 0.5 || value.translation.height < -70 {
+                        isExpanded = true
+                    } else {
+                        isExpanded = false
+                    }
+
+                    dragOffset = 0
+                }
+            }
+    }
+}
+
+struct DetailActionButton: View {
+    let title: String
+    let icon: String
+    var isDisabled: Bool = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                Text(title)
+            }
+            .font(.system(size: 15, weight: .medium))
+            .foregroundStyle(isDisabled ? Color.black.opacity(0.28) : Color.black.opacity(0.52))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(isDisabled ? Color.white.opacity(0.24) : Color.white.opacity(0.42))
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+    }
+}
+
+struct StructuredPreviewCard: View {
+    let title: String
+    let locator: String
+    let content: String
+    let tags: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.system(size: 17, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.black.opacity(0.82))
+                        .multilineTextAlignment(.leading)
+
+                    Text(locator)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color.blue.opacity(0.7))
+                }
+
+                Spacer()
+
+                FrostedOrb(icon: "text.alignleft", size: 34, tone: .light)
+            }
+
+            Text(content)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(Color.black.opacity(0.68))
+                .lineSpacing(4)
+
+            if !tags.isEmpty {
+                HStack(spacing: 8) {
+                    ForEach(tags, id: \.self) { tag in
+                        Text(tag)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Color.black.opacity(0.55))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
+                            .background(
+                                Capsule(style: .continuous)
+                                    .fill(Color.white.opacity(0.62))
+                            )
+                    }
+                }
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Color.white.opacity(0.6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(Color.white.opacity(0.82), lineWidth: 1)
+                )
+        )
+    }
+}

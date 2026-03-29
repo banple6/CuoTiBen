@@ -1,0 +1,1282 @@
+import SwiftUI
+import UIKit
+
+struct ReviewSessionView: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var viewModel: AppViewModel
+
+    @State private var currentIndex = 0
+    @State private var isAnswerVisible = false
+    @State private var dragOffset: CGSize = .zero
+    @State private var showDetailOverlay = false
+    @State private var correctCount = 0
+    @State private var partialCount = 0
+    @State private var needsReviewCount = 0
+    @State private var sessionStartTime = Date()
+
+    private var currentCard: Card? {
+        guard currentIndex < viewModel.reviewQueue.count else { return nil }
+        return viewModel.reviewQueue[currentIndex]
+    }
+
+    private var usesRichMotion: Bool {
+        !AppPerformance.prefersReducedEffects
+    }
+
+    private var totalReviewed: Int {
+        correctCount + partialCount + needsReviewCount
+    }
+
+    private var masteryScore: Int {
+        guard totalReviewed > 0 else { return 75 }
+        let weighted = Double(correctCount) + Double(partialCount) * 0.6
+        return Int((weighted / Double(totalReviewed)) * 100)
+    }
+
+    private var elapsedMinutes: Int {
+        max(Int(Date().timeIntervalSince(sessionStartTime) / 60), 1)
+    }
+
+    private var dragProgress: CGFloat {
+        min(abs(dragOffset.width) / 180, 1)
+    }
+
+    private var horizontalTilt: Double {
+        usesRichMotion ? Double(dragOffset.width / 14) : 0
+    }
+
+    private var verticalTilt: Double {
+        usesRichMotion ? Double(-dragOffset.height / 16) : 0
+    }
+
+    private var swipeAccent: Color {
+        if dragOffset.width > 18 {
+            return AppPalette.mint
+        }
+        if dragOffset.width < -18 {
+            return AppPalette.amber
+        }
+        return AppPalette.primary
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let topInset = max(proxy.safeAreaInsets.top, 16)
+
+            ZStack {
+                AppBackground(style: .dark)
+                reviewAmbientGlow
+
+                if let card = currentCard {
+                    activeReviewView(card: card, topInset: topInset)
+                } else {
+                    summaryView(topInset: topInset)
+                }
+
+                if showDetailOverlay, let card = currentCard {
+                    ReviewDetailOverlay(card: card) {
+                        withAnimation(.spring(response: 0.34, dampingFraction: 0.9)) {
+                            showDetailOverlay = false
+                        }
+                    }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .zIndex(4)
+                }
+            }
+            .ignoresSafeArea()
+        }
+    }
+
+    private var reviewAmbientGlow: some View {
+        let glowScale: CGFloat = AppPerformance.prefersReducedEffects ? 0.72 : 1
+        let blurScale: CGFloat = AppPerformance.prefersReducedEffects ? 0.42 : 1
+
+        return ZStack {
+            Circle()
+                .fill(AppPalette.primary.opacity(0.18))
+                .frame(width: 320 * glowScale, height: 320 * glowScale)
+                .blur(radius: 110 * blurScale)
+                .offset(x: -90, y: -220)
+
+            Circle()
+                .fill(AppPalette.mint.opacity(max(dragOffset.width / 420, 0) * 0.22))
+                .frame(width: 260 * glowScale, height: 260 * glowScale)
+                .blur(radius: 100 * blurScale)
+                .offset(x: 140, y: 50)
+
+            Circle()
+                .fill(AppPalette.amber.opacity(max(-dragOffset.width / 420, 0) * 0.22))
+                .frame(width: 260 * glowScale, height: 260 * glowScale)
+                .blur(radius: 100 * blurScale)
+                .offset(x: -150, y: 70)
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func activeReviewView(card: Card, topInset: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button {
+                    Feedback.soft()
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(AppPalette.softText.opacity(0.84))
+                        .frame(width: 44, height: 44)
+                        .background(Color.white.opacity(0.08), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .contentShape(Circle())
+
+                Spacer()
+
+                Text("\(min(currentIndex + 1, viewModel.reviewQueue.count)) / \(viewModel.reviewQueue.count)")
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .foregroundStyle(AppPalette.softText.opacity(0.84))
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, topInset + 8)
+            .zIndex(2)
+
+            ReviewProgressHeader(progress: progressValue, elapsedMinutes: elapsedMinutes)
+                .padding(.top, 12)
+                .padding(.horizontal, 24)
+
+            Spacer(minLength: 18)
+
+            ZStack {
+                RoundedRectangle(cornerRadius: 36, style: .continuous)
+                    .fill(Color.white.opacity(0.06))
+                    .frame(height: 424)
+                    .padding(.horizontal, 44)
+                    .offset(x: 16, y: 12)
+
+                RoundedRectangle(cornerRadius: 36, style: .continuous)
+                    .fill(Color.white.opacity(0.05))
+                    .frame(height: 420)
+                    .padding(.horizontal, 40)
+                    .offset(x: 8, y: 6)
+
+                ReviewFlipCard(
+                    card: card,
+                    sourceTitle: resolvedSourceTitle(for: card),
+                    isFlipped: isAnswerVisible
+                )
+                .offset(dragOffset)
+                .rotationEffect(.degrees(Double(dragOffset.width / (usesRichMotion ? 20 : 28))))
+                .rotation3DEffect(.degrees(horizontalTilt), axis: (x: 0, y: 1, z: 0), perspective: 0.76)
+                .rotation3DEffect(.degrees(verticalTilt), axis: (x: 1, y: 0, z: 0), perspective: 0.76)
+                .scaleEffect(1 - dragProgress * (usesRichMotion ? 0.05 : 0.025))
+                .shadow(color: swipeAccent.opacity(0.08 + Double(dragProgress) * 0.16), radius: usesRichMotion ? 28 : 12, y: usesRichMotion ? 18 : 8)
+                .overlay { swipeEdgeGlow }
+                .gesture(cardGesture)
+
+                swipeFeedbackOverlay
+            }
+            .frame(height: 446)
+
+            if isAnswerVisible {
+                VStack(spacing: 18) {
+                    HStack(spacing: 24) {
+                        ReviewOrbButton(title: "困难", color: AppPalette.amber) {
+                            triggerResult(.unknown, travel: -440)
+                        }
+
+                        ReviewOrbButton(title: "一般", color: AppPalette.primary) {
+                            Feedback.medium()
+                            Task { await advance(with: .vague) }
+                        }
+
+                        ReviewOrbButton(title: "轻松", color: AppPalette.mint) {
+                            triggerResult(.known, travel: 440)
+                        }
+                    }
+
+                    Text("左右拖动卡片也可以快速评分")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(AppPalette.softMutedText)
+                }
+                .padding(.top, 24)
+            } else {
+                ShowAnswerButton {
+                    Feedback.soft()
+                    withAnimation(.spring(response: 0.55, dampingFraction: 0.82)) {
+                        isAnswerVisible = true
+                    }
+                }
+                .padding(.top, 26)
+            }
+
+            footerContext(card: card)
+                .padding(.horizontal, 20)
+                .padding(.top, 22)
+                .padding(.bottom, 34)
+        }
+    }
+
+    private var swipeFeedbackOverlay: some View {
+        ZStack {
+            if dragOffset.width < -18 {
+                SwipeFeedbackHalo(
+                    title: "困难",
+                    subtitle: "向左滑动",
+                    color: AppPalette.amber,
+                    systemImage: "arrow.left.circle.fill"
+                )
+                .offset(x: -110)
+                .opacity(Double(dragProgress))
+            }
+
+            if dragOffset.width > 18 {
+                SwipeFeedbackHalo(
+                    title: "轻松",
+                    subtitle: "向右滑动",
+                    color: AppPalette.mint,
+                    systemImage: "arrow.right.circle.fill"
+                )
+                .offset(x: 110)
+                .opacity(Double(dragProgress))
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    private var swipeEdgeGlow: some View {
+        RoundedRectangle(cornerRadius: 34, style: .continuous)
+            .strokeBorder(
+                LinearGradient(
+                    colors: [
+                        swipeAccent.opacity(0.55 * Double(dragProgress)),
+                        Color.white.opacity(0.1 * Double(dragProgress)),
+                        swipeAccent.opacity(0.22 * Double(dragProgress))
+                    ],
+                    startPoint: dragOffset.width >= 0 ? .topLeading : .topTrailing,
+                    endPoint: dragOffset.width >= 0 ? .bottomTrailing : .bottomLeading
+                ),
+                lineWidth: AppPerformance.prefersReducedEffects ? 1.25 : 2
+            )
+            .padding(.horizontal, 24)
+            .opacity(Double(dragProgress))
+            .allowsHitTesting(false)
+    }
+
+    private func footerContext(card: Card) -> some View {
+        GlassPanel(tone: .dark, cornerRadius: 28, padding: 18) {
+            VStack(spacing: 14) {
+                HStack {
+                    Text("来源：\(resolvedSourceTitle(for: card))")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(AppPalette.softMutedText)
+
+                    Spacer()
+
+                    Button {
+                        withAnimation(.spring(response: 0.32, dampingFraction: 0.88)) {
+                            showDetailOverlay = true
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.up")
+                            Text("查看详解")
+                        }
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(AppPalette.softText)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Text("标签：\(card.keywords.joined(separator: "、"))")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(AppPalette.softMutedText)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    private func summaryView(topInset: CGFloat) -> some View {
+        ScrollView(showsIndicators: false) {
+            VStack(spacing: 24) {
+                HStack {
+                    Button {
+                        Feedback.soft()
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(AppPalette.softMutedText)
+                            .frame(width: 40, height: 40)
+                            .background(Color.white.opacity(0.06), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .contentShape(Circle())
+
+                    Spacer()
+
+                    Text("复习总结")
+                        .font(.system(size: 22, weight: .bold, design: .rounded))
+                        .foregroundStyle(AppPalette.softText)
+
+                    Spacer()
+
+                    Color.clear.frame(width: 16, height: 16)
+                }
+
+                summaryRing
+                    .padding(.top, 4)
+
+                momentumCard
+
+                HStack(spacing: 14) {
+                    AchievementCard(
+                        icon: "bolt.fill",
+                        title: "快节奏状态",
+                        message: "本轮有 \(max(correctCount, 1)) 张卡片在一分钟内完成判断",
+                        tint: AppPalette.cyan
+                    )
+
+                    AchievementCard(
+                        icon: "sparkles",
+                        title: "稳定推进",
+                        message: "整轮复习没有中断，节奏保持很完整",
+                        tint: AppPalette.mint
+                    )
+                }
+
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("结果拆解")
+                        .font(.system(size: 22, weight: .bold, design: .rounded))
+                        .foregroundStyle(AppPalette.softText)
+
+                    SummaryRow(title: "回答正确", value: "\(correctCount)", tint: AppPalette.mint)
+                    SummaryRow(title: "回答一般", value: "\(partialCount)", tint: AppPalette.primary)
+                    SummaryRow(title: "需要回看", value: "\(needsReviewCount)", tint: AppPalette.rose)
+                }
+
+                HStack(spacing: 14) {
+                    Button(action: {}) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "square.and.arrow.up")
+                            Text("分享")
+                        }
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(AppPalette.softMutedText)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                        .background(
+                            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                                .fill(Color.white.opacity(0.06))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                                        .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                                )
+                        )
+                    }
+                    .buttonStyle(.plain)
+
+                    PrimaryGlowButton(title: "完成", icon: "checkmark.circle.fill") {
+                        dismiss()
+                    }
+                }
+
+                Spacer(minLength: 36)
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, topInset + 14)
+            .padding(.bottom, 36)
+        }
+    }
+
+    private var summaryRing: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.white.opacity(0.12), lineWidth: 16)
+                .frame(width: 190, height: 190)
+
+            Circle()
+                .trim(from: 0, to: Double(masteryScore) / 100)
+                .stroke(
+                    LinearGradient(
+                        colors: [AppPalette.mint, Color.green.opacity(0.72)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    ),
+                    style: StrokeStyle(lineWidth: 16, lineCap: .round)
+                )
+                .frame(width: 190, height: 190)
+                .rotationEffect(.degrees(-90))
+
+            VStack(spacing: 4) {
+                Text("\(masteryScore)%")
+                    .font(.system(size: 38, weight: .bold, design: .rounded))
+                    .foregroundStyle(AppPalette.softText)
+
+                Text("掌握度")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(AppPalette.softMutedText)
+                    .tracking(1.2)
+            }
+        }
+        .padding(18)
+    }
+
+    private var momentumCard: some View {
+        GlassPanel(tone: .dark, cornerRadius: 30, padding: 20) {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .bottom) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("本周节奏")
+                            .font(.system(size: 20, weight: .bold, design: .rounded))
+                            .foregroundStyle(AppPalette.primary)
+
+                        Text("这一周整体推进比较稳定")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(AppPalette.softMutedText)
+                    }
+
+                    Spacer()
+
+                    MetricCapsule(label: "\(viewModel.dailyProgress.streakDays) 天连续", tone: .dark, tint: AppPalette.mint)
+                }
+
+                HStack(spacing: 8) {
+                    ForEach(Array(momentumValues.enumerated()), id: \.offset) { index, value in
+                        VStack(spacing: 8) {
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(momentumColor(for: value))
+                                .frame(height: 50)
+
+                            Text(weekdays[index])
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(AppPalette.softMutedText)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var weekdays: [String] {
+        ["一", "二", "三", "四", "五", "六", "日"]
+    }
+
+    private var momentumValues: [Double] {
+        [1.0, 0.82, 0.45, 0.92, 0.58, 0.88, 0.1]
+    }
+
+    private func momentumColor(for value: Double) -> Color {
+        if value > 0.75 { return AppPalette.mint }
+        if value > 0.45 { return AppPalette.mint.opacity(0.72) }
+        if value > 0.15 { return AppPalette.primaryDeep.opacity(0.55) }
+        return Color.white.opacity(0.06)
+    }
+
+    private var progressValue: Double {
+        guard !viewModel.reviewQueue.isEmpty else { return 0 }
+        return Double(currentIndex) / Double(viewModel.reviewQueue.count)
+    }
+
+    private func resolvedSourceTitle(for card: Card) -> String {
+        viewModel.sourceTitle(for: card)
+    }
+
+    private var cardGesture: some Gesture {
+        DragGesture()
+            .onChanged { value in
+                guard isAnswerVisible else { return }
+                dragOffset = CGSize(
+                    width: value.translation.width,
+                    height: max(min(value.translation.height * 0.18, 36), -46)
+                )
+            }
+            .onEnded { value in
+                guard isAnswerVisible else { return }
+
+                if value.translation.width > 104 {
+                    triggerResult(.known, travel: 440)
+                } else if value.translation.width < -104 {
+                    triggerResult(.unknown, travel: -440)
+                } else if value.translation.height < -110 {
+                    Feedback.soft()
+                    withAnimation(.spring(response: 0.34, dampingFraction: 0.9)) {
+                        showDetailOverlay = true
+                    }
+                    dragOffset = .zero
+                } else {
+                    withAnimation(.spring(response: 0.34, dampingFraction: 0.88)) {
+                        dragOffset = .zero
+                    }
+                }
+            }
+    }
+
+    private func triggerResult(_ result: ReviewResult, travel: CGFloat) {
+        switch result {
+        case .known:
+            Feedback.success()
+        case .vague:
+            Feedback.medium()
+        case .unknown:
+            Feedback.warning()
+        }
+
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+            dragOffset = CGSize(width: travel, height: -10)
+        }
+
+        Task {
+            try? await Task.sleep(nanoseconds: 180_000_000)
+            await advance(with: result)
+        }
+    }
+
+    @MainActor
+    private func advance(with result: ReviewResult) async {
+        guard let card = currentCard else { return }
+
+        await viewModel.submitReviewResult(result, for: card)
+
+        switch result {
+        case .known:
+            correctCount += 1
+        case .vague:
+            partialCount += 1
+        case .unknown:
+            needsReviewCount += 1
+        }
+
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.88)) {
+            currentIndex += 1
+            isAnswerVisible = false
+            dragOffset = .zero
+            showDetailOverlay = false
+        }
+    }
+}
+
+struct ReviewFlipCard: View {
+    let card: Card
+    let sourceTitle: String
+    let isFlipped: Bool
+
+    var body: some View {
+        let rotation = isFlipped ? 180.0 : 0.0
+
+        ZStack {
+            questionFace
+                .rotation3DEffect(.degrees(rotation), axis: (x: 0, y: 1, z: 0), perspective: 0.7)
+                .opacity(isFlipped ? 0 : 1)
+
+            answerFace
+                .rotation3DEffect(.degrees(rotation + 180), axis: (x: 0, y: 1, z: 0), perspective: 0.7)
+                .opacity(isFlipped ? 1 : 0)
+        }
+        .animation(.spring(response: 0.55, dampingFraction: 0.82), value: isFlipped)
+        .padding(.horizontal, 24)
+    }
+
+    private var questionFace: some View {
+        GlassPanel(tone: .dark, cornerRadius: 34, padding: 0) {
+            VStack(alignment: .leading, spacing: 22) {
+                Spacer(minLength: 12)
+
+                Text(card.frontContent)
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .foregroundStyle(AppPalette.softText)
+                    .lineSpacing(8)
+                    .minimumScaleFactor(0.84)
+
+                Spacer()
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("来源：\(sourceTitle)")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(AppPalette.softMutedText)
+
+                    Text("标签：\(card.keywords.joined(separator: "、"))")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(AppPalette.softMutedText)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 410, alignment: .leading)
+            .padding(28)
+        }
+        .overlay(alignment: .bottomTrailing) {
+            FrostedOrb(icon: "sparkles", size: 42, tone: .dark)
+                .padding(26)
+        }
+    }
+
+    private var answerFace: some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 22) {
+                HStack {
+                    Text("答案")
+                        .font(.system(size: 24, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.blue.opacity(0.76))
+
+                    Spacer()
+
+                    LibraryMetaPill(title: card.type.displayName)
+                }
+
+                Text(card.backContent)
+                    .font(.system(size: 25, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.black.opacity(0.82))
+                    .lineSpacing(7)
+
+                if !card.keywords.isEmpty {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 10)], spacing: 10) {
+                        ForEach(card.keywords, id: \.self) { keyword in
+                            Text(keyword)
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(Color.blue.opacity(0.82))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 10)
+                                .frame(maxWidth: .infinity)
+                                .background(
+                                    Capsule(style: .continuous)
+                                        .fill(Color.blue.opacity(0.1))
+                                )
+                        }
+                    }
+                }
+
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, minHeight: 410, alignment: .topLeading)
+            .padding(28)
+            .background(
+                RoundedRectangle(cornerRadius: 32, style: .continuous)
+                    .fill(Color.white.opacity(0.94))
+                    .overlay(alignment: .topLeading) {
+                        Circle()
+                            .fill(Color.cyan.opacity(0.18))
+                            .frame(width: 142, height: 142)
+                            .blur(radius: AppPerformance.prefersReducedEffects ? 8 : 18)
+                            .offset(x: -18, y: -18)
+                    }
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 32, style: .continuous)
+                            .stroke(Color.cyan.opacity(0.56), lineWidth: AppPerformance.prefersReducedEffects ? 2 : 3)
+                    )
+                    .shadow(color: Color.cyan.opacity(0.18), radius: AppPerformance.prefersReducedEffects ? 8 : 18)
+            )
+        }
+    }
+}
+
+struct ReviewProgressHeader: View {
+    let progress: Double
+    let elapsedMinutes: Int
+
+    var body: some View {
+        GlassPanel(tone: .dark, cornerRadius: 26, padding: 16) {
+            VStack(spacing: 10) {
+                HStack {
+                    Text("已用 \(elapsedMinutes) 分钟")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(AppPalette.softMutedText)
+
+                    Spacer()
+
+                    Text("\(Int(progress * 100))%")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(AppPalette.softText)
+                }
+
+                GeometryReader { proxy in
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(Color.white.opacity(0.14))
+
+                        Capsule()
+                            .fill(
+                                LinearGradient(
+                                    colors: [Color.white.opacity(0.88), AppPalette.primary],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .frame(width: max(proxy.size.width * progress, 24))
+                            .shadow(color: AppPalette.primary.opacity(0.26), radius: 8)
+                    }
+                }
+                .frame(height: 10)
+            }
+        }
+    }
+}
+
+struct ShowAnswerButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text("查看答案")
+                .font(.system(size: 19, weight: .semibold, design: .rounded))
+                .foregroundStyle(AppPalette.softText)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 18)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(Color.white.opacity(0.12))
+                        .overlay {
+                            if !AppPerformance.prefersReducedEffects {
+                                Capsule(style: .continuous)
+                                    .fill(.ultraThinMaterial)
+                                    .opacity(0.28)
+                            }
+                        }
+                        .overlay(
+                            Capsule(style: .continuous)
+                                .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                        )
+                )
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 34)
+    }
+}
+
+struct ReviewOrbButton: View {
+    let title: String
+    let color: Color
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Circle()
+                    .fill(color.opacity(0.18))
+                    .frame(width: 108, height: 108)
+                    .blur(radius: AppPerformance.prefersReducedEffects ? 1.5 : 4)
+
+                Circle()
+                    .fill(
+                        RadialGradient(
+                            colors: [Color.white.opacity(0.72), color.opacity(0.95)],
+                            center: .center,
+                            startRadius: 8,
+                            endRadius: 78
+                        )
+                    )
+                    .frame(width: 90, height: 90)
+                    .overlay(Circle().stroke(Color.white.opacity(0.5), lineWidth: 1))
+                    .shadow(color: color.opacity(0.24), radius: AppPerformance.prefersReducedEffects ? 8 : 14)
+
+                Text(title)
+                    .font(.system(size: 18, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.white)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct SwipeFeedbackHalo: View {
+    let title: String
+    let subtitle: String
+    let color: Color
+    let systemImage: String
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.system(size: 26, weight: .bold))
+            Text(title)
+                .font(.system(size: 22, weight: .bold, design: .rounded))
+            Text(subtitle)
+                .font(.system(size: 12, weight: .medium))
+        }
+        .foregroundStyle(Color.white)
+        .padding(18)
+        .background(
+            ZStack {
+                Circle()
+                    .fill(color.opacity(0.28))
+                    .frame(width: 138, height: 138)
+                    .blur(radius: AppPerformance.prefersReducedEffects ? 5 : 12)
+
+                Circle()
+                    .fill(color.opacity(0.82))
+                    .frame(width: 118, height: 118)
+                    .blur(radius: AppPerformance.prefersReducedEffects ? 1.5 : 4)
+            }
+        )
+    }
+}
+
+struct ReviewDetailOverlay: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+    let card: Card
+    let onClose: () -> Void
+    @State private var isExpanded = false
+    @State private var dragOffset: CGFloat = 0
+    @State private var explanation: AIExplainSentenceResult?
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+
+    private var explainContext: ExplainSentenceContext? {
+        viewModel.explainSentenceContext(for: card)
+    }
+
+    private var dismissProgress: CGFloat {
+        min(max(dragOffset / 220, 0), 1)
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let collapsedHeight = min(max(proxy.size.height * 0.64, 460), proxy.size.height * 0.78)
+            let expandedHeight = proxy.size.height * 0.88
+            let baseHeight = isExpanded ? expandedHeight : collapsedHeight
+            let liveHeight = min(max(baseHeight - dragOffset, collapsedHeight), expandedHeight)
+
+            ZStack {
+                Color.black.opacity(0.3 - Double(dismissProgress) * 0.16)
+                    .ignoresSafeArea()
+                    .onTapGesture(perform: onClose)
+
+                VStack(spacing: 0) {
+                    Spacer()
+
+                    GlassPanel(tone: .light, cornerRadius: 34, padding: 0) {
+                        VStack(spacing: 0) {
+                            overlayHeader
+                                .padding(.horizontal, 24)
+                                .padding(.top, 14)
+                                .padding(.bottom, 18)
+                                .contentShape(Rectangle())
+                                .gesture(sheetDragGesture(collapsedHeight: collapsedHeight, expandedHeight: expandedHeight))
+
+                            ScrollView(showsIndicators: false) {
+                                overlayBody
+                                    .padding(.horizontal, 24)
+                                    .padding(.bottom, 28)
+                            }
+                        }
+                        .frame(maxHeight: .infinity, alignment: .top)
+                    }
+                    .frame(height: liveHeight)
+                }
+                .ignoresSafeArea()
+            }
+        }
+    }
+
+    private var overlayHeader: some View {
+        HStack(alignment: .center) {
+            Capsule()
+                .fill(Color.black.opacity(0.14))
+                .frame(width: 66, height: 6)
+
+            Spacer()
+
+            Text(isExpanded ? "下拉收起" : "上拉展开")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.black.opacity(0.38))
+
+            Spacer()
+
+            Button(action: onClose) {
+                HStack(spacing: 6) {
+                    Image(systemName: "xmark.circle.fill")
+                    Text("关闭")
+                }
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(Color.black.opacity(0.48))
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var overlayBody: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            Text("AI 句子详解")
+                .font(.system(size: 28, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.black.opacity(0.82))
+
+            Text(viewModel.sourceTitle(for: card))
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Color.black.opacity(0.42))
+
+            if let explainContext {
+                sentenceCard(explainContext.sentence)
+                explanationContent(for: explainContext)
+            } else {
+                unsupportedCard
+            }
+
+            if !card.keywords.isEmpty {
+                keywordCloud
+            }
+
+            contextCard
+        }
+        .task(id: taskIdentifier) {
+            guard explanation == nil, errorMessage == nil else { return }
+            await fetchExplanationIfPossible()
+        }
+    }
+
+    private func sheetDragGesture(collapsedHeight: CGFloat, expandedHeight: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 8)
+            .onChanged { value in
+                dragOffset = value.translation.height
+            }
+            .onEnded { value in
+                let predictedHeight = (isExpanded ? expandedHeight : collapsedHeight) - value.predictedEndTranslation.height
+
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                    if value.translation.height > 160 || value.predictedEndTranslation.height > 220 {
+                        if isExpanded {
+                            isExpanded = false
+                        } else {
+                            onClose()
+                        }
+                    } else if predictedHeight > (collapsedHeight + expandedHeight) * 0.5 || value.translation.height < -70 {
+                        isExpanded = true
+                    } else {
+                        isExpanded = false
+                    }
+
+                    dragOffset = 0
+                }
+            }
+    }
+
+    private var taskIdentifier: String {
+        card.id.uuidString
+    }
+
+    private func sentenceCard(_ sentence: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("目标句子")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(Color.black.opacity(0.72))
+
+            Text(sentence)
+                .font(.system(size: 20, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.black.opacity(0.74))
+                .lineSpacing(5)
+        }
+        .padding(20)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(Color.white.opacity(0.72))
+        )
+    }
+
+    @ViewBuilder
+    private func explanationContent(for explainContext: ExplainSentenceContext) -> some View {
+        if isLoading {
+            loadingCard
+        } else if let explanation {
+            explanationSections(explanation)
+        } else if let errorMessage {
+            errorCard(message: errorMessage)
+        } else {
+            placeholderCard(for: explainContext)
+        }
+    }
+
+    private var loadingCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                ProgressView()
+                Text("正在请求后端并生成句子讲解")
+                    .font(.system(size: 16, weight: .semibold))
+            }
+            .foregroundStyle(Color.black.opacity(0.72))
+
+            Text("首次请求会稍慢一点，结果会直接显示在这里。")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Color.black.opacity(0.48))
+        }
+        .padding(20)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(Color.white.opacity(0.75))
+        )
+    }
+
+    private func errorCard(message: String) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("讲解获取失败")
+                .font(.system(size: 18, weight: .bold))
+                .foregroundStyle(Color.black.opacity(0.78))
+
+            Text(message)
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(Color.black.opacity(0.62))
+                .lineSpacing(4)
+        }
+        .padding(20)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(Color.orange.opacity(0.12))
+        )
+    }
+
+    private func placeholderCard(for explainContext: ExplainSentenceContext) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("等待生成")
+                .font(.system(size: 18, weight: .bold))
+                .foregroundStyle(Color.black.opacity(0.78))
+
+            Text("已自动连接句子讲解服务，正在为这句英语生成中文讲解结果。")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(Color.black.opacity(0.62))
+                .lineSpacing(4)
+
+            Text("上下文长度：\(explainContext.context.count) 字符")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.black.opacity(0.38))
+        }
+        .padding(20)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(Color.white.opacity(0.72))
+        )
+    }
+
+    private func explanationSections(_ explanation: AIExplainSentenceResult) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            explanationSection(title: "中文翻译", body: explanation.translation)
+            explanationSection(title: "主干结构", body: explanation.mainStructure)
+
+            if !explanation.grammarPoints.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("语法点")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(Color.black.opacity(0.78))
+
+                    ForEach(Array(explanation.grammarPoints.enumerated()), id: \.offset) { _, point in
+                        explanationBullet(title: point.name, body: point.explanation)
+                    }
+                }
+            }
+
+            if !explanation.keyTerms.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("关键词")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(Color.black.opacity(0.78))
+
+                    ForEach(Array(explanation.keyTerms.enumerated()), id: \.offset) { _, term in
+                        explanationBullet(title: term.term, body: term.meaning)
+                    }
+                }
+            }
+
+            explanationSection(title: "改写示例", body: explanation.rewriteExample)
+        }
+        .padding(20)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(Color.white.opacity(0.8))
+        )
+    }
+
+    private func explanationSection(title: String, body: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.system(size: 18, weight: .bold))
+                .foregroundStyle(Color.black.opacity(0.78))
+
+            Text(body)
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(Color.black.opacity(0.64))
+                .lineSpacing(4)
+        }
+    }
+
+    private func explanationBullet(title: String, body: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Color.black.opacity(0.74))
+
+            Text(body)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(Color.black.opacity(0.58))
+                .lineSpacing(4)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.blue.opacity(0.08))
+        )
+    }
+
+    private var keywordCloud: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 10)], spacing: 10) {
+            ForEach(card.keywords, id: \.self) { keyword in
+                Text(keyword)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .frame(maxWidth: .infinity)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [Color.blue.opacity(0.55), Color.purple.opacity(0.48)],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                    )
+            }
+        }
+    }
+
+    private var unsupportedCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("当前卡片暂不支持 AI 句子详解")
+                .font(.system(size: 18, weight: .bold))
+                .foregroundStyle(Color.black.opacity(0.78))
+
+            Text("这张卡片没有检测到可用于讲解的英语句子。请先切到英语资料生成的卡片，或者在生成卡片时保留原英文句子。")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(Color.black.opacity(0.62))
+                .lineSpacing(4)
+        }
+        .padding(20)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(Color.orange.opacity(0.12))
+        )
+    }
+
+    private var contextCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("来源上下文")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(Color.black.opacity(0.74))
+
+            Text(viewModel.knowledgeChunk(for: card)?.content ?? card.backContent)
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(Color.black.opacity(0.72))
+                .lineSpacing(4)
+        }
+        .padding(20)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(Color.white.opacity(0.66))
+        )
+    }
+
+    @MainActor
+    private func reloadExplanation() async {
+        explanation = nil
+        errorMessage = nil
+        await fetchExplanationIfPossible()
+    }
+
+    @MainActor
+    private func fetchExplanationIfPossible() async {
+        guard let explainContext else { return }
+        guard !isLoading else { return }
+
+        isLoading = true
+        defer { isLoading = false }
+
+        do {
+            let result = try await AIExplainSentenceService.fetchExplanation(for: explainContext)
+            explanation = result
+            errorMessage = nil
+        } catch {
+            explanation = nil
+            errorMessage = error.localizedDescription
+        }
+    }
+}
+
+struct AchievementCard: View {
+    let icon: String
+    let title: String
+    let message: String
+    let tint: Color
+
+    var body: some View {
+        GlassPanel(tone: .dark, cornerRadius: 28, padding: 18) {
+            VStack(spacing: 12) {
+                FrostedOrb(icon: icon, size: 56, tone: .dark)
+                    .overlay(
+                        Circle()
+                            .stroke(tint.opacity(0.22), lineWidth: 1)
+                    )
+
+                Text(title)
+                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                    .foregroundStyle(AppPalette.softText)
+
+                Text(message)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(AppPalette.softMutedText)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(3)
+            }
+            .frame(maxWidth: .infinity)
+        }
+    }
+}
+
+struct SummaryRow: View {
+    let title: String
+    let value: String
+    let tint: Color
+
+    var body: some View {
+        GlassPanel(tone: .dark, cornerRadius: 24, padding: 16) {
+            HStack {
+                HStack(spacing: 12) {
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(tint)
+                        .frame(width: 6, height: 28)
+
+                    Text(title)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(AppPalette.softText)
+                }
+
+                Spacer()
+
+                Text(value)
+                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .foregroundStyle(tint)
+            }
+        }
+    }
+}
+
+private enum Feedback {
+    static func soft() {
+        UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+    }
+
+    static func medium() {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    }
+
+    static func success() {
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+    }
+
+    static func warning() {
+        UINotificationFeedbackGenerator().notificationOccurred(.warning)
+    }
+}
+
+#if DEBUG
+struct ReviewSessionView_Previews: PreviewProvider {
+    static var previews: some View {
+        ReviewSessionView()
+            .environmentObject(AppViewModel())
+    }
+}
+#endif

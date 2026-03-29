@@ -7,11 +7,8 @@
 
 import SwiftUI
 
-@main
-struct CuoTiBenApp: App {
-    var body: some Scene {
-        WindowGroup {
-            ContentView()
-        }
+struct LegacyCuoTiBenRootView: View {
+    var body: some View {
+        ContentView()
     }
 }
