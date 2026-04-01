@@ -20,6 +20,20 @@ enum AppPalette {
     static let softMutedText = Color(red: 195 / 255, green: 198 / 255, blue: 213 / 255)
     static let lightBackgroundTop = Color(red: 242 / 255, green: 247 / 255, blue: 255 / 255)
     static let lightBackgroundBottom = Color(red: 223 / 255, green: 241 / 255, blue: 255 / 255)
+    static let paperBackground = Color(red: 242 / 255, green: 238 / 255, blue: 227 / 255)
+    static let paperBackgroundDeep = Color(red: 232 / 255, green: 228 / 255, blue: 216 / 255)
+    static let paperCard = Color(red: 250 / 255, green: 248 / 255, blue: 242 / 255)
+    static let paperInk = Color(red: 24 / 255, green: 22 / 255, blue: 18 / 255)
+    static let paperMuted = Color(red: 122 / 255, green: 117 / 255, blue: 104 / 255)
+    static let paperLine = Color(red: 218 / 255, green: 214 / 255, blue: 201 / 255)
+    static let paperTape = Color(red: 227 / 255, green: 205 / 255, blue: 154 / 255)
+    static let paperTapeBlue = Color(red: 134 / 255, green: 174 / 255, blue: 221 / 255)
+    static let paperHighlight = Color(red: 248 / 255, green: 235 / 255, blue: 128 / 255)
+    static let paperHighlightMint = Color(red: 201 / 255, green: 240 / 255, blue: 194 / 255)
+    static let paperFolderBlue = Color(red: 81 / 255, green: 131 / 255, blue: 205 / 255)
+    static let paperFolderOrange = Color(red: 241 / 255, green: 155 / 255, blue: 72 / 255)
+    static let paperFolderLavender = Color(red: 177 / 255, green: 157 / 255, blue: 230 / 255)
+    static let fabricNavy = Color(red: 36 / 255, green: 58 / 255, blue: 94 / 255)
 }
 
 enum AppPerformance {
@@ -314,5 +328,276 @@ struct LibraryMetaPill: View {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .stroke(Color.white.opacity(0.75), lineWidth: 1)
             )
+    }
+}
+
+struct DashboardCard<Content: View>: View {
+    var cornerRadius: CGFloat = 28
+    var padding: CGFloat = 22
+    var tint: Color = AppPalette.paperCard
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        content()
+            .padding(padding)
+            .background(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(tint)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .stroke(Color.white.opacity(0.9), lineWidth: 1)
+                    )
+                    .overlay(alignment: .topTrailing) {
+                        PaperTapeAccent(color: AppPalette.paperTape)
+                            .offset(x: 10, y: -10)
+                    }
+                    .shadow(color: Color.black.opacity(0.12), radius: 24, y: 12)
+            )
+    }
+}
+
+struct DashboardIconButton: View {
+    let icon: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(AppPalette.paperInk.opacity(0.78))
+                .frame(width: 42, height: 42)
+                .background(
+                    Circle()
+                        .fill(Color.white.opacity(0.74))
+                        .overlay(
+                            Circle()
+                                .stroke(Color.white.opacity(0.92), lineWidth: 1)
+                        )
+                )
+                .shadow(color: Color.black.opacity(0.06), radius: 8, y: 4)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct PaperCanvasBackground: View {
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [AppPalette.paperBackground, AppPalette.paperBackgroundDeep],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+
+            NotebookGrid()
+                .opacity(0.26)
+
+            LinearGradient(
+                colors: [Color.white.opacity(0.44), .clear, Color.orange.opacity(0.05)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        }
+        .ignoresSafeArea()
+    }
+}
+
+struct PaperSheetCard<Content: View>: View {
+    var padding: CGFloat = 28
+    var cornerRadius: CGFloat = 26
+    var rotation: Double = 0
+    var accent: Color? = nil
+    var showsTape: Bool = false
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        content()
+            .padding(padding)
+            .background(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(AppPalette.paperCard)
+                    .overlay(alignment: .topLeading) {
+                        if let accent {
+                            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                                .stroke(accent.opacity(0.82), lineWidth: 2.4)
+                        }
+                    }
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .stroke(Color.white.opacity(0.9), lineWidth: 1)
+                    )
+                    .overlay(alignment: .topTrailing) {
+                        if showsTape {
+                            PaperTapeAccent(color: accent ?? AppPalette.paperTape)
+                                .offset(x: 8, y: -8)
+                        }
+                    }
+                    .shadow(color: Color.black.opacity(0.1), radius: 22, y: 10)
+            )
+            .rotationEffect(.degrees(rotation))
+    }
+}
+
+struct PaperToolbarButton: View {
+    let icon: String
+    var title: String? = nil
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 18, weight: .regular))
+                if let title {
+                    Text(title)
+                        .font(.system(size: 17, weight: .medium))
+                }
+            }
+            .foregroundStyle(AppPalette.paperMuted)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct PaperTagChip: View {
+    let title: String
+    var tint: Color = Color.blue.opacity(0.1)
+    var foreground: Color = AppPalette.paperInk
+
+    var body: some View {
+        Text(title)
+            .font(.system(size: 14, weight: .medium))
+            .foregroundStyle(foreground)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(tint)
+            )
+    }
+}
+
+struct NotebookGrid: View {
+    var spacing: CGFloat = 26
+
+    var body: some View {
+        GeometryReader { proxy in
+            Path { path in
+                var x: CGFloat = 0
+                while x <= proxy.size.width {
+                    path.move(to: CGPoint(x: x, y: 0))
+                    path.addLine(to: CGPoint(x: x, y: proxy.size.height))
+                    x += spacing
+                }
+
+                var y: CGFloat = 0
+                while y <= proxy.size.height {
+                    path.move(to: CGPoint(x: 0, y: y))
+                    path.addLine(to: CGPoint(x: proxy.size.width, y: y))
+                    y += spacing
+                }
+            }
+            .stroke(AppPalette.paperLine.opacity(0.5), lineWidth: 0.6)
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+struct PaperTapeAccent: View {
+    var color: Color = AppPalette.paperTape
+    var width: CGFloat = 72
+    var height: CGFloat = 22
+    var angle: Double = -18
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 4, style: .continuous)
+            .fill(
+                LinearGradient(
+                    colors: [color.opacity(0.92), color.opacity(0.72)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .frame(width: width, height: height)
+            .rotationEffect(.degrees(angle))
+            .overlay(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .stroke(Color.white.opacity(0.3), lineWidth: 1)
+            )
+            .overlay {
+                NotebookGrid(spacing: 8)
+                    .opacity(0.18)
+                    .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+            }
+            .shadow(color: Color.black.opacity(0.08), radius: 10, y: 5)
+    }
+}
+
+struct MarkerTitle: View {
+    let text: String
+    var tint: Color = AppPalette.paperHighlight
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 16, weight: .bold, design: .serif))
+            .foregroundStyle(AppPalette.paperInk)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(alignment: .bottomLeading) {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(tint.opacity(0.76))
+                    .frame(height: 13)
+                    .offset(y: 5)
+            }
+    }
+}
+
+struct SketchBadge: View {
+    let title: String
+    var tint: Color = AppPalette.paperHighlight
+
+    var body: some View {
+        Text(title)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(AppPalette.paperInk)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(tint.opacity(0.34))
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(AppPalette.paperInk.opacity(0.18), lineWidth: 1)
+                    )
+            )
+    }
+}
+
+struct RibbonButtonStyle: ButtonStyle {
+    var tint: Color = Color(red: 181 / 255, green: 110 / 255, blue: 82 / 255)
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .padding(.horizontal, 26)
+            .padding(.vertical, 14)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                tint.opacity(configuration.isPressed ? 0.85 : 0.95),
+                                tint.opacity(configuration.isPressed ? 0.74 : 0.82)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(Color.white.opacity(0.35), lineWidth: 1)
+                    )
+                    .shadow(color: Color.black.opacity(0.12), radius: configuration.isPressed ? 6 : 12, y: configuration.isPressed ? 3 : 7)
+            )
+            .scaleEffect(configuration.isPressed ? 0.985 : 1)
     }
 }

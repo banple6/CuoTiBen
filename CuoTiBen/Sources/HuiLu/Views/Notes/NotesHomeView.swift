@@ -79,7 +79,7 @@ struct NotesHomeView: View {
     private var phoneBody: some View {
         NavigationStack {
             ZStack {
-                AppBackground(style: .light)
+                PaperCanvasBackground()
 
                 VStack(spacing: 16) {
                     NotesHeaderBar(

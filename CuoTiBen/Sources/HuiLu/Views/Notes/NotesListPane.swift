@@ -26,40 +26,52 @@ struct NotesListPane: View {
 
             NotesSegmentedControl(selectedTab: $selectedTab)
 
-            GlassPanel(tone: .light, cornerRadius: 30, padding: 16) {
-                VStack(alignment: .leading, spacing: 14) {
-                    sectionHeader(
-                        title: paneTitle,
-                        subtitle: paneSubtitle
-                    )
+            VStack(alignment: .leading, spacing: 14) {
+                sectionHeader(
+                    title: paneTitle,
+                    subtitle: paneSubtitle
+                )
 
-                    if paneItems.isEmpty {
-                        NotesEmptyStateCard(
-                            title: paneEmptyTitle,
-                            message: paneEmptyMessage
-                        )
-                    } else {
-                        ScrollView(showsIndicators: false) {
-                            LazyVStack(spacing: 10) {
-                                ForEach(paneItems) { item in
-                                    Button {
-                                        withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
-                                            selectedNoteID = item.noteID
-                                        }
-                                    } label: {
-                                        NoteListRow(
-                                            item: item,
-                                            isSelected: selectedNoteID == item.noteID
-                                        )
+                if paneItems.isEmpty {
+                    NotesEmptyStateCard(
+                        title: paneEmptyTitle,
+                        message: paneEmptyMessage
+                    )
+                } else {
+                    ScrollView(showsIndicators: false) {
+                        LazyVStack(spacing: 8) {
+                            ForEach(paneItems) { item in
+                                Button {
+                                    withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
+                                        selectedNoteID = item.noteID
                                     }
-                                    .buttonStyle(.plain)
+                                } label: {
+                                    NoteListRow(
+                                        item: item,
+                                        isSelected: selectedNoteID == item.noteID
+                                    )
                                 }
+                                .buttonStyle(.plain)
                             }
-                            .padding(.bottom, 6)
                         }
+                        .padding(.bottom, 6)
                     }
                 }
             }
+            .padding(18)
+            .background(
+                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                    .fill(Color.white.opacity(0.56))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 28, style: .continuous)
+                            .stroke(Color.white.opacity(0.84), lineWidth: 1)
+                    )
+                    .overlay(alignment: .topLeading) {
+                        PaperTapeAccent(color: AppPalette.paperTapeBlue, width: 78, height: 18)
+                            .offset(x: 26, y: -8)
+                    }
+            )
+            .shadow(color: Color.black.opacity(0.08), radius: 18, y: 10)
         }
     }
 

@@ -25,140 +25,85 @@ struct HomeView: View {
         viewModel.englishDocumentsForWorkbench()
     }
 
-    var body: some View {
-        ZStack {
-            AppBackground(style: .dark)
-            HomeAmbientGlow()
+    private var primaryWorkbenchDocument: SourceDocument? {
+        workbenchDocuments.first
+    }
 
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 30) {
-                    HStack(alignment: .top, spacing: 20) {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("欢迎回来，")
-                                .font(.system(size: 28, weight: .bold, design: .rounded))
-                                .foregroundStyle(AppPalette.softText)
+    private var usesPadDashboard: Bool {
+        UIDevice.current.userInterfaceIdiom == .pad
+    }
 
-                            Text("博雨")
-                                .font(.system(size: 42, weight: .bold, design: .rounded))
-                                .foregroundStyle(AppPalette.softText)
+    private var homeQuote: String {
+        "“Every step is progress.”"
+    }
 
-                            Text("今天继续把薄弱知识点一点点补齐。")
-                                .font(.system(size: 15, weight: .medium))
-                                .foregroundStyle(AppPalette.softMutedText)
-                        }
-
-                        Spacer()
-
-                        VStack(alignment: .trailing, spacing: 14) {
-                            HStack(spacing: 10) {
-                                Button {
-                                    showsNotesHome = true
-                                } label: {
-                                    HStack(spacing: 8) {
-                                        Image(systemName: "note.text")
-                                        Text("笔记")
-                                    }
-                                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                                    .foregroundStyle(AppPalette.softText)
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 10)
-                                    .background(
-                                        Capsule(style: .continuous)
-                                            .fill(Color.white.opacity(0.1))
-                                    )
-                                }
-
-                                Button {
-                                    showsSettings = true
-                                } label: {
-                                    HStack(spacing: 8) {
-                                        Image(systemName: "gearshape.fill")
-                                        Text("设置")
-                                    }
-                                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                                    .foregroundStyle(AppPalette.softText)
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 10)
-                                    .background(
-                                        Capsule(style: .continuous)
-                                            .fill(Color.white.opacity(0.1))
-                                    )
-                                }
-                            }
-                            .buttonStyle(.plain)
-
-                            MasteryRing(progress: viewModel.progressPercentage)
-                        }
-                    }
-
-                    StartReviewGlassButton {
-                        showingReview = true
-                    }
-
-                    reviewWorkbenchSection
-
-                    VStack(alignment: .leading, spacing: 18) {
-                        Text("薄弱点")
-                            .font(.system(size: 18, weight: .bold, design: .rounded))
-                            .foregroundStyle(AppPalette.softText)
-
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 16) {
-                                ForEach(viewModel.dailyProgress.highErrorChunks) { chunk in
-                                    WeakPointCard(chunk: chunk)
-                                }
-                            }
-                            .padding(.horizontal, 2)
-                        }
-                    }
-
-                    VStack(alignment: .leading, spacing: 18) {
-                        Text("学习统计")
-                            .font(.system(size: 18, weight: .bold, design: .rounded))
-                            .foregroundStyle(AppPalette.softText)
-
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 14) {
-                                ForEach(statItems) { item in
-                                    HomeStatCard(item: item)
-                                }
-                            }
-                            .padding(.horizontal, 2)
-                        }
-                    }
-
-                    GlassPanel(tone: .dark, cornerRadius: 30, padding: 22) {
-                        VStack(alignment: .leading, spacing: 16) {
-                            HStack {
-                                Text("今日专注")
-                                    .font(.system(size: 19, weight: .bold, design: .rounded))
-                                    .foregroundStyle(AppPalette.softText)
-
-                                Spacer()
-
-                                MetricCapsule(label: "\(masteryValue)% 掌握度", tone: .dark, tint: AppPalette.mint)
-                            }
-
-                            Text("先处理高错误率知识块，再把今天剩余复习卡片顺着推进，节奏会更稳。")
-                                .font(.system(size: 15, weight: .medium))
-                                .foregroundStyle(AppPalette.softMutedText)
-                                .lineSpacing(5)
-
-                            HStack(spacing: 10) {
-                                FocusPill(icon: "brain.head.profile", text: "\(viewModel.dailyProgress.pendingReviewsCount) 张卡片")
-                                FocusPill(icon: "clock", text: "\(viewModel.dailyProgress.estimatedDurationMinutes) 分钟")
-                                FocusPill(icon: "sparkles", text: "智能混排")
-                            }
-                        }
-                    }
-
-                    Spacer(minLength: 160)
-                }
-                .padding(.horizontal, 24)
-                .padding(.top, 62)
-            }
+    private var todaysTasks: [String] {
+        var items: [String] = []
+        if let primaryWorkbenchDocument {
+            let progress = viewModel.reviewWorkbenchProgress(for: primaryWorkbenchDocument)
+            items.append("继续 \(primaryWorkbenchDocument.title) 的 \(progress.lastAnchorLabel)")
         }
-        .ignoresSafeArea()
+        items.append("完成 \(viewModel.dailyProgress.pendingReviewsCount) 个待复习点")
+        return items
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack {
+                PaperCanvasBackground()
+                HomeAmbientGlow()
+
+                if usesPadDashboard {
+                    HStack(spacing: 26) {
+                        dashboardSideRail
+
+                        ScrollView(showsIndicators: false) {
+                            VStack(alignment: .leading, spacing: 24) {
+                                dashboardHero(isPad: true)
+
+                                HStack(alignment: .top, spacing: 22) {
+                                    continueReviewPanel(isPad: true)
+                                        .frame(maxWidth: .infinity)
+
+                                    todayTaskPanel(isPad: true)
+                                        .frame(maxWidth: .infinity)
+                                }
+
+                                LazyVGrid(
+                                    columns: [
+                                        GridItem(.flexible(), spacing: 18),
+                                        GridItem(.flexible(), spacing: 18),
+                                        GridItem(.flexible(minimum: 120), spacing: 18)
+                                    ],
+                                    spacing: 18
+                                ) {
+                                    dashboardWeakPointsCard
+                                    dashboardStatisticsCard
+                                    dashboardCompactNotesCard
+                                }
+                            }
+                            .padding(.top, max(proxy.safeAreaInsets.top, 24))
+                            .padding(.bottom, max(proxy.safeAreaInsets.bottom, 28))
+                        }
+                    }
+                    .padding(.horizontal, 28)
+                } else {
+                    ScrollView(showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: 18) {
+                            dashboardHero(isPad: false)
+                            continueReviewPanel(isPad: false)
+                            todayTaskPanel(isPad: false)
+                            dashboardWeakPointsCard
+                            dashboardStatisticsCard
+                        }
+                        .padding(.horizontal, 22)
+                        .padding(.top, max(proxy.safeAreaInsets.top, 24))
+                        .padding(.bottom, max(proxy.safeAreaInsets.bottom, 32))
+                    }
+                }
+            }
+            .ignoresSafeArea()
+        }
         .fullScreenCover(isPresented: $showingReview) {
             ReviewSessionView()
                 .environmentObject(viewModel)
@@ -189,42 +134,259 @@ struct HomeView: View {
         }
     }
 
-    @ViewBuilder
-    private var reviewWorkbenchSection: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("继续复盘")
-                    .font(.system(size: 20, weight: .bold, design: .rounded))
-                    .foregroundStyle(AppPalette.softText)
-
-                Spacer()
-
-                Text("我的英语资料")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(AppPalette.softMutedText)
-            }
-
-            if workbenchDocuments.isEmpty {
-                GlassPanel(tone: .dark, cornerRadius: 28, padding: 20) {
-                    Text("导入英语资料后，这里会保留你的上次学习位置，方便继续复盘。")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(AppPalette.softMutedText)
-                        .lineSpacing(4)
+    private var dashboardSideRail: some View {
+        DashboardCard(cornerRadius: 24, padding: 14, tint: AppPalette.paperBackgroundDeep) {
+            VStack(spacing: 18) {
+                DashboardRailItem(icon: "house", title: "首页", isSelected: true, action: {})
+                DashboardRailItem(icon: "books.vertical", title: "知识库", isSelected: false, action: {})
+                DashboardRailItem(icon: "note.text", title: "笔记", isSelected: false) {
+                    showsNotesHome = true
                 }
-            } else {
-                VStack(spacing: 14) {
-                    ForEach(workbenchDocuments.prefix(3)) { document in
-                        ReviewWorkbenchEntryCard(
-                            document: document,
-                            progress: viewModel.reviewWorkbenchProgress(for: document),
-                            masteryValue: viewModel.workbenchMastery(for: document),
-                            learnedSentenceCount: viewModel.workbenchStudiedSentenceCount(for: document)
-                        ) {
-                            selectedWorkbenchDocument = document
+                DashboardRailItem(icon: "arrow.trianglehead.2.clockwise.rotate.90", title: "复习", isSelected: false) {
+                    if let primaryWorkbenchDocument {
+                        selectedWorkbenchDocument = primaryWorkbenchDocument
+                    } else {
+                        showingReview = true
+                    }
+                }
+                DashboardRailItem(icon: "gearshape", title: "设置", isSelected: false) {
+                    showsSettings = true
+                }
+            }
+        }
+        .frame(width: 104)
+        .padding(.vertical, 36)
+    }
+
+    private func dashboardHero(isPad: Bool) -> some View {
+        HStack(alignment: .top, spacing: isPad ? 32 : 18) {
+            VStack(alignment: .leading, spacing: isPad ? 18 : 12) {
+                HStack(spacing: 10) {
+                    Text("Welcome back,")
+                        .font(.system(size: isPad ? 26 : 18, weight: .semibold, design: .serif))
+                        .italic()
+                        .foregroundStyle(AppPalette.paperInk.opacity(0.86))
+
+                    Spacer(minLength: 0)
+
+                    if !isPad {
+                        HStack(spacing: 10) {
+                            DashboardIconButton(icon: "gearshape") {
+                                showsSettings = true
+                            }
+
+                            DashboardIconButton(icon: "note.text") {
+                                showsNotesHome = true
+                            }
                         }
                     }
                 }
+
+                Text("Boyu")
+                    .font(.system(size: isPad ? 64 : 42, weight: .bold, design: .serif))
+                    .foregroundStyle(AppPalette.paperInk)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Daily Goal:")
+                        .font(.system(size: isPad ? 18 : 15, weight: .bold, design: .serif))
+                        .italic()
+                        .foregroundStyle(AppPalette.paperInk.opacity(0.88))
+
+                    MarkerTitle(text: homeQuote, tint: AppPalette.paperHighlight)
+                }
             }
+
+            Spacer(minLength: 18)
+
+            VStack(alignment: .trailing, spacing: 14) {
+                if isPad {
+                    HStack(spacing: 12) {
+                        DashboardIconButton(icon: "gearshape") {
+                            showsSettings = true
+                        }
+
+                        DashboardIconButton(icon: "note.text") {
+                            showsNotesHome = true
+                        }
+                    }
+                }
+
+                MasteryRing(progress: viewModel.progressPercentage, size: isPad ? 210 : 126)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func continueReviewPanel(isPad: Bool) -> some View {
+        if let document = primaryWorkbenchDocument {
+            let progress = viewModel.reviewWorkbenchProgress(for: document)
+            let mastery = viewModel.workbenchMastery(for: document)
+            let learnedSentenceCount = viewModel.workbenchStudiedSentenceCount(for: document)
+
+            DashboardCard(cornerRadius: isPad ? 30 : 26, padding: isPad ? 28 : 20) {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Continue Review")
+                        .font(.system(size: isPad ? 24 : 18, weight: .bold, design: .serif))
+                        .italic()
+                        .foregroundStyle(AppPalette.paperInk)
+
+                    Text(document.title)
+                        .font(.system(size: isPad ? 17 : 15, weight: .medium, design: .serif))
+                        .foregroundStyle(AppPalette.paperInk.opacity(0.88))
+                        .lineLimit(2)
+
+                    HStack(spacing: 28) {
+                        reviewMetricColumn(title: "Mastery", value: "\(mastery)%")
+                        reviewMetricColumn(title: "Last studied", value: relativeDateString(from: progress.lastVisitedAt))
+                    }
+
+                    HStack(spacing: 8) {
+                        FocusPill(icon: "text.quote", text: "Learned \(learnedSentenceCount) sentences")
+                        FocusPill(icon: "bookmark.fill", text: progress.lastAnchorLabel)
+                    }
+
+                    Button {
+                        selectedWorkbenchDocument = document
+                    } label: {
+                        HStack {
+                            Text("继续复盘")
+                            Spacer()
+                            Image(systemName: "arrow.up.right")
+                        }
+                        .font(.system(size: 15, weight: .semibold, design: .serif))
+                        .foregroundStyle(Color.white)
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(RibbonButtonStyle())
+                }
+            }
+        } else {
+            DashboardCard(cornerRadius: isPad ? 30 : 26, padding: isPad ? 28 : 20) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Continue Review")
+                        .font(.system(size: isPad ? 22 : 18, weight: .bold, design: .serif))
+                        .foregroundStyle(AppPalette.paperInk)
+
+                    Text("导入英语资料后，这里会保留你的上次学习位置。")
+                        .font(.system(size: 15, weight: .medium, design: .serif))
+                        .foregroundStyle(AppPalette.paperMuted)
+                }
+            }
+        }
+    }
+
+    private func todayTaskPanel(isPad: Bool) -> some View {
+        DashboardCard(cornerRadius: isPad ? 30 : 26, padding: isPad ? 28 : 20) {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Today's Tasks")
+                    .font(.system(size: isPad ? 24 : 18, weight: .bold, design: .serif))
+                    .italic()
+                    .foregroundStyle(AppPalette.paperInk)
+
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(todaysTasks, id: \.self) { task in
+                        Text(task)
+                            .font(.system(size: isPad ? 16 : 14, weight: .medium, design: .serif))
+                            .foregroundStyle(AppPalette.paperInk.opacity(0.86))
+                    }
+                }
+
+                Button {
+                    if let primaryWorkbenchDocument {
+                        selectedWorkbenchDocument = primaryWorkbenchDocument
+                    } else {
+                        showingReview = true
+                    }
+                } label: {
+                    HStack {
+                        Spacer()
+                        Text("开始今日复盘")
+                        Spacer()
+                    }
+                    .font(.system(size: 17, weight: .semibold, design: .serif))
+                    .foregroundStyle(Color.white)
+                }
+                .buttonStyle(RibbonButtonStyle())
+            }
+        }
+    }
+
+    private var dashboardWeakPointsCard: some View {
+        DashboardCard(cornerRadius: 26, padding: 20) {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Weak Points:")
+                    .font(.system(size: 20, weight: .bold, design: .serif))
+                    .italic()
+                    .foregroundStyle(AppPalette.paperInk)
+
+                if let chunk = viewModel.dailyProgress.highErrorChunks.first {
+                    Text(chunk.title)
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(AppPalette.paperInk)
+                        .lineLimit(2)
+
+                    Text(chunk.sourceTitle)
+                        .font(.system(size: 15, weight: .medium, design: .serif))
+                        .foregroundStyle(AppPalette.paperMuted)
+                } else {
+                    Text("暂时没有高错误率条目")
+                        .font(.system(size: 16, weight: .medium, design: .serif))
+                        .foregroundStyle(AppPalette.paperMuted)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 130, alignment: .leading)
+        }
+    }
+
+    private var dashboardStatisticsCard: some View {
+        DashboardCard(cornerRadius: 26, padding: 20) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Study Statistics:")
+                    .font(.system(size: 20, weight: .bold, design: .serif))
+                    .italic()
+                    .foregroundStyle(AppPalette.paperInk)
+
+                Text("本周学习 \(statItems[2].value)，正确率 \(statItems[3].value)")
+                    .font(.system(size: 18, weight: .semibold, design: .serif))
+                    .foregroundStyle(AppPalette.paperInk)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, minHeight: 130, alignment: .leading)
+        }
+    }
+
+    private var dashboardCompactNotesCard: some View {
+        DashboardCard(cornerRadius: 24, padding: 16) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("My Notes")
+                    .font(.system(size: 18, weight: .bold, design: .serif))
+                    .italic()
+                    .foregroundStyle(AppPalette.paperInk)
+
+                Text("\(viewModel.notes.count)")
+                    .font(.system(size: 34, weight: .bold, design: .serif))
+                    .foregroundStyle(AppPalette.paperInk)
+
+                Button("打开笔记") {
+                    showsNotesHome = true
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 14, weight: .semibold, design: .serif))
+                .foregroundStyle(Color(red: 161 / 255, green: 92 / 255, blue: 76 / 255))
+            }
+            .frame(maxWidth: .infinity, minHeight: 130, alignment: .leading)
+        }
+    }
+
+    private func reviewMetricColumn(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 12, weight: .bold, design: .serif))
+                .foregroundStyle(AppPalette.paperMuted)
+
+            Text(value)
+                .font(.system(size: 17, weight: .semibold, design: .serif))
+                .foregroundStyle(AppPalette.paperInk)
         }
     }
 }
@@ -241,31 +403,31 @@ private struct HomeAmbientGlow: View {
     var body: some View {
         ZStack {
             Circle()
-                .fill(AppPalette.cyan.opacity(0.24))
+                .fill(Color.white.opacity(0.34))
                 .frame(width: 250 * glowScale, height: 250 * glowScale)
                 .blur(radius: 76 * blurScale)
                 .offset(x: 104, y: -64)
 
             Circle()
-                .fill(AppPalette.mint.opacity(0.2))
+                .fill(AppPalette.paperHighlight.opacity(0.3))
                 .frame(width: 224 * glowScale, height: 224 * glowScale)
                 .blur(radius: 92 * blurScale)
                 .offset(x: 138, y: 92)
 
             Circle()
-                .fill(AppPalette.amber.opacity(0.18))
+                .fill(AppPalette.paperTapeBlue.opacity(0.18))
                 .frame(width: 292 * glowScale, height: 292 * glowScale)
                 .blur(radius: 102 * blurScale)
                 .offset(x: -18, y: 244)
 
             Circle()
-                .fill(AppPalette.primary.opacity(0.16))
+                .fill(AppPalette.paperHighlightMint.opacity(0.22))
                 .frame(width: 214 * glowScale, height: 214 * glowScale)
                 .blur(radius: 90 * blurScale)
                 .offset(x: -108, y: 134)
 
             RoundedRectangle(cornerRadius: 42, style: .continuous)
-                .fill(AppPalette.cyan.opacity(0.12))
+                .fill(Color.white.opacity(0.2))
                 .frame(width: 280 * glowScale, height: 126 * glowScale)
                 .blur(radius: 64 * blurScale)
                 .offset(x: 10, y: 166)
@@ -282,44 +444,75 @@ struct HomeStatItem: Identifiable {
     let tint: Color
 }
 
+private struct DashboardRailItem: View {
+    let icon: String
+    let title: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 10) {
+                Image(systemName: icon)
+                    .font(.system(size: 24, weight: .medium))
+                Text(title)
+                    .font(.system(size: 13, weight: .medium, design: .serif))
+            }
+            .foregroundStyle(isSelected ? AppPalette.paperInk : AppPalette.paperMuted)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .background(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(isSelected ? Color.white.opacity(0.68) : Color.clear)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .stroke(isSelected ? Color.white.opacity(0.9) : Color.clear, lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 struct MasteryRing: View {
     let progress: Double
+    var size: CGFloat = 100
 
     var body: some View {
         ZStack {
             Circle()
-                .stroke(Color.white.opacity(0.15), lineWidth: 11)
+                .stroke(AppPalette.paperInk.opacity(0.18), lineWidth: size * 0.08)
 
             Circle()
                 .trim(from: 0, to: max(min(progress, 1), 0.05))
                 .stroke(
                     LinearGradient(
-                        colors: [Color.white.opacity(0.92), AppPalette.primary],
+                        colors: [AppPalette.paperInk.opacity(0.72), AppPalette.fabricNavy],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     ),
-                    style: StrokeStyle(lineWidth: 11, lineCap: .round)
+                    style: StrokeStyle(lineWidth: size * 0.08, lineCap: .round)
                 )
                 .rotationEffect(.degrees(-90))
-                .shadow(color: AppPalette.primary.opacity(0.18), radius: 10)
+                .shadow(color: AppPalette.fabricNavy.opacity(0.12), radius: size * 0.08)
 
-            Text("\(Int(progress * 100))%")
-                .font(.system(size: 18, weight: .semibold, design: .rounded))
-                .foregroundStyle(AppPalette.softText)
+            VStack(spacing: size > 160 ? 6 : 2) {
+                Text("\(Int(progress * 100))%")
+                    .font(.system(size: size * 0.22, weight: .bold, design: .serif))
+                    .foregroundStyle(AppPalette.paperInk)
+
+                Text("Mastery")
+                    .font(.system(size: size * 0.11, weight: .medium, design: .serif))
+                    .italic()
+                    .foregroundStyle(AppPalette.paperInk.opacity(0.88))
+            }
         }
-        .frame(width: 100, height: 100)
-        .padding(8)
+        .frame(width: size, height: size)
+        .padding(size * 0.08)
         .background(
             Circle()
-                .fill(Color.white.opacity(0.08))
-                .overlay {
-                    if !AppPerformance.prefersReducedEffects {
-                        Circle()
-                            .fill(.ultraThinMaterial)
-                            .opacity(0.32)
-                    }
-                }
-                .overlay(Circle().stroke(Color.white.opacity(0.18), lineWidth: 1))
+                .fill(Color.white.opacity(0.45))
+                .overlay(Circle().stroke(AppPalette.paperInk.opacity(0.08), lineWidth: 1))
         )
     }
 }
@@ -491,12 +684,19 @@ struct FocusPill: View {
             Image(systemName: icon)
                 .font(.system(size: 13, weight: .semibold))
             Text(text)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: 13, weight: .semibold, design: .serif))
         }
-        .foregroundStyle(AppPalette.softText)
+        .foregroundStyle(AppPalette.paperInk.opacity(0.82))
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(Capsule(style: .continuous).fill(Color.white.opacity(0.08)))
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.white.opacity(0.78))
+                .overlay(
+                    Capsule(style: .continuous)
+                        .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                )
+        )
     }
 }
 

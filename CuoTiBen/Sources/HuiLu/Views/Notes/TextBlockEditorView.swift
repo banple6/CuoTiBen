@@ -8,11 +8,14 @@ struct TextBlockEditorView: View {
     var onDelete: (() -> Void)? = nil
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
-                NotesMetaPill(text: title, tint: .green)
+                Text(title.uppercased())
+                    .font(.system(size: 11, weight: .bold))
+                    .tracking(1.2)
+                    .foregroundStyle(AppPalette.paperMuted)
                 if isHighlighted {
-                    NotesMetaPill(text: "当前定位", tint: .blue)
+                    NotesMetaPill(text: "当前定位", tint: AppPalette.paperTapeBlue)
                 }
                 Spacer(minLength: 0)
                 if let onDelete {
@@ -32,28 +35,26 @@ struct TextBlockEditorView: View {
             }
 
             TextEditor(text: $text)
-                .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(Color.black.opacity(0.8))
+                .font(.system(size: 18, weight: .regular))
+                .foregroundStyle(AppPalette.paperInk.opacity(0.82))
                 .frame(minHeight: minimumHeight)
                 .scrollContentBackground(.hidden)
                 .background(Color.clear)
         }
-        .padding(20)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 22)
         .background(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(Color.white.opacity(isHighlighted ? 0.92 : 0.72))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .stroke(isHighlighted ? Color.blue.opacity(0.32) : Color.black.opacity(0.05), lineWidth: 1)
-                )
+                .fill(isHighlighted ? AppPalette.paperCard : Color.white.opacity(0.82))
         )
         .overlay(alignment: .topLeading) {
             Capsule(style: .continuous)
-                .fill(Color.green.opacity(0.18))
-                .frame(width: 64, height: 5)
+                .fill(isHighlighted ? AppPalette.paperTapeBlue.opacity(0.72) : AppPalette.paperHighlightMint.opacity(0.62))
+                .frame(width: 72, height: 6)
                 .padding(.top, 12)
                 .padding(.leading, 18)
         }
+        .shadow(color: Color.black.opacity(isHighlighted ? 0.05 : 0.03), radius: 14, y: 8)
     }
 }
 

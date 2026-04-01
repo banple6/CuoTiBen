@@ -84,7 +84,25 @@ struct SourceDetailView: View {
                 HStack(spacing: 0) {
                     Spacer(minLength: 0)
 
-                    GlassPanel(tone: .light, cornerRadius: 34, padding: 0) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 36, style: .continuous)
+                            .fill(AppPalette.paperCard.opacity(0.78))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 36, style: .continuous)
+                                    .stroke(Color.white.opacity(0.6), lineWidth: 1)
+                            )
+                            .offset(x: -10, y: 14)
+                            .padding(.horizontal, 16)
+
+                        RoundedRectangle(cornerRadius: 36, style: .continuous)
+                            .fill(AppPalette.paperBackgroundDeep.opacity(0.9))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 36, style: .continuous)
+                                    .stroke(AppPalette.paperLine.opacity(0.72), lineWidth: 1)
+                            )
+                            .offset(x: 8, y: 8)
+                            .padding(.horizontal, 8)
+
                         VStack(spacing: 0) {
                             overlayHeader
                                 .padding(.horizontal, usesPadChrome ? 30 : 24)
@@ -99,14 +117,32 @@ struct SourceDetailView: View {
                                     .padding(.bottom, safeBottom + 118)
                             }
 
-                            overlayActionBar(
-                                safeBottom: safeBottom,
-                                usesPadChrome: usesPadChrome,
-                                panelWidth: panelWidth
-                            )
+                                overlayActionBar(
+                                    safeBottom: safeBottom,
+                                    usesPadChrome: usesPadChrome,
+                                    panelWidth: panelWidth
+                                )
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     }
+                    .background(
+                        RoundedRectangle(cornerRadius: 36, style: .continuous)
+                            .fill(AppPalette.paperCard)
+                            .overlay {
+                                NotebookGrid(spacing: 28)
+                                    .opacity(0.12)
+                                    .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
+                            }
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 36, style: .continuous)
+                                    .stroke(Color.white.opacity(0.92), lineWidth: 1)
+                            )
+                            .overlay(alignment: .topTrailing) {
+                                PaperTapeAccent(color: AppPalette.paperTape)
+                                    .offset(x: -10, y: 8)
+                            }
+                            .shadow(color: Color.black.opacity(0.14), radius: 28, y: 16)
+                    )
                     .frame(width: panelWidth, height: liveHeight)
 
                     Spacer(minLength: 0)
@@ -163,14 +199,14 @@ struct SourceDetailView: View {
     private var overlayHeader: some View {
         HStack(alignment: .center) {
             Capsule()
-                .fill(Color.black.opacity(0.14))
+                .fill(AppPalette.paperLine)
                 .frame(width: 66, height: 6)
 
             Spacer()
 
             Text(isExpanded ? "下拉收起" : "上拉展开")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Color.black.opacity(0.38))
+                .font(.system(size: 13, weight: .semibold, design: .serif))
+                .foregroundStyle(AppPalette.paperMuted)
 
             Spacer()
 
@@ -179,8 +215,8 @@ struct SourceDetailView: View {
                     Image(systemName: "xmark.circle.fill")
                     Text("关闭")
                 }
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(Color.black.opacity(0.48))
+                .font(.system(size: 15, weight: .medium, design: .serif))
+                .foregroundStyle(AppPalette.paperMuted)
             }
             .buttonStyle(.plain)
         }
@@ -189,9 +225,20 @@ struct SourceDetailView: View {
     @ViewBuilder
     private var overlayBody: some View {
         VStack(alignment: .leading, spacing: 22) {
-            Text("资料详情")
-                .font(.system(size: 26, weight: .bold, design: .rounded))
-                .foregroundStyle(Color.black.opacity(0.82))
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Resource Details")
+                    .font(.system(size: 31, weight: .bold, design: .serif))
+                    .italic()
+                    .foregroundStyle(AppPalette.paperInk)
+
+                Rectangle()
+                    .fill(AppPalette.paperLine)
+                    .frame(width: 190, height: 2)
+
+                Text("结构化预览与资料整理")
+                    .font(.system(size: 14, weight: .medium, design: .serif))
+                    .foregroundStyle(AppPalette.paperMuted)
+            }
 
             sourceMetaSection
 
@@ -208,32 +255,46 @@ struct SourceDetailView: View {
     }
 
     private var overlayStatsSection: some View {
-        HStack(spacing: 10) {
-            LibraryMetaPill(title: liveDocument.processingStatus.displayName)
+        PaperSheetCard(
+            padding: 18,
+            cornerRadius: 24,
+            rotation: 0.4,
+            accent: AppPalette.paperTapeBlue.opacity(0.7),
+            showsTape: false
+        ) {
+            HStack(spacing: 10) {
+                SketchBadge(title: liveDocument.processingStatus.displayName, tint: AppPalette.paperHighlightMint)
 
-            if liveDocument.chunkCount > 0 {
-                LibraryMetaPill(title: "\(liveDocument.chunkCount) 个知识块")
-            }
+                if liveDocument.chunkCount > 0 {
+                    SketchBadge(title: "\(liveDocument.chunkCount) 个知识块", tint: AppPalette.paperTapeBlue.opacity(0.22))
+                }
 
-            if let structuredSource {
-                LibraryMetaPill(title: "\(structuredSource.source.sentenceCount) 句")
+                if let structuredSource {
+                    SketchBadge(title: "\(structuredSource.source.sentenceCount) 句", tint: AppPalette.paperTape.opacity(0.28))
+                }
             }
         }
     }
 
     private func structureSection(_ structuredSource: StructuredSourceBundle) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("结构化理解")
-                .font(.system(size: 15, weight: .bold))
-                .foregroundStyle(Color.black.opacity(0.74))
+        PaperSheetCard(
+            padding: 20,
+            cornerRadius: 28,
+            rotation: -0.6,
+            accent: AppPalette.paperTape,
+            showsTape: true
+        ) {
+            VStack(alignment: .leading, spacing: 14) {
+                MarkerTitle(text: "结构化理解", tint: AppPalette.paperHighlightMint)
 
-            SegmentedGlassControl(
-                items: SourceDetailTab.allCases,
-                selected: $selectedTab,
-                label: \.rawValue
-            )
+                SegmentedGlassControl(
+                    items: SourceDetailTab.allCases,
+                    selected: $selectedTab,
+                    label: \.rawValue
+                )
 
-            structureTabContent(structuredSource)
+                structureTabContent(structuredSource)
+            }
         }
     }
 
@@ -266,51 +327,87 @@ struct SourceDetailView: View {
     }
 
     private var topicTagsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("主题标签")
-                .font(.system(size: 15, weight: .bold))
-                .foregroundStyle(Color.black.opacity(0.74))
+        PaperSheetCard(
+            padding: 20,
+            cornerRadius: 26,
+            rotation: 0.8,
+            accent: AppPalette.paperTapeBlue.opacity(0.7),
+            showsTape: false
+        ) {
+            VStack(alignment: .leading, spacing: 12) {
+                MarkerTitle(text: "主题标签", tint: AppPalette.paperHighlight)
 
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 10)], spacing: 10) {
-                ForEach(conceptTags, id: \.self) { tag in
-                    Text(tag)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(Color.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 9)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(
-                            Capsule(style: .continuous)
-                                .fill(
-                                    LinearGradient(
-                                        colors: [Color.blue.opacity(0.55), Color.purple.opacity(0.55)],
-                                        startPoint: .leading,
-                                        endPoint: .trailing
-                                    )
-                                )
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 10)], spacing: 10) {
+                    ForEach(conceptTags, id: \.self) { tag in
+                        SketchBadge(
+                            title: tag,
+                            tint: tag.count.isMultiple(of: 2)
+                                ? AppPalette.paperTapeBlue.opacity(0.26)
+                                : AppPalette.paperHighlightMint.opacity(0.52)
                         )
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
             }
         }
     }
 
     private var sourceMetaSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("资料来源")
-                .font(.system(size: 15, weight: .bold))
-                .foregroundStyle(Color.black.opacity(0.74))
+        PaperSheetCard(
+            padding: 22,
+            cornerRadius: 30,
+            rotation: -0.8,
+            accent: AppPalette.paperTapeBlue,
+            showsTape: true
+        ) {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .top, spacing: 12) {
+                    FrostedOrb(icon: liveDocument.documentType.icon, size: 42, tone: .light)
 
-            HStack(alignment: .top, spacing: 12) {
-                FrostedOrb(icon: liveDocument.documentType.icon, size: 42, tone: .light)
+                    VStack(alignment: .leading, spacing: 5) {
+                        MarkerTitle(text: "原始资料", tint: AppPalette.paperTapeBlue.opacity(0.3))
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(liveDocument.title)
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(Color.black.opacity(0.82))
+                        Text(liveDocument.title)
+                            .font(.system(size: 20, weight: .semibold, design: .serif))
+                            .foregroundStyle(AppPalette.paperInk)
+                            .fixedSize(horizontal: false, vertical: true)
 
-                    Text("\(liveDocument.pageCount) 页 • 导入于 \(formattedDate)")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(Color.black.opacity(0.48))
+                        Text("\(liveDocument.pageCount) 页 · 导入于 \(formattedDate)")
+                            .font(.system(size: 15, weight: .medium, design: .serif))
+                            .foregroundStyle(AppPalette.paperMuted)
+                    }
+                }
+
+                if let structuredSource {
+                    Divider()
+                        .overlay(AppPalette.paperLine)
+
+                    HStack(alignment: .top, spacing: 22) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            MarkerTitle(text: "原文", tint: AppPalette.paperHighlightMint)
+
+                            Text(structuredSource.source.cleanedText.prefix(86))
+                                .font(.system(size: 17, weight: .medium, design: .serif))
+                                .foregroundStyle(AppPalette.paperInk.opacity(0.88))
+                                .lineSpacing(4)
+                        }
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            MarkerTitle(text: "大纲", tint: Color.pink.opacity(0.28))
+
+                            ForEach(Array(structuredSource.outline.prefix(3).enumerated()), id: \.offset) { _, node in
+                                HStack(spacing: 8) {
+                                    Image(systemName: "checkmark")
+                                        .font(.system(size: 12, weight: .bold))
+                                        .foregroundStyle(AppPalette.paperMuted)
+                                    Text(node.title)
+                                        .font(.system(size: 16, weight: .semibold, design: .serif))
+                                        .foregroundStyle(AppPalette.paperInk)
+                                }
+                            }
+                        }
+                        .frame(maxWidth: 240, alignment: .leading)
+                    }
                 }
             }
         }
@@ -318,57 +415,51 @@ struct SourceDetailView: View {
 
     @ViewBuilder
     private var structureLoadingSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("结构化理解")
-                .font(.system(size: 15, weight: .bold))
-                .foregroundStyle(Color.black.opacity(0.74))
+        PaperSheetCard(
+            padding: 20,
+            cornerRadius: 28,
+            rotation: -0.5,
+            accent: AppPalette.paperTapeBlue.opacity(0.72),
+            showsTape: false
+        ) {
+            VStack(alignment: .leading, spacing: 12) {
+                MarkerTitle(text: "结构化理解", tint: AppPalette.paperHighlightMint)
 
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(Color.white.opacity(0.58))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .stroke(Color.white.opacity(0.82), lineWidth: 1)
-                )
-                .overlay {
-                    VStack(alignment: .leading, spacing: 12) {
-                        if viewModel.isLoadingStructuredSource(for: liveDocument) {
-                            ProgressView()
-                            Text("正在生成原文切分和资料大纲…")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(Color.black.opacity(0.72))
-                        } else if let error = viewModel.structuredSourceError(for: liveDocument) {
-                            Text("结构化理解暂不可用")
-                                .font(.system(size: 16, weight: .bold))
-                                .foregroundStyle(Color.black.opacity(0.78))
+                if viewModel.isLoadingStructuredSource(for: liveDocument) {
+                    ProgressView()
+                    Text("正在生成原文切分和资料大纲…")
+                        .font(.system(size: 17, weight: .semibold, design: .serif))
+                        .foregroundStyle(AppPalette.paperInk.opacity(0.82))
+                } else if let error = viewModel.structuredSourceError(for: liveDocument) {
+                    Text("结构化理解暂不可用")
+                        .font(.system(size: 17, weight: .bold, design: .serif))
+                        .foregroundStyle(AppPalette.paperInk)
 
-                            Text(error)
-                                .font(.system(size: 15, weight: .medium))
-                                .foregroundStyle(Color.black.opacity(0.58))
+                    Text(error)
+                        .font(.system(size: 15, weight: .medium, design: .serif))
+                        .foregroundStyle(AppPalette.paperMuted)
 
-                            Button("重试解析") {
-                                Task {
-                                    await viewModel.loadStructuredSource(for: liveDocument, force: true)
-                                }
-                            }
-                            .font(.system(size: 14, weight: .semibold))
-                            .buttonStyle(.plain)
-                            .foregroundStyle(Color.blue.opacity(0.8))
-                        } else {
-                            Text("资料导入后会在这里展示原文与大纲。")
-                                .font(.system(size: 15, weight: .medium))
-                                .foregroundStyle(Color.black.opacity(0.58))
-                        }
-
-                        if !previewChunks.isEmpty {
-                            Text("当前已有 \(previewChunks.count) 个知识块预览，可继续生成卡片。")
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundStyle(Color.black.opacity(0.46))
+                    Button("重试解析") {
+                        Task {
+                            await viewModel.loadStructuredSource(for: liveDocument, force: true)
                         }
                     }
-                    .padding(18)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .font(.system(size: 14, weight: .semibold, design: .serif))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.blue.opacity(0.8))
+                } else {
+                    Text("资料导入后会在这里展示原文与大纲。")
+                        .font(.system(size: 15, weight: .medium, design: .serif))
+                        .foregroundStyle(AppPalette.paperMuted)
                 }
-                .frame(maxWidth: .infinity, minHeight: 150)
+
+                if !previewChunks.isEmpty {
+                    Text("当前已有 \(previewChunks.count) 个知识块预览，可继续生成卡片。")
+                        .font(.system(size: 14, weight: .medium, design: .serif))
+                        .foregroundStyle(AppPalette.paperMuted.opacity(0.86))
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 150, alignment: .leading)
         }
     }
 
@@ -380,21 +471,45 @@ struct SourceDetailView: View {
         VStack(spacing: 12) {
             if let generationNote {
                 Text(generationNote)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(Color.blue.opacity(0.72))
+                    .font(.system(size: 14, weight: .medium, design: .serif))
+                    .foregroundStyle(AppPalette.paperMuted)
                     .lineSpacing(3)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             HStack {
-                DetailActionButton(title: "分享", icon: "square.and.arrow.up") {}
-                DetailActionButton(
-                    title: detailPrimaryTitle,
-                    icon: detailPrimaryIcon,
-                    isDisabled: !canGenerateDrafts && generatedDraftCount == 0
-                ) {
-                    handlePrimaryAction()
+                Button(action: {}) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "square.and.arrow.up")
+                        Text("分享")
+                    }
+                    .font(.system(size: 16, weight: .semibold, design: .serif))
+                    .foregroundStyle(AppPalette.paperMuted)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(Color.white.opacity(0.78))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    .stroke(AppPalette.paperLine, lineWidth: 1)
+                            )
+                    )
                 }
+                .buttonStyle(.plain)
+
+                Button(action: handlePrimaryAction) {
+                    HStack(spacing: 8) {
+                        Image(systemName: detailPrimaryIcon)
+                        Text(detailPrimaryTitle)
+                    }
+                    .font(.system(size: 16, weight: .bold, design: .serif))
+                    .foregroundStyle(Color.white)
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(RibbonButtonStyle())
+                .disabled(!canGenerateDrafts && generatedDraftCount == 0)
+                .opacity((!canGenerateDrafts && generatedDraftCount == 0) ? 0.46 : 1)
             }
         }
         .frame(maxWidth: usesPadChrome ? min(panelWidth - 56, 760) : .infinity, alignment: .leading)
@@ -409,23 +524,18 @@ struct SourceDetailView: View {
 
     @ViewBuilder
     private func actionBarBackground(usesPadChrome: Bool) -> some View {
-        if usesPadChrome {
-            RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .fill(Color.white.opacity(0.9))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 26, style: .continuous)
-                        .stroke(Color.white.opacity(0.96), lineWidth: 1)
-                )
-                .shadow(color: Color.black.opacity(0.08), radius: 20, y: 8)
-        } else {
-            Rectangle()
-                .fill(Color.white.opacity(0.78))
-                .overlay(alignment: .top) {
-                    Rectangle()
-                        .fill(Color.white.opacity(0.9))
-                        .frame(height: 1)
-                }
-        }
+        RoundedRectangle(cornerRadius: usesPadChrome ? 26 : 22, style: .continuous)
+            .fill(AppPalette.paperBackgroundDeep.opacity(0.96))
+            .overlay(
+                RoundedRectangle(cornerRadius: usesPadChrome ? 26 : 22, style: .continuous)
+                    .stroke(Color.white.opacity(0.96), lineWidth: 1)
+            )
+            .overlay {
+                NotebookGrid(spacing: 22)
+                    .opacity(0.08)
+                    .clipShape(RoundedRectangle(cornerRadius: usesPadChrome ? 26 : 22, style: .continuous))
+            }
+            .shadow(color: Color.black.opacity(0.08), radius: 20, y: 8)
     }
 
     private var formattedDate: String {

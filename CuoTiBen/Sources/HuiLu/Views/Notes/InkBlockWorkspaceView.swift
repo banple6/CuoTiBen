@@ -6,6 +6,9 @@ struct InkBlockWorkspaceView: View {
 
     let sourceAnchor: SourceAnchor
     let candidateKnowledgePoints: [KnowledgePoint]
+    var toolState: Binding<NoteInkToolState>? = nil
+    var doubleTapBehavior: NotePencilDoubleTapBehavior = .switchToEraser
+    var appearance: NoteWorkspaceAppearance = .paper
     let onLinkKnowledgePoint: (String) -> Void
 
     @State private var drawingData: Data
@@ -15,11 +18,17 @@ struct InkBlockWorkspaceView: View {
         block: Binding<NoteBlock>,
         sourceAnchor: SourceAnchor,
         candidateKnowledgePoints: [KnowledgePoint],
+        toolState: Binding<NoteInkToolState>? = nil,
+        doubleTapBehavior: NotePencilDoubleTapBehavior = .switchToEraser,
+        appearance: NoteWorkspaceAppearance = .paper,
         onLinkKnowledgePoint: @escaping (String) -> Void
     ) {
         _block = block
         self.sourceAnchor = sourceAnchor
         self.candidateKnowledgePoints = candidateKnowledgePoints
+        self.toolState = toolState
+        self.doubleTapBehavior = doubleTapBehavior
+        self.appearance = appearance
         self.onLinkKnowledgePoint = onLinkKnowledgePoint
         _drawingData = State(initialValue: block.wrappedValue.inkData ?? Data())
     }
@@ -30,22 +39,26 @@ struct InkBlockWorkspaceView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
-                NotesMetaPill(text: "手写", tint: .purple)
+                Text("HANDWRITING")
+                    .font(.system(size: 11, weight: .bold))
+                    .tracking(1.2)
+                    .foregroundStyle(AppPalette.paperMuted)
                 if let recognizedText = block.recognizedText?.trimmingCharacters(in: .whitespacesAndNewlines),
                    !recognizedText.isEmpty {
-                    NotesMetaPill(text: "已识别", tint: .blue)
+                    NotesMetaPill(text: "已识别", tint: AppPalette.paperTapeBlue)
                 }
                 Spacer()
-                NotesMetaPill(text: "Pencil", tint: .green)
+                NotesMetaPill(text: "Pencil", tint: AppPalette.paperHighlightMint)
             }
 
             InkNoteCanvasView(
                 drawingData: $drawingData,
-                toolState: .constant(NoteInkToolState()),
+                toolState: toolState ?? .constant(NoteInkToolState()),
                 pageCount: .constant(1),
-                appearance: .paper,
+                appearance: appearance,
+                doubleTapBehavior: doubleTapBehavior,
                 suggestion: inkAssistViewModel.activeSuggestion,
                 onStopDrawing: { data, bounds, canvasSize in
                     handleInkDidSettle(data: data, bounds: bounds, canvasSize: canvasSize)
@@ -63,10 +76,10 @@ struct InkBlockWorkspaceView: View {
             .frame(height: 260)
             .background(
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(Color.white.opacity(0.62))
+                    .fill(Color.white.opacity(0.92))
                     .overlay(
                         RoundedRectangle(cornerRadius: 22, style: .continuous)
-                            .stroke(Color.white.opacity(0.92), lineWidth: 1)
+                            .stroke(AppPalette.paperLine.opacity(0.65), lineWidth: 0.8)
                     )
             )
 
@@ -97,16 +110,12 @@ struct InkBlockWorkspaceView: View {
                     }
                     .buttonStyle(.plain)
                     .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(Color.blue.opacity(0.88))
+                    .foregroundStyle(AppPalette.primaryDeep.opacity(0.88))
                 }
                 .padding(14)
                 .background(
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(Color.blue.opacity(0.08))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .stroke(Color.blue.opacity(0.18), lineWidth: 1)
-                        )
+                        .fill(AppPalette.paperTapeBlue.opacity(0.14))
                 )
             }
 
@@ -131,12 +140,9 @@ struct InkBlockWorkspaceView: View {
         .padding(18)
         .background(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(Color.white.opacity(0.72))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .stroke(Color.white.opacity(0.92), lineWidth: 1)
-                )
+                .fill(Color.white.opacity(0.9))
         )
+        .shadow(color: Color.black.opacity(0.035), radius: 14, y: 8)
         .onChange(of: block.inkData) { newValue in
             drawingData = newValue ?? Data()
         }

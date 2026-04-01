@@ -42,7 +42,7 @@ struct NoteDetailPane: View {
     }
 
     var body: some View {
-        GlassPanel(tone: .light, cornerRadius: 34, padding: 22) {
+        VStack(spacing: 0) {
             if let detailModel {
                 ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 18) {
@@ -59,6 +59,20 @@ struct NoteDetailPane: View {
                 emptyState
             }
         }
+        .padding(24)
+        .background(
+            RoundedRectangle(cornerRadius: 32, style: .continuous)
+                .fill(AppPalette.paperCard)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 32, style: .continuous)
+                        .stroke(Color.white.opacity(0.9), lineWidth: 1)
+                )
+                .overlay(alignment: .topTrailing) {
+                    PaperTapeAccent(color: AppPalette.paperTapeBlue, width: 78, height: 18)
+                        .offset(x: 10, y: -8)
+                }
+                .shadow(color: Color.black.opacity(0.08), radius: 22, y: 10)
+        )
         .onAppear {
             syncDraftNote(force: true)
         }
@@ -125,7 +139,7 @@ struct NoteDetailPane: View {
     }
 
     private func headerCard(for model: NoteDetailViewModel) -> some View {
-        GlassPanel(tone: .light, cornerRadius: 28, padding: 18) {
+        PaperSheetCard(padding: 22, cornerRadius: 28) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(alignment: .top, spacing: 12) {
                     TextField(
@@ -139,15 +153,15 @@ struct NoteDetailPane: View {
                             }
                         )
                     )
-                    .font(.system(size: 30, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color.black.opacity(0.86))
+                    .font(.system(size: 36, weight: .medium, design: .serif))
+                    .foregroundStyle(AppPalette.paperInk)
                     .textInputAutocapitalization(.never)
 
                     NoteDetailStatusPill(text: saveStatusText)
                 }
 
                 Text(model.sourceSubtitle)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: 14, weight: .semibold, design: .serif))
                     .foregroundStyle(Color.blue.opacity(0.82))
 
                 HStack(spacing: 8) {
@@ -245,7 +259,7 @@ struct NoteDetailPane: View {
 
     @ViewBuilder
     private func knowledgePointSection(for model: NoteDetailViewModel) -> some View {
-        GlassPanel(tone: .light, cornerRadius: 24, padding: 18) {
+        PaperSheetCard(padding: 18, cornerRadius: 24) {
             VStack(alignment: .leading, spacing: 14) {
                 Text("关联知识点")
                     .font(.system(size: 18, weight: .bold))
@@ -323,7 +337,7 @@ struct NoteDetailPane: View {
     }
 
     private func relatedSection(for model: NoteDetailViewModel) -> some View {
-        GlassPanel(tone: .light, cornerRadius: 24, padding: 18) {
+        PaperSheetCard(padding: 18, cornerRadius: 24) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
                     Text("关联信息")
@@ -528,9 +542,7 @@ private struct NotePaneSectionTitle: View {
     let text: String
 
     var body: some View {
-        Text(text)
-            .font(.system(size: 18, weight: .bold))
-            .foregroundStyle(Color.black.opacity(0.8))
+        MarkerTitle(text: text, tint: AppPalette.paperHighlight)
     }
 }
 
@@ -543,16 +555,20 @@ private struct NotePaneActionButton: View {
         Button(action: action) {
             HStack(spacing: 8) {
                 Image(systemName: icon)
-                    .font(.system(size: 14, weight: .bold))
+                    .font(.system(size: 14, weight: .medium))
                 Text(title)
-                    .font(.system(size: 14, weight: .bold))
+                    .font(.system(size: 14, weight: .medium, design: .serif))
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 14)
-            .foregroundStyle(Color.blue.opacity(0.88))
+            .foregroundStyle(AppPalette.paperInk.opacity(0.8))
             .background(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(Color.blue.opacity(0.1))
+                    .fill(Color.white.opacity(0.76))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                    )
             )
         }
         .buttonStyle(.plain)
@@ -564,13 +580,13 @@ private struct NoteDetailStatusPill: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 12, weight: .bold))
+            .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(text == "已保存" ? Color.green.opacity(0.9) : Color.orange.opacity(0.92))
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
             .background(
                 Capsule(style: .continuous)
-                    .fill(Color.white.opacity(0.78))
+                    .fill(Color.black.opacity(0.04))
             )
     }
 }

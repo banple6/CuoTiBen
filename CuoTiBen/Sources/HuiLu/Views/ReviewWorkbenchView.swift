@@ -28,7 +28,7 @@ struct ReviewWorkbenchView: View {
     @State private var showsPhoneAnalysisDrawer = false
     @State private var showsPadOutlineSheet = false
     @State private var phoneDrawerDetent: PresentationDetent = .large
-    @State private var padSplitRatio: CGFloat = 0.5
+    @State private var padSplitRatio: CGFloat = 0.56
     @State private var padDragStartRatio: CGFloat?
 
     private var liveDocument: SourceDocument {
@@ -125,7 +125,7 @@ struct ReviewWorkbenchView: View {
             let safeBottom = max(proxy.safeAreaInsets.bottom, 12)
 
             ZStack {
-                AppBackground(style: .light)
+                PaperCanvasBackground()
 
                 VStack(spacing: usesPadLayout ? 18 : 10) {
                     ReviewWorkbenchHeader(
@@ -156,8 +156,8 @@ struct ReviewWorkbenchView: View {
                         loadingStateCard
                     }
                 }
-                .padding(.top, safeTop + (usesPadLayout ? 10 : 2))
-                .padding(.horizontal, usesPadLayout ? 28 : 14)
+                .padding(.top, safeTop + (usesPadLayout ? 8 : 2))
+                .padding(.horizontal, usesPadLayout ? 24 : 12)
                 .padding(.bottom, safeBottom)
             }
             .ignoresSafeArea()
@@ -701,19 +701,18 @@ private struct ReviewWorkbenchHeader: View {
     let onClose: () -> Void
 
     var body: some View {
-        GlassPanel(tone: .light, cornerRadius: usesCompactChrome ? 24 : 30, padding: usesCompactChrome ? 12 : 16) {
+        PaperSheetCard(
+            padding: usesCompactChrome ? 12 : 18,
+            cornerRadius: usesCompactChrome ? 22 : 28,
+            accent: AppPalette.paperTape,
+            showsTape: !usesCompactChrome
+        ) {
             VStack(alignment: .leading, spacing: usesCompactChrome ? 6 : 10) {
                 HStack(alignment: .top, spacing: usesCompactChrome ? 8 : 16) {
                     VStack(alignment: .leading, spacing: usesCompactChrome ? 4 : 8) {
-                        if !usesCompactChrome {
-                            Text("资料复盘工作台")
-                                .font(.system(size: 12, weight: .bold, design: .rounded))
-                                .foregroundStyle(Color.blue.opacity(0.76))
-                        }
-
                         Text(title)
-                            .font(.system(size: usesCompactChrome ? 16 : 24, weight: .bold, design: .rounded))
-                            .foregroundStyle(Color.black.opacity(0.84))
+                            .font(.system(size: usesCompactChrome ? 16 : 28, weight: .semibold, design: .serif))
+                            .foregroundStyle(AppPalette.paperInk)
                             .lineLimit(1)
                             .minimumScaleFactor(0.82)
                     }
@@ -727,8 +726,8 @@ private struct ReviewWorkbenchHeader: View {
                                 Text("关闭")
                             }
                         }
-                        .font(.system(size: usesCompactChrome ? 16 : 15, weight: .semibold))
-                        .foregroundStyle(Color.black.opacity(0.56))
+                        .font(.system(size: usesCompactChrome ? 16 : 15, weight: .medium))
+                        .foregroundStyle(AppPalette.paperMuted)
                     }
                     .buttonStyle(.plain)
                 }
@@ -743,8 +742,8 @@ private struct ReviewWorkbenchHeader: View {
                 }
 
                 Text(nodeLabel)
-                    .font(.system(size: usesCompactChrome ? 12 : 14, weight: .semibold))
-                    .foregroundStyle(Color.black.opacity(0.66))
+                    .font(.system(size: usesCompactChrome ? 12 : 14, weight: .medium))
+                    .foregroundStyle(AppPalette.paperMuted)
                     .lineLimit(1)
             }
         }
@@ -777,7 +776,12 @@ private struct ReviewWorkbenchOriginalPane: View {
     @State private var showsAllAnchors = false
 
     var body: some View {
-        GlassPanel(tone: .light, cornerRadius: usesCompactChrome ? 24 : 30, padding: usesCompactChrome ? 10 : 18) {
+        PaperSheetCard(
+            padding: usesCompactChrome ? 12 : 18,
+            cornerRadius: usesCompactChrome ? 24 : 30,
+            accent: AppPalette.paperTapeBlue,
+            showsTape: true
+        ) {
             VStack(alignment: .leading, spacing: usesCompactChrome ? 8 : 14) {
                 header
 
@@ -807,11 +811,11 @@ private struct ReviewWorkbenchOriginalPane: View {
                 .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .stroke(Color.white.opacity(0.72), lineWidth: 1)
+                        .stroke(Color.white.opacity(0.88), lineWidth: 1)
                 )
                 .background(
                     RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .fill(Color.white.opacity(0.42))
+                        .fill(AppPalette.paperCard)
                 )
             }
         }
@@ -819,9 +823,7 @@ private struct ReviewWorkbenchOriginalPane: View {
 
     private var header: some View {
         HStack(alignment: .center, spacing: 8) {
-            Text("原文")
-                .font(.system(size: usesCompactChrome ? 18 : 20, weight: .bold, design: .rounded))
-                .foregroundStyle(Color.black.opacity(0.82))
+            MarkerTitle(text: "原文", tint: AppPalette.paperHighlight)
 
             Text(currentAnchorLabel)
                 .font(.system(size: 12, weight: .semibold))
@@ -841,9 +843,9 @@ private struct ReviewWorkbenchOriginalPane: View {
     private func anchorRow(_ anchors: [OutlineNodeAnchorItem]) -> some View {
         VStack(alignment: .leading, spacing: usesCompactChrome ? 6 : 10) {
             HStack {
-                Text("当前节点来源")
-                    .font(.system(size: usesCompactChrome ? 13 : 14, weight: .bold))
-                    .foregroundStyle(Color.black.opacity(0.7))
+                    Text("当前节点来源")
+                        .font(.system(size: usesCompactChrome ? 13 : 14, weight: .bold))
+                        .foregroundStyle(AppPalette.paperInk.opacity(0.78))
 
                 Spacer()
 
@@ -854,8 +856,8 @@ private struct ReviewWorkbenchOriginalPane: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color.blue.opacity(0.78))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color.blue.opacity(0.78))
                 }
             }
 
@@ -870,8 +872,8 @@ private struct ReviewWorkbenchOriginalPane: View {
                                 Text(anchor.label)
                                     .lineLimit(1)
                             }
-                            .font(.system(size: 12, weight: .semibold, design: .rounded))
-                            .foregroundStyle(Color.blue.opacity(0.8))
+                        .font(.system(size: 12, weight: .semibold, design: .serif))
+                        .foregroundStyle(Color.blue.opacity(0.8))
                             .padding(.horizontal, usesCompactChrome ? 10 : 12)
                             .padding(.vertical, usesCompactChrome ? 8 : 9)
                             .background(
@@ -910,7 +912,7 @@ private struct ReviewWorkbenchOriginalPane: View {
             .padding(.vertical, 8)
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color.white.opacity(0.72))
+                    .fill(Color.black.opacity(0.04))
             )
         }
         .buttonStyle(.plain)
@@ -976,12 +978,15 @@ private struct ReviewWorkbenchAnalysisPane: View {
     let onShowOutline: () -> Void
 
     var body: some View {
-        GlassPanel(tone: .light, cornerRadius: 30, padding: usesPadLayout ? 16 : 14) {
+        PaperSheetCard(
+            padding: usesPadLayout ? 18 : 14,
+            cornerRadius: 30,
+            accent: AppPalette.paperHighlightMint,
+            showsTape: true
+        ) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
-                    Text("解析分析")
-                        .font(.system(size: usesPadLayout ? 18 : 20, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color.black.opacity(0.82))
+                    MarkerTitle(text: "解析分析", tint: AppPalette.paperHighlight)
 
                     Spacer()
 
@@ -991,7 +996,7 @@ private struct ReviewWorkbenchAnalysisPane: View {
                                 Image(systemName: "list.bullet.indent")
                                 Text("结构树")
                             }
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(.system(size: 12, weight: .semibold, design: .serif))
                             .foregroundStyle(Color.blue.opacity(0.8))
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
@@ -1005,7 +1010,7 @@ private struct ReviewWorkbenchAnalysisPane: View {
 
                     Text(modeLabel)
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Color.black.opacity(0.5))
+                        .foregroundStyle(AppPalette.paperMuted)
                 }
 
                 ReviewWorkbenchPanelShell(contentPadding: usesPadLayout ? 18 : 14) {
@@ -1049,9 +1054,6 @@ private struct ReviewWorkbenchAnalysisPane: View {
                     }
                 }
 
-                if !usesPadLayout {
-                    outlineTreeCard
-                }
             }
         }
     }
@@ -1159,14 +1161,14 @@ private struct ReviewWorkbenchPhoneAnalysisDrawer: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text(drawerTitle)
-                    .font(.system(size: 18, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color.black.opacity(0.82))
+                    .font(.system(size: 18, weight: .semibold, design: .serif))
+                    .foregroundStyle(AppPalette.paperInk)
 
                 Spacer()
 
                 Text(drawerModeLabel)
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color.black.opacity(0.42))
+                    .foregroundStyle(AppPalette.paperMuted)
             }
 
             Group {
@@ -1215,7 +1217,7 @@ private struct ReviewWorkbenchPhoneAnalysisDrawer: View {
         .padding(.horizontal, 14)
         .padding(.top, 10)
         .padding(.bottom, 18)
-        .background(AppBackground(style: .light))
+        .background(PaperCanvasBackground())
     }
 
     private var drawerModeLabel: String {
@@ -1255,10 +1257,15 @@ private struct ReviewWorkbenchPanelShell<Content: View>: View {
             .padding(contentPadding)
             .background(
                 RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .fill(Color.white.opacity(0.76))
+                    .fill(AppPalette.paperCard)
+                    .overlay(
+                        NotebookGrid(spacing: 24)
+                            .opacity(0.08)
+                            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                    )
                     .overlay(
                         RoundedRectangle(cornerRadius: 24, style: .continuous)
-                            .stroke(Color.white.opacity(0.92), lineWidth: 1)
+                            .stroke(Color.white.opacity(0.96), lineWidth: 1)
                     )
             )
     }

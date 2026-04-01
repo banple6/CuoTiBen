@@ -16,8 +16,11 @@ struct NoteCanvasView: View {
     let candidateKnowledgePoints: [KnowledgePoint]
     let highlightedBlockID: UUID?
     let currentOutlineTitle: String?
+    var canvasTitle: String? = nil
     var layoutStyle: NoteCanvasLayoutStyle = .notebook
     var appearance: NoteWorkspaceAppearance = .paper
+    var showsCanvasHeader: Bool = true
+    var maxPaperWidth: CGFloat = 880
     @Binding var inkToolState: NoteInkToolState
     var doubleTapBehavior: NotePencilDoubleTapBehavior = .switchToEraser
     var showsAddBlockBar: Bool = true
@@ -52,8 +55,10 @@ struct NoteCanvasView: View {
                 HStack {
                     Spacer(minLength: 0)
 
-                    VStack(alignment: .leading, spacing: 22) {
-                        notebookHeader
+                    VStack(alignment: .leading, spacing: 28) {
+                        if showsCanvasHeader {
+                            notebookHeader
+                        }
 
                         if blocks.isEmpty {
                             emptyState
@@ -68,18 +73,28 @@ struct NoteCanvasView: View {
                             addBlockBar
                         }
                     }
-                    .padding(.horizontal, 42)
-                    .padding(.vertical, 34)
-                    .frame(maxWidth: 880, alignment: .leading)
+                    .padding(.horizontal, 72)
+                    .padding(.vertical, 54)
+                    .frame(maxWidth: maxPaperWidth, alignment: .leading)
                     .background(NotebookPaperBackground())
                     .overlay(alignment: .leading) {
                         Rectangle()
-                            .fill(Color.red.opacity(0.10))
-                            .frame(width: 2)
-                            .padding(.vertical, 24)
-                            .padding(.leading, 26)
+                            .fill(AppPalette.paperTapeBlue.opacity(0.18))
+                            .frame(width: 1.5)
+                            .padding(.vertical, 30)
+                            .padding(.leading, 42)
                     }
-                    .shadow(color: Color.black.opacity(0.07), radius: 28, y: 14)
+                    .overlay(alignment: .topLeading) {
+                        PaperTapeAccent(color: AppPalette.paperTapeBlue, width: 70, height: 18, angle: -6)
+                            .padding(.top, 20)
+                            .padding(.leading, 78)
+                    }
+                    .overlay(alignment: .topTrailing) {
+                        PaperTapeAccent(color: AppPalette.paperTape, width: 64, height: 18, angle: 7)
+                            .padding(.top, 16)
+                            .padding(.trailing, 76)
+                    }
+                    .shadow(color: Color.black.opacity(0.05), radius: 32, y: 16)
                     .padding(.vertical, 8)
 
                     Spacer(minLength: 0)
@@ -174,7 +189,7 @@ struct NoteCanvasView: View {
     }
 
     private var notebookHeader: some View {
-        canvasHeader(isStudio: false)
+        editorialNotebookHeader
     }
 
     private var studioHeader: some View {
@@ -193,8 +208,65 @@ struct NoteCanvasView: View {
         blocks.filter { $0.kind == .text }
     }
 
+    private var notebookDisplayTitle: String {
+        canvasTitle?.nonEmpty ?? sourceAnchor.sourceTitle
+    }
+
     private var hasStudioAccessories: Bool {
         studioQuoteBlock != nil || !studioTextBlocks.isEmpty || !linkedKnowledgePoints.isEmpty
+    }
+
+    private var editorialNotebookHeader: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    editorMetaTag(text: "Source: \(sourceAnchor.sourceTitle)", tint: AppPalette.paperTapeBlue.opacity(0.28))
+                    if let currentOutlineTitle, !currentOutlineTitle.isEmpty {
+                        editorMetaTag(text: "Topic: \(currentOutlineTitle)", tint: AppPalette.paperHighlight.opacity(0.78))
+                    }
+                    editorMetaTag(text: "Anchor: \(sourceAnchor.anchorLabel)", tint: AppPalette.paperHighlightMint.opacity(0.7))
+                }
+            }
+
+            Text(notebookDisplayTitle)
+                .font(.system(size: 54, weight: .medium, design: .serif))
+                .foregroundStyle(AppPalette.paperInk)
+                .lineSpacing(6)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Rectangle()
+                .fill(AppPalette.paperLine.opacity(0.8))
+                .frame(height: 1)
+
+            HStack(spacing: 12) {
+                if let pageIndex = sourceAnchor.pageIndex {
+                    NotesMetaPill(text: "第\(pageIndex)页", tint: AppPalette.paperTapeBlue)
+                }
+                NotesMetaPill(text: sourceAnchor.anchorLabel, tint: AppPalette.paperHighlightMint)
+                if !linkedKnowledgePoints.isEmpty {
+                    NotesMetaPill(text: "\(linkedKnowledgePoints.count) 个知识点", tint: AppPalette.paperHighlight)
+                }
+            }
+
+            if let quote = sourceAnchor.quotedText.nonEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Quoted Focus")
+                        .font(.system(size: 11, weight: .bold))
+                        .tracking(1.2)
+                        .foregroundStyle(AppPalette.paperMuted)
+
+                    Text(quote)
+                        .font(.system(size: 22, weight: .regular, design: .serif))
+                        .foregroundStyle(AppPalette.paperInk.opacity(0.82))
+                        .italic()
+                        .lineSpacing(8)
+                        .frame(maxWidth: 780, alignment: .leading)
+                }
+                .padding(.top, 2)
+            }
+        }
+        .padding(.top, 4)
+        .padding(.bottom, 14)
     }
 
     private var studioSourceStrip: some View {
@@ -528,6 +600,9 @@ struct NoteCanvasView: View {
                 ),
                 sourceAnchor: sourceAnchor,
                 candidateKnowledgePoints: candidateKnowledgePoints,
+                toolState: $inkToolState,
+                doubleTapBehavior: doubleTapBehavior,
+                appearance: appearance,
                 onLinkKnowledgePoint: { pointID in
                     onLinkKnowledgePointToBlock(pointID, block.id)
                 }
@@ -540,6 +615,18 @@ struct NoteCanvasView: View {
         RoundedRectangle(cornerRadius: 26, style: .continuous)
             .stroke(highlightedBlockID == blockID ? Color.blue.opacity(0.36) : Color.clear, lineWidth: 2)
             .animation(.easeInOut(duration: 0.22), value: highlightedBlockID == blockID)
+    }
+
+    private func editorMetaTag(text: String, tint: Color) -> some View {
+        Text(text)
+            .font(.system(size: 12.5, weight: .medium))
+            .foregroundStyle(AppPalette.paperInk.opacity(0.82))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(tint)
+            )
     }
 
     private var emptyState: some View {
@@ -741,21 +828,41 @@ private struct NotebookPaperBackground: View {
             .fill(
                 LinearGradient(
                     colors: [
-                        Color(red: 0.998, green: 0.994, blue: 0.982),
-                        Color(red: 0.982, green: 0.978, blue: 0.965)
+                        Color.white,
+                        Color(red: 0.986, green: 0.982, blue: 0.973)
                     ],
                     startPoint: .top,
                     endPoint: .bottom
                 )
             )
             .overlay {
-                NotebookGuideLines()
+                NotebookGrid(spacing: 28)
+                    .opacity(0.16)
                     .clipShape(RoundedRectangle(cornerRadius: 34, style: .continuous))
+            }
+            .overlay {
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(0.56),
+                        .clear,
+                        Color(red: 0.96, green: 0.95, blue: 0.92).opacity(0.3)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 34, style: .continuous))
             }
             .overlay(
                 RoundedRectangle(cornerRadius: 34, style: .continuous)
-                    .stroke(Color.white.opacity(0.82), lineWidth: 1)
+                    .stroke(AppPalette.paperLine.opacity(0.7), lineWidth: 0.8)
             )
+    }
+}
+
+private extension String {
+    var nonEmpty: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 

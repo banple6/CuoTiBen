@@ -9,12 +9,12 @@ func relativeDateString(from date: Date) -> String {
 func sectionHeader(title: String, subtitle: String) -> some View {
     VStack(alignment: .leading, spacing: 4) {
         Text(title)
-            .font(.system(size: 21, weight: .bold, design: .rounded))
-            .foregroundStyle(Color.black.opacity(0.84))
+            .font(.system(size: 24, weight: .medium))
+            .foregroundStyle(AppPalette.paperInk)
 
         Text(subtitle)
             .font(.system(size: 14, weight: .medium))
-            .foregroundStyle(Color.black.opacity(0.52))
+            .foregroundStyle(AppPalette.paperMuted)
     }
 }
 
@@ -23,15 +23,15 @@ struct NotesEmptyStateCard: View {
     let message: String
 
     var body: some View {
-        GlassPanel(tone: .light, cornerRadius: 24, padding: 18) {
+        PaperSheetCard(padding: 18, cornerRadius: 24) {
             VStack(alignment: .leading, spacing: 8) {
                 Text(title)
-                    .font(.system(size: 17, weight: .bold))
-                    .foregroundStyle(Color.black.opacity(0.8))
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(AppPalette.paperInk)
 
                 Text(message)
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(Color.black.opacity(0.56))
+                    .foregroundStyle(AppPalette.paperMuted)
                     .lineSpacing(4)
             }
         }

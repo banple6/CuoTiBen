@@ -8,8 +8,9 @@ struct LinkedKnowledgePointChipsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("关联知识点")
-                .font(.system(size: 15, weight: .bold))
-                .foregroundStyle(Color.black.opacity(0.76))
+                .font(.system(size: 13, weight: .bold))
+                .tracking(0.8)
+                .foregroundStyle(AppPalette.paperMuted)
 
             if points.isEmpty {
                 Text("当前笔记还没有关联知识点。")
@@ -28,9 +29,9 @@ struct LinkedKnowledgePointChipsView: View {
             Button {
                 onSelect(point)
             } label: {
-                NotesMetaPill(text: point.title, tint: .blue)
-            }
-            .buttonStyle(.plain)
+                    NotesMetaPill(text: point.title, tint: .blue)
+                }
+                .buttonStyle(.plain)
 
             if let onOpenSource, !point.sourceAnchors.isEmpty {
                 Button {

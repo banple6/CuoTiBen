@@ -6,10 +6,16 @@ struct QuoteBlockView: View {
     var onOpenSource: (() -> Void)? = nil
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 8) {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: 10) {
                 HStack(spacing: 8) {
-                    NotesMetaPill(text: "引用", tint: .orange)
+                    Text("QUOTE")
+                        .font(.system(size: 11, weight: .bold))
+                        .tracking(1.3)
+                        .foregroundStyle(AppPalette.primaryDeep.opacity(0.85))
+                    Rectangle()
+                        .fill(AppPalette.paperLine)
+                        .frame(width: 1, height: 12)
                     NotesMetaPill(text: sourceAnchor.anchorLabel, tint: .blue)
                     if let pageIndex = sourceAnchor.pageIndex {
                         NotesMetaPill(text: "第\(pageIndex)页", tint: .purple)
@@ -26,13 +32,13 @@ struct QuoteBlockView: View {
                             Image(systemName: "arrow.up.forward.square")
                             Text("回到原文")
                         }
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(Color.blue.opacity(0.86))
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(AppPalette.primaryDeep.opacity(0.9))
                         .padding(.horizontal, 12)
-                        .padding(.vertical, 9)
+                        .padding(.vertical, 8)
                         .background(
                             Capsule(style: .continuous)
-                                .fill(Color.white.opacity(0.76))
+                                .fill(AppPalette.paperTapeBlue.opacity(0.16))
                         )
                     }
                     .buttonStyle(.plain)
@@ -40,26 +46,25 @@ struct QuoteBlockView: View {
             }
 
             Text(resolvedText)
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(Color.black.opacity(0.82))
-                .lineSpacing(6)
+                .font(.system(size: 20, weight: .medium, design: .serif))
+                .foregroundStyle(AppPalette.paperInk.opacity(0.88))
+                .italic()
+                .lineSpacing(9)
         }
-        .padding(20)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 22)
         .background(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(AppPalette.amber.opacity(0.08))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .stroke(AppPalette.amber.opacity(0.22), lineWidth: 1)
-                )
+                .fill(AppPalette.paperCard.opacity(0.94))
         )
-        .overlay(alignment: .leading) {
-            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                .fill(AppPalette.amber.opacity(0.42))
-                .frame(width: 4)
-                .padding(.vertical, 18)
-                .padding(.leading, 10)
+        .overlay(alignment: .topLeading) {
+            Text("“")
+                .font(.system(size: 60, weight: .bold, design: .serif))
+                .foregroundStyle(AppPalette.paperTape.opacity(0.34))
+                .padding(.leading, 12)
+                .padding(.top, -8)
         }
+        .shadow(color: Color.black.opacity(0.04), radius: 16, y: 8)
     }
 
     private var resolvedText: String {

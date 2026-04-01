@@ -32,18 +32,18 @@ struct LibraryView: View {
 
     var body: some View {
         ZStack {
-            AppBackground(style: .light)
+            PaperCanvasBackground()
 
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 22) {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("活跃知识库")
-                            .font(.system(size: 32, weight: .bold, design: .rounded))
-                            .foregroundStyle(Color.black.opacity(0.82))
+                            .font(.system(size: 32, weight: .bold, design: .serif))
+                            .foregroundStyle(AppPalette.paperInk)
 
                         Text("把导入资料整理成可随时检索、回看的知识地图。")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(Color.black.opacity(0.5))
+                            .font(.system(size: 15, weight: .medium, design: .serif))
+                            .foregroundStyle(AppPalette.paperMuted)
                     }
 
                     HStack(spacing: 12) {
@@ -54,12 +54,15 @@ struct LibraryView: View {
                         } label: {
                             Image(systemName: "plus")
                                 .font(.system(size: 18, weight: .bold))
-                                .foregroundStyle(Color.black.opacity(0.75))
+                                .foregroundStyle(AppPalette.paperInk.opacity(0.75))
                                 .frame(width: 48, height: 48)
-                                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                                .background(
+                                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                        .fill(Color.white.opacity(0.78))
+                                )
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                        .stroke(Color.white.opacity(0.7), lineWidth: 1)
+                                        .stroke(Color.white.opacity(0.94), lineWidth: 1)
                                 )
                         }
                         .buttonStyle(.plain)
@@ -91,7 +94,7 @@ struct LibraryView: View {
                     Spacer(minLength: 150)
                 }
                 .padding(.horizontal, 24)
-                .padding(.top, 58)
+                .padding(.top, 52)
             }
 
             if let selectedDocument {
@@ -144,22 +147,25 @@ struct SearchBar: View {
         HStack(spacing: 12) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(Color.black.opacity(0.35))
+                .foregroundStyle(AppPalette.paperMuted)
 
             TextField("搜索知识库", text: $text)
-                .font(.system(size: 16, weight: .medium))
+                .font(.system(size: 16, weight: .medium, design: .serif))
                 .textInputAutocapitalization(.never)
 
             Image(systemName: "mic.fill")
                 .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(Color.black.opacity(0.35))
+                .foregroundStyle(AppPalette.paperMuted)
         }
         .padding(.horizontal, 16)
         .frame(height: 48)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.white.opacity(0.78))
+        )
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.white.opacity(0.72), lineWidth: 1)
+                .stroke(Color.white.opacity(0.95), lineWidth: 1)
         )
     }
 }
@@ -177,25 +183,44 @@ struct SegmentedGlassControl<T: Hashable>: View {
                         selected = item
                     }
                 } label: {
-                    Text(item[keyPath: label])
-                        .font(.system(size: 16, weight: selected == item ? .semibold : .medium))
-                        .foregroundStyle(Color.black.opacity(selected == item ? 0.82 : 0.6))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .fill(selected == item ? Color.white.opacity(0.88) : .clear)
-                        )
+                    HStack(spacing: 8) {
+                        Image(systemName: iconName(for: item))
+                            .font(.system(size: 18, weight: .medium))
+                        Text(item[keyPath: label])
+                            .font(.system(size: 16, weight: selected == item ? .bold : .medium, design: .serif))
+                    }
+                    .foregroundStyle(selected == item ? AppPalette.paperInk : AppPalette.paperMuted)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(selected == item ? Color.white.opacity(0.88) : .clear)
+                    )
                 }
                 .buttonStyle(.plain)
             }
         }
         .padding(6)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.white.opacity(0.6))
+        )
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.white.opacity(0.7), lineWidth: 1)
+                .stroke(Color.white.opacity(0.94), lineWidth: 1)
         )
+    }
+
+    private func iconName(for item: T) -> String {
+        guard let filter = item as? LibraryView.LibraryFilter else { return "circle" }
+        switch filter {
+        case .recent:
+            return "clock"
+        case .weak:
+            return "doc.text"
+        case .subjects:
+            return "shippingbox"
+        }
     }
 }
 
@@ -209,15 +234,18 @@ struct LibraryToolbarChip: View {
                 .font(.system(size: 16, weight: .semibold))
 
             Text(title)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 14, weight: .semibold, design: .serif))
         }
-        .foregroundStyle(Color.black.opacity(0.6))
+        .foregroundStyle(AppPalette.paperInk.opacity(0.72))
         .padding(.horizontal, 14)
         .frame(height: 42)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.white.opacity(0.7))
+        )
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.white.opacity(0.75), lineWidth: 1)
+                .stroke(Color.black.opacity(0.08), lineWidth: 1)
         )
     }
 }
@@ -229,13 +257,13 @@ struct LibraryDocumentCard: View {
     private var palette: [Color] {
         switch paletteIndex % 4 {
         case 0:
-            return [Color(red: 0.62, green: 0.82, blue: 1.0), Color(red: 0.37, green: 0.61, blue: 0.98)]
+            return [AppPalette.paperFolderBlue, AppPalette.paperTape]
         case 1:
-            return [Color(red: 1.0, green: 0.86, blue: 0.62), Color(red: 1.0, green: 0.71, blue: 0.46)]
+            return [AppPalette.paperFolderOrange, AppPalette.paperTapeBlue]
         case 2:
-            return [Color(red: 0.9, green: 0.73, blue: 1.0), Color(red: 0.69, green: 0.47, blue: 0.96)]
+            return [AppPalette.paperFolderLavender, AppPalette.paperHighlight]
         default:
-            return [Color(red: 0.69, green: 0.96, blue: 1.0), Color(red: 0.39, green: 0.8, blue: 0.91)]
+            return [Color(red: 125 / 255, green: 191 / 255, blue: 149 / 255), AppPalette.paperTape]
         }
     }
 
@@ -253,134 +281,70 @@ struct LibraryDocumentCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(alignment: .top, spacing: 14) {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text(document.title)
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color.black.opacity(0.84))
-                        .multilineTextAlignment(.leading)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                    HStack(spacing: 8) {
-                        LibraryMetaPill(title: document.documentType.displayName)
-                        LibraryMetaPill(title: document.chunkCount > 0 ? "\(document.chunkCount) 个知识块" : "\(document.pageCount) 页")
-                        if document.generatedCardCount > 0 {
-                            LibraryMetaPill(title: "\(document.generatedCardCount) 张草稿")
-                        } else if document.chunkCount > 0 {
-                            LibraryMetaPill(title: "结构化预览")
-                        }
-                    }
-                }
-
-                Spacer(minLength: 0)
-
-                ZStack {
-                    Circle()
-                        .fill(Color.white.opacity(0.24))
-                        .frame(width: 68, height: 68)
-                        .blur(radius: AppPerformance.prefersReducedEffects ? 3 : 8)
-
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(Color.white.opacity(0.34))
-                        .frame(width: 44, height: 58)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .stroke(Color.white.opacity(0.55), lineWidth: 1)
-                        )
-                        .rotationEffect(.degrees(-10))
-
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [Color.white.opacity(0.74), palette[0].opacity(0.42)],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .frame(width: 46, height: 60)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .stroke(Color.white.opacity(0.66), lineWidth: 1)
-                        )
-                        .rotationEffect(.degrees(10))
-
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.black.opacity(0.1))
-                        .frame(width: 22, height: 4)
-                        .offset(y: -8)
-
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.black.opacity(0.1))
-                        .frame(width: 18, height: 4)
-                        .offset(y: 2)
-                }
-                .padding(.top, 4)
-            }
-
-            HStack {
-                HStack(spacing: 8) {
-                    Image(systemName: status.icon)
-                        .font(.system(size: 15, weight: .semibold))
-                    Text(status.label)
-                        .font(.system(size: 15, weight: .medium))
-                }
-                .foregroundStyle(status.color)
-
-                Spacer()
-
-                HStack(spacing: 8) {
-                    LibraryMetaPill(title: "候选点 \(document.candidateKnowledgePoints.count)")
-                    Image(systemName: document.processingStatus.icon)
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Color.black.opacity(0.3))
-                }
-            }
-        }
-        .padding(22)
-        .frame(maxWidth: .infinity, minHeight: 166)
-        .background(
+        ZStack(alignment: .topTrailing) {
             RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .fill(LinearGradient(colors: palette, startPoint: .topLeading, endPoint: .bottomTrailing))
-                .overlay(alignment: .topTrailing) {
-                    ZStack {
-                        Circle()
-                            .fill(Color.white.opacity(0.38))
-                            .frame(width: 72, height: 72)
-                            .blur(radius: AppPerformance.prefersReducedEffects ? 6 : 16)
-                            .offset(x: 14, y: -18)
+                .fill(palette[0].opacity(0.95))
+                .offset(x: -8, y: 8)
 
-                        RoundedRectangle(cornerRadius: 30, style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: [Color.white.opacity(0.32), .clear],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                            .frame(width: 130, height: 84)
-                            .rotationEffect(.degrees(-18))
-                            .offset(x: 30, y: -22)
-
-                        RoundedRectangle(cornerRadius: 28, style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: [Color.white.opacity(0.18), .clear],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                            .frame(width: 150, height: 96)
-                            .rotationEffect(.degrees(28))
-                            .offset(x: 16, y: 26)
-                    }
-                }
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .fill(AppPalette.paperCard)
                 .overlay(
                     RoundedRectangle(cornerRadius: 28, style: .continuous)
-                        .stroke(Color.white.opacity(0.55), lineWidth: 1)
+                        .stroke(AppPalette.paperInk.opacity(0.68), lineWidth: 1.4)
                 )
-                .shadow(color: palette[1].opacity(0.14), radius: AppPerformance.prefersReducedEffects ? 12 : 24, y: AppPerformance.prefersReducedEffects ? 6 : 12)
-        )
+                .overlay(alignment: .topTrailing) {
+                    PaperTapeAccent(color: palette[1], width: 76, height: 20)
+                        .offset(x: 12, y: -8)
+                }
+
+            VStack(alignment: .leading, spacing: 18) {
+                Text(document.title)
+                    .font(.system(size: 22, weight: .bold, design: .serif))
+                    .foregroundStyle(AppPalette.paperInk)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    documentLine(icon: "doc", text: document.documentType.displayName)
+                    documentLine(icon: "shippingbox", text: "\(document.chunkCount > 0 ? document.chunkCount : document.pageCount)个知识块")
+                    documentLine(icon: "rectangle.text.magnifyingglass", text: document.generatedCardCount > 0 ? "\(document.generatedCardCount)张草稿" : "结构化预览")
+                }
+
+                HStack {
+                    HStack(spacing: 8) {
+                        Image(systemName: status.icon)
+                            .font(.system(size: 15, weight: .semibold))
+                        Text(status.label)
+                            .font(.system(size: 15, weight: .bold, design: .serif))
+                    }
+                    .foregroundStyle(status.color)
+
+                    Spacer()
+
+                    HStack(spacing: 8) {
+                        Text("候选点 \(document.candidateKnowledgePoints.count)")
+                            .font(.system(size: 15, weight: .semibold, design: .serif))
+                            .foregroundStyle(AppPalette.paperInk.opacity(0.84))
+                        Image(systemName: document.processingStatus.icon)
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(Color.black.opacity(0.24))
+                    }
+                }
+            }
+            .padding(30)
+        }
+        .frame(maxWidth: .infinity, minHeight: 200)
+        .shadow(color: palette[0].opacity(0.16), radius: 18, y: 10)
+    }
+
+    private func documentLine(icon: String, text: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 18, weight: .medium))
+            Text(text)
+                .font(.system(size: 16, weight: .medium, design: .serif))
+        }
+        .foregroundStyle(AppPalette.paperInk.opacity(0.86))
     }
 }
 

@@ -28,9 +28,9 @@ struct NotesSplitView: View {
 
     var body: some View {
         ZStack {
-            AppBackground(style: .light)
+            PaperCanvasBackground()
 
-            HStack(spacing: 18) {
+            HStack(spacing: 20) {
                 NotesListPane(
                     screenModel: screenModel,
                     selectedTab: $selectedTab,
@@ -40,7 +40,7 @@ struct NotesSplitView: View {
                     showsCloseButton: showsCloseButton,
                     onClose: onClose
                 )
-                .frame(width: 360)
+                .frame(width: 324)
 
                 NoteDetailPane(
                     note: selectedNote,
@@ -52,8 +52,8 @@ struct NotesSplitView: View {
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 20)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 18)
         }
         .navigationBarHidden(true)
         .onAppear(perform: selectFirstAvailableNote)
