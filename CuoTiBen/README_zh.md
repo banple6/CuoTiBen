@@ -1,6 +1,6 @@
 # 慧录 / CuoTiBen 开发记录
 
-截至 `2026-03-29`，这个项目已经从最初的 SwiftUI 原型，推进到了「英语资料导入 -> 结构化理解 -> 原始 PDF 对齐阅读 -> 句子讲解 -> 单词讲解 -> 复盘工作台 -> 完整笔记编辑 -> iPad 双栏笔记中心 -> 类 GoodNotes 风格笔记工作台 -> Obsidian-lite 傻瓜化联动 -> 性能优化」的可运行版本。本文档用于记录当前实际开发进度、项目结构、运行方式和最近迭代日志。
+截至 `2026-04-01`，这个项目已经从最初的 SwiftUI 原型，推进到了「英语资料导入 -> 结构化理解 -> 原始 PDF 对齐阅读 -> 句子讲解 -> 单词讲解 -> 复盘工作台 -> 完整笔记编辑 -> iPad 双栏笔记中心 -> 档案台 / 纸张隐喻式笔记工作台 -> Obsidian-lite 傻瓜化联动 -> 性能优化」的可运行版本。本文档用于记录当前实际开发进度、项目结构、运行方式和最近迭代日志。
 
 ## 当前状态
 
@@ -26,6 +26,10 @@
 - 笔记模块已形成两种主场景，并具备完整编辑链：
   - iPhone：单栏列表 -> 详情 -> 工作台
   - iPad：双栏笔记中心 + 独立深度编辑工作台
+- 当前主界面正在向统一的“纸张隐喻 + 档案工作台 + 学术阅读台”设计语言收敛：
+  - 首页正从玻璃卡片过渡到桌面/便签式 dashboard
+  - 知识库正过渡到文件夹/练习册式资料柜
+  - 笔记工作台已完成一轮 `Digital Archivist` 风格重构
 - 关键性能热点已做过一轮缓存与重绘优化：
   - `LearningRecordContext` 结果级缓存
   - ranked 中间结果缓存
@@ -214,7 +218,8 @@
   - 浮窗高亮当前结构节点路径
   - 点击结构树节点后滚动定位到相关引用/内容并给出轻高亮反馈
   - 保存后回写 `NoteRepository`
-  - iPad 上采用更接近真实笔记软件的顶部标签栏、工具条和整页纸质笔记本画布
+  - iPad 上采用更接近学术档案台的顶部工具栏、左侧资料导航、中间大纸页、右侧上下文分析浮栏
+  - 纸页内已加入纹理、贴纸、引文焦点区与更明显的 serif/sans 层级
   - 默认隐藏结构树浮窗，把主视觉空间优先让给笔记编辑
 - 当前完整笔记页能力：
   - 标题可编辑
@@ -335,10 +340,19 @@ CuoTiBen/
 │       └── Views/
 │           ├── BottomGlassTabBar.swift
 │           ├── ContentView.swift
+│           ├── EnhancedHomeView.swift
+│           ├── EnhancedLibraryView.swift
+│           ├── EnhancedReviewListView.swift
+│           ├── EnhancedTabBar.swift
+│           ├── EnhancedUIComponents.swift
 │           ├── GlassUIComponents.swift
 │           ├── HomeView.swift
 │           ├── ImportMaterialView.swift
 │           ├── LibraryView.swift
+│           ├── ModernHomeView.swift
+│           ├── ModernLibraryView.swift
+│           ├── ModernNotesSplitView.swift
+│           ├── ModernReviewView.swift
 │           ├── ReviewListView.swift
 │           ├── ReviewSessionView.swift
 │           ├── ReviewWorkbenchView.swift
@@ -347,6 +361,7 @@ CuoTiBen/
 │           ├── SourceOriginalTab.swift
 │           ├── SourceOutlineTab.swift
 │           ├── StructuredSourcePDFReader.swift
+│           ├── WorkspaceHomeView.swift
 │           ├── Notes/
 │           │   ├── InkAssistSuggestionBubble.swift
 │           │   ├── InkBlockWorkspaceView.swift
@@ -375,6 +390,11 @@ CuoTiBen/
 │           │   └── WorkspaceTopBar.swift
 │           └── Settings/
 │               └── AppSettingsSheet.swift
+│       ├── DesignSystem/
+│       │   ├── ModernComponents.swift
+│       │   ├── ModernDesignTokens.swift
+│       │   ├── WorkspaceComponents.swift
+│       │   └── WorkspaceDesignTokens.swift
 ```
 
 ## 运行方式
@@ -507,6 +527,17 @@ rm -rf /tmp/CuoTiBen*
 - 支持左右区域拖拽调宽
 - 原文与解析可同时查看
 - 结构树可单独打开，不长期压缩解析正文
+- 笔记工作台优先采用“档案工作台 / 学术阅读台”布局：
+  - 左侧为资料导航
+  - 中间为大纸页主内容
+  - 右侧为导航 / 分析上下文栏
+
+### 当前视觉方向
+
+- 强调纸张、桌面、档案、便签、胶带等实体隐喻，而不是纯玻璃拟态
+- 英文正文优先使用更偏学术阅读的 serif 层级，辅助信息使用 sans
+- 交互层尽量轻，视觉中心始终留给原文、笔记和分析内容
+- iPhone 更像随身纸片工作流，iPad 更像完整学习桌面
 
 ## 已知注意事项
 
@@ -518,6 +549,23 @@ rm -rf /tmp/CuoTiBen*
 - 后端当前没有数据库和登录系统，属于最小可用原型。
 
 ## 最近开发日志
+
+### 2026-04-01
+
+- 完成一轮 `Digital Archivist` 方向的笔记工作台重构：
+  - `NoteWorkspaceView` 改为左侧资料导航 + 顶部档案工具栏 + 中央大纸页 + 右侧上下文栏
+  - `WorkspaceSidebar` 的结构、知识、来源、标签入口改为更接近研究资料库语义
+  - `WorkspaceHeaderBar` 重构为学术阅读台式顶部条，补齐品牌、撤销/重做、标题编辑、来源信息和保存状态
+  - 新增 `WorkspaceFooterStrip` 作为底部轻状态条
+- 完成 `NoteCanvasView` 纸页视觉重构：
+  - 增加更宽的纸张边距、纸胶带贴纸、纹理、引文焦点区与分隔线
+  - 强化正文、引用、来源标签之间的层级关系
+- 补充 `DesignSystem` 与增强版页面骨架：
+  - `WorkspaceComponents / WorkspaceDesignTokens`
+  - `ModernHomeView / ModernLibraryView / ModernReviewView`
+  - `EnhancedHomeView / EnhancedLibraryView / EnhancedReviewListView`
+- 完成这一轮 UI 重构后的整包命令行验证：
+  - `xcodebuild ... build` 结果为 `BUILD SUCCEEDED`
 
 ### 2026-03-29
 
@@ -665,4 +713,4 @@ rm -rf /tmp/CuoTiBen*
 
 ---
 
-文档更新时间：`2026-03-29`
+文档更新时间：`2026-04-01`
