@@ -20,11 +20,11 @@ struct NoteOutlineFloatingPanel: View {
     }
 
     private var expandedPanel: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 10) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(mode == .structure ? "结构树导航" : "导图导航")
-                        .font(.system(size: 16, weight: .bold))
+                        .font(.system(size: 14, weight: .bold))
                         .foregroundStyle(Color.black.opacity(0.82))
 
                     Text(sourceTitle)
@@ -38,9 +38,9 @@ struct NoteOutlineFloatingPanel: View {
                 Button(action: onCycleState) {
                     Image(systemName: "sidebar.right")
                         .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(Color.black.opacity(0.62))
+                        .foregroundStyle(WorkspaceColors.textSecondary)
                         .frame(width: 32, height: 32)
-                        .background(Circle().fill(Color.white.opacity(0.76)))
+                        .background(.regularMaterial, in: Circle())
                 }
                 .buttonStyle(.plain)
             }
@@ -53,8 +53,8 @@ struct NoteOutlineFloatingPanel: View {
                 mindMapContent
             }
         }
-        .padding(18)
-        .frame(width: 332)
+        .padding(16)
+        .frame(width: 272)
         .background(panelBackground)
     }
 
@@ -123,12 +123,12 @@ struct NoteOutlineFloatingPanel: View {
                 } label: {
                     Text(item.title)
                         .font(.system(size: 12.5, weight: .bold))
-                        .foregroundStyle(mode == item ? Color.blue.opacity(0.88) : Color.black.opacity(0.5))
+                        .foregroundStyle(mode == item ? WorkspaceColors.primaryInk : WorkspaceColors.textSecondary)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
                         .background(
-                            Capsule(style: .continuous)
-                                .fill(mode == item ? Color.blue.opacity(0.14) : Color.white.opacity(0.7))
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(mode == item ? WorkspaceColors.primaryInk.opacity(0.12) : WorkspaceColors.paperCanvas.opacity(0.36))
                         )
                 }
                 .buttonStyle(.plain)
@@ -154,14 +154,14 @@ struct NoteOutlineFloatingPanel: View {
             Button(action: onCycleState) {
                 Image(systemName: "arrow.up.left.and.arrow.down.right")
                     .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(Color.black.opacity(0.62))
+                    .foregroundStyle(WorkspaceColors.textSecondary)
                     .frame(width: 32, height: 32)
-                    .background(Circle().fill(Color.white.opacity(0.76)))
+                    .background(.regularMaterial, in: Circle())
             }
             .buttonStyle(.plain)
         }
         .padding(16)
-        .frame(width: 220)
+        .frame(width: 190)
         .background(panelBackground)
     }
 
@@ -182,12 +182,9 @@ struct NoteOutlineFloatingPanel: View {
 
     private var panelBackground: some View {
         RoundedRectangle(cornerRadius: 24, style: .continuous)
-            .fill(Color.white.opacity(0.74))
-            .overlay(
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .stroke(Color.white.opacity(0.92), lineWidth: 1)
-            )
-            .shadow(color: Color.black.opacity(0.06), radius: 18, y: 8)
+            .fill(WorkspaceColors.paperCanvas.opacity(0.18))
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .shadow(color: WorkspaceColors.paperShadow, radius: 32, x: 0, y: 8)
     }
 }
 
@@ -230,7 +227,11 @@ private struct WorkspaceMindMapPreview: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(Color.white.opacity(0.58))
+                .fill(WorkspaceColors.paperCanvas.opacity(0.24))
+                .background(
+                    .regularMaterial,
+                    in: RoundedRectangle(cornerRadius: 20, style: .continuous)
+                )
         )
     }
 
@@ -255,11 +256,7 @@ private struct WorkspaceMindMapPreview: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(tint.opacity(isPrimary ? 0.14 : 0.08))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(tint.opacity(isPrimary ? 0.24 : 0.14), lineWidth: 1)
-                    )
+                    .fill(tint.opacity(isPrimary ? 0.16 : 0.09))
             )
         }
         .buttonStyle(.plain)

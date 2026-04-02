@@ -89,6 +89,11 @@
 		B00000000000000000000050 /* NotesListPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000050 /* NotesListPane.swift */; };
 		B00000000000000000000051 /* NoteListRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000051 /* NoteListRow.swift */; };
 		B00000000000000000000052 /* NoteDetailPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000052 /* NoteDetailPane.swift */; };
+		B00000000000000000000053 /* WorkspaceDesignTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000053 /* WorkspaceDesignTokens.swift */; };
+		B00000000000000000000054 /* ArchivistTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000054 /* ArchivistTokens.swift */; };
+		B00000000000000000000055 /* ArchivistWorkspaceViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000055 /* ArchivistWorkspaceViewModel.swift */; };
+		B00000000000000000000056 /* ArchivistWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000056 /* ArchivistWorkspaceView.swift */; };
+		B00000000000000000000057 /* EditorialPaperCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000057 /* EditorialPaperCanvas.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -175,6 +180,11 @@
 		C00000000000000000000050 /* NotesListPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotesListPane.swift; sourceTree = "<group>"; };
 		C00000000000000000000051 /* NoteListRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteListRow.swift; sourceTree = "<group>"; };
 		C00000000000000000000052 /* NoteDetailPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteDetailPane.swift; sourceTree = "<group>"; };
+		C00000000000000000000053 /* WorkspaceDesignTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceDesignTokens.swift; sourceTree = "<group>"; };
+		C00000000000000000000054 /* ArchivistTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchivistTokens.swift; sourceTree = "<group>"; };
+		C00000000000000000000055 /* ArchivistWorkspaceViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchivistWorkspaceViewModel.swift; sourceTree = "<group>"; };
+		C00000000000000000000056 /* ArchivistWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchivistWorkspaceView.swift; sourceTree = "<group>"; };
+		C00000000000000000000057 /* EditorialPaperCanvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorialPaperCanvas.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -232,6 +242,7 @@
 				D00000000000000000000006 /* ViewModels */,
 				D00000000000000000000007 /* Views */,
 				D00000000000000000000008 /* Data */,
+				D00000000000000000000011 /* DesignSystem */,
 				D00000000000000000000009 /* Utilities */,
 			);
 			path = HuiLu;
@@ -287,6 +298,7 @@
 			isa = PBXGroup;
 			children = (
 				C00000000000000000000010 /* AppViewModel.swift */,
+				C00000000000000000000055 /* ArchivistWorkspaceViewModel.swift */,
 				C0000000000000000000002D /* ConceptSummaryItem.swift */,
 				C00000000000000000000039 /* InkAssistViewModel.swift */,
 				C0000000000000000000004E /* NoteDetailViewModel.swift */,
@@ -321,6 +333,7 @@
 				D00000000000000000000010 /* Notes */,
 				D0000000000000000000000D /* Records */,
 				D0000000000000000000000E /* Settings */,
+				D00000000000000000000012 /* Workspace */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -337,6 +350,24 @@
 			children = (
 			);
 			path = Utilities;
+			sourceTree = "<group>";
+		};
+		D00000000000000000000011 /* DesignSystem */ = {
+			isa = PBXGroup;
+			children = (
+				C00000000000000000000054 /* ArchivistTokens.swift */,
+				C00000000000000000000053 /* WorkspaceDesignTokens.swift */,
+			);
+			path = DesignSystem;
+			sourceTree = "<group>";
+		};
+		D00000000000000000000012 /* Workspace */ = {
+			isa = PBXGroup;
+			children = (
+				C00000000000000000000056 /* ArchivistWorkspaceView.swift */,
+				C00000000000000000000057 /* EditorialPaperCanvas.swift */,
+			);
+			path = Workspace;
 			sourceTree = "<group>";
 		};
 		D0000000000000000000000A /* Cards */ = {
@@ -566,6 +597,11 @@
 				B0000000000000000000003D /* WorkspaceTopBar.swift in Sources */,
 				B00000000000000000000029 /* KnowledgePointDetailView.swift in Sources */,
 				B00000000000000000000022 /* AppSettingsSheet.swift in Sources */,
+				B00000000000000000000053 /* WorkspaceDesignTokens.swift in Sources */,
+				B00000000000000000000054 /* ArchivistTokens.swift in Sources */,
+				B00000000000000000000055 /* ArchivistWorkspaceViewModel.swift in Sources */,
+				B00000000000000000000056 /* ArchivistWorkspaceView.swift in Sources */,
+				B00000000000000000000057 /* EditorialPaperCanvas.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

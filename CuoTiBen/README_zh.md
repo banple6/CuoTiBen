@@ -1,6 +1,22 @@
 # 慧录 / CuoTiBen 开发记录
 
-截至 `2026-04-01`，这个项目已经从最初的 SwiftUI 原型，推进到了「英语资料导入 -> 结构化理解 -> 原始 PDF 对齐阅读 -> 句子讲解 -> 单词讲解 -> 复盘工作台 -> 完整笔记编辑 -> iPad 双栏笔记中心 -> 档案台 / 纸张隐喻式笔记工作台 -> Obsidian-lite 傻瓜化联动 -> 性能优化」的可运行版本。本文档用于记录当前实际开发进度、项目结构、运行方式和最近迭代日志。
+截至 `2026-04-02`，这个项目已经从最初的 SwiftUI 原型推进到了一个可运行的英语学习工作台，主链路包括：
+
+- 英语资料导入、OCR、结构化理解与大纲树
+- 原始 PDF / 阅读版 PDF 双模式阅读
+- 句子讲解、节点详情、单词讲解
+- iPhone / iPad 复盘工作台
+- 完整笔记编辑、工作台与 Obsidian-lite 式自动关联
+- `Digital Archivist` 风格的 iPad 学术工作区
+- `LearningRecordContext` 与 PDF 高亮的性能优化
+
+当前主界面正在继续向统一的“纸张隐喻 + 档案工作台 + 学术阅读台”设计语言收敛：
+
+- 首页正从玻璃卡片过渡到桌面 / 便签式 dashboard
+- 知识库正过渡到文件夹 / 练习册式资料柜
+- 笔记工作台已完成一轮 `Digital Archivist` 重构，并在本轮进一步改成 **paper-first academic workspace**
+
+本文档用于记录当前实际开发进度、项目结构、运行方式和最近迭代日志。
 
 ## 当前状态
 
@@ -29,7 +45,7 @@
 - 当前主界面正在向统一的“纸张隐喻 + 档案工作台 + 学术阅读台”设计语言收敛：
   - 首页正从玻璃卡片过渡到桌面/便签式 dashboard
   - 知识库正过渡到文件夹/练习册式资料柜
-  - 笔记工作台已完成一轮 `Digital Archivist` 风格重构
+  - 笔记工作台已完成一轮 `Digital Archivist` 风格重构，并已修复相关设计系统编译问题
 - 关键性能热点已做过一轮缓存与重绘优化：
   - `LearningRecordContext` 结果级缓存
   - ranked 中间结果缓存
@@ -221,6 +237,148 @@
   - iPad 上采用更接近学术档案台的顶部工具栏、左侧资料导航、中间大纸页、右侧上下文分析浮栏
   - 纸页内已加入纹理、贴纸、引文焦点区与更明显的 serif/sans 层级
   - 默认隐藏结构树浮窗，把主视觉空间优先让给笔记编辑
+  - 已建立 `desk -> paper -> floating UI` 的三层工作台结构
+  - 顶部工具层和右侧浮窗已切换为 SwiftUI `Material` 悬浮面板
+  - 知识点标签已改成纸胶带 `Washi` 风格
+  - 完整笔记页的分析区已改为层叠便利贴式分析卡片
+
+### 🎨 Digital Archivist 学术工作区 (v1.0.0 - 2026-04-01)
+
+**设计理念**: "The screen should feel like a calm academic desk, not a dark dashboard."
+
+#### 核心特性
+- ✅ **设计 Token 系统**: 完整的颜色、字体、间距、效果定义 (`ArchivistTokens.swift`)
+- ✅ **物理隐喻**: 纸张画布、和纸胶带、桌面背景、手写注释
+- ✅ **不对称布局**: iPad 58%/42% 黄金比例，创造动态平衡
+- ✅ ** tonal layering**: 使用微妙的色调变化而非硬阴影构建层次
+- ✅ **Serif + Sans 配对**: Noto Serif (标题) + Inter (UI/正文)
+- ✅ **温暖配色**: 奶油色桌面 (#fbf9f4)、纯白纸张 (#ffffff)、木炭黑文字 (#1b1c19)
+
+#### 新增组件库 (20+ 个)
+**Shell 组件** (`ArchivistWorkspaceComponents.swift`):
+- `SegmentedWritingToolbar` - GoodNotes 风格工具托盘
+- `ArchivistTopToolbar` - 顶部工具栏（居中托盘设计）
+- `ArchivistSideRail` - 左侧极简导航栏（72pt）
+- `ArchivistFloatingNavigator` - 浮动结构树（240pt 玻璃面板）
+- `GlassPanel` - 毛玻璃容器（70% 透明度 + 模糊）
+- `ArchivistFooterStrip` - 底部进度条
+- `MasteryProgressBar` - 掌握度指示器
+
+**页面组件** (`EditorialPaperComponents.swift`):
+- `EditorialPaperCanvas` - 主画布（纯白 + 可选颗粒/横线）
+- `DocumentHeaderBlock` - 文档头部（和纸标签 + Noto Serif 标题）
+- `WashiChip` - 和纸胶带标签（撕边效果）
+- `ParagraphTextBlock` - 段落文本（支持内联高亮）
+- `ContextAnalysisCard` - 分析卡片（编辑注释风格）
+- `DecorativeNoteBlock` - 手写注释块
+- `FlowLayout` - 自适应流式布局
+
+#### 布局策略
+**iPad (Regular Size Class)**:
+```
+┌─────────────────────────────────────────┐
+│        [居中工具托盘]                    │
+├──────────┬──────────────────┬───────────┤
+│          │                  │           │
+│  左轨    │   纸张画布       │  浮动     │
+│  (72pt)  │   (58%, 900pt)   │  导航器   │
+│          │                  │  (240pt)  │
+│          │                  │           │
+├──────────┴──────────────────┴───────────┤
+│            [底部进度条]                   │
+└─────────────────────────────────────────┘
+```
+
+**iPhone (Compact Size Class)**:
+- 单列可滚动画布
+- 键盘工具栏
+- 简化导航
+
+#### 文件结构
+```
+Sources/HuiLu/
+├── DesignSystem/
+│   └── ArchivistTokens.swift              # 设计 Token 系统
+├── Views/
+│   ├── Workspace/
+│   │   ├── ArchivistWorkspaceView.swift   # 主工作区视图
+│   │   └── ArchivistWorkspaceComponents.swift
+│   └── Paper/
+│       └── EditorialPaperComponents.swift
+└── ViewModels/
+    └── ArchivistWorkspaceViewModel.swift  # TODO
+```
+
+#### 配套文档 (4 份)
+1. **ARCHIVIST_FINAL_DELIVERY_SUMMARY.md** - 完整交付总结
+2. **ARCHIVIST_QUICK_REFERENCE.md** - 快速参考手册
+3. **ARCHIVIST_VS_MODERN_COMPARISON.md** - 新旧对比指南
+4. **ARCHIVIST_COMPONENT_HIERARCHY.md** - 组件层次结构
+5. **ARCHIVIST_DOCUMENTATION_INDEX.md** - 文档索引导航
+
+#### 实施进度
+**✅ Phase 1-4 完成** (2026-04-01):
+- [x] 设计 Token 系统
+- [x] Shell 组件库
+- [x] 页面组件库
+- [x] 主工作区视图
+- [x] 配套文档
+
+**⏳ Phase 5 待完成**:
+- [ ] ViewModel 数据绑定
+- [ ] PencilKit 集成
+- [ ] 交互增强（跳转、同步、折叠）
+- [ ] 性能优化
+
+#### 使用方法
+```swift
+// 在新窗口打开
+ArchivistWorkspaceView()
+  .environmentObject(AppViewModel())
+
+// 或在路由中使用
+case .archivistWorkspace(let document):
+  ArchivistWorkspaceView(document: document)
+    .environmentObject(viewModel)
+```
+
+#### 设计约束（硬规则）
+❌ **禁止事项**:
+- 不使用粗边框（使用 15% 透明度 tonal 分隔线）
+- 不使用仪表板美学（使用学术书桌隐喻）
+- 不使用等宽三列（使用 58%/42% 不对称）
+- 不使用深色主题（使用暖奶油背景）
+- 不使用 Material 风格卡片（使用编辑注释风格）
+- 不使用纯黑色文字（使用木炭黑 #1b1c19）
+- 不使用重型光晕（使用 6% 透明度环境阴影）
+
+✅ **推荐做法**:
+- 始终使用 Token（不硬编码值）
+- 保持不对称（避免对称布局）
+- 留白优先（宁可过大不要拥挤）
+- 测试真机（在 iPad 上验证效果）
+- 渐进增强（先基础后特效）
+
+#### 与其他设计系统的关系
+| 场景 | 推荐系统 |
+|------|---------|
+| 笔记工作区 | **Archivist** ✅ |
+| 文档详情查看 | **Archivist** ✅ |
+| 精读/分析模式 | **Archivist** ✅ |
+| 首页仪表盘 | Modern |
+| 资料库列表 | Modern |
+| 复习会话 | Modern |
+| 设置页面 | Modern |
+
+**注意**: 避免在同一屏幕混用 Archivist 和 Modern 系统。
+
+#### 快速开始
+1. 阅读 [`ARCHIVIST_FINAL_DELIVERY_SUMMARY.md`](./ARCHIVIST_FINAL_DELIVERY_SUMMARY.md) 了解全貌
+2. 查阅 [`ARCHIVIST_QUICK_REFERENCE.md`](./ARCHIVIST_QUICK_REFERENCE.md) 获取速查表
+3. 参考 [`ARCHIVIST_VS_MODERN_COMPARISON.md`](./ARCHIVIST_VS_MODERN_COMPARISON.md) 理解差异
+4. 运行 Xcode Preview 实时查看效果
+
+---
 - 当前完整笔记页能力：
   - 标题可编辑
   - `quote / text / ink` 三种 block 混合显示
@@ -271,6 +429,7 @@
 - `NotesHomeView` 已避免在每次输入和切换时重建整套展示模型。
 - `NoteDetailPane` 已把关联上下文、本地知识点和来源文档做本地缓存，减少输入时重复解析。
 - `NoteWorkspaceViewModel` 已缓存候选知识点和结构树上下文，避免每次 `body` 重建。
+- `WorkspaceDesignTokens`、`NoteWorkspaceView`、`LinkedKnowledgePointChipsView`、`NoteDetailPane` 的设计系统编译问题已收敛并重新通过整包构建。
 - 原始 PDF 阅读器已把高亮刷新改成细粒度 diff：
   - 同页切句子时只更新变化的 annotation
   - 词级高亮与句级高亮切换时不再整页删光重画
@@ -550,6 +709,24 @@ rm -rf /tmp/CuoTiBen*
 
 ## 最近开发日志
 
+### 2026-04-02
+
+- 完成 iPad 笔记工作台的第三轮空间重排，明确停止沿用旧的 dark dashboard 结构：
+  - `NoteWorkspaceView` 改成真正的 `desk -> paper -> floating UI` 三层关系
+  - 中央白色纸页成为绝对视觉主角
+  - 移除原来会与纸页竞争注意力的大型右侧上下文面板
+  - 将右侧结构导航收成更窄的浮动 `Navigator`
+  - 将顶部栏压缩成细浮动条，而不是大内容容器
+  - iPad 编辑态直接隐藏 tab bar，减少 chrome 干扰
+- 完成 `NoteCanvasView` 的纸页本体细化：
+  - 进一步拉开装订侧边距，强化纸张主视觉
+  - 标题区改成更接近学术编辑稿纸的 serif 标题 + 轻元数据结构
+  - 元数据 chips 改为轻微旋转的胶带感标签
+  - 空状态与新增块操作条改成更轻的浮动纸面动作，不再使用硬边框样式
+  - 降低纸面网格与边线存在感，避免页面读起来像表单或后台卡片
+- 完成命令行编译验证：
+  - `xcodebuild ... build` 结果为 `BUILD SUCCEEDED`
+
 ### 2026-04-01
 
 - 完成一轮 `Digital Archivist` 方向的笔记工作台重构：
@@ -560,6 +737,13 @@ rm -rf /tmp/CuoTiBen*
 - 完成 `NoteCanvasView` 纸页视觉重构：
   - 增加更宽的纸张边距、纸胶带贴纸、纹理、引文焦点区与分隔线
   - 强化正文、引用、来源标签之间的层级关系
+- 完成第二轮 `Digital Archivist` 细化与设计系统修复：
+  - `WorkspaceDesignTokens` 切换到暖灰书桌 / 白纸 / 墨水蓝的物理桌面配色
+  - `NoteWorkspaceView` 建立桌面、纸张、悬浮 UI 三层结构
+  - `NoteOutlineFloatingPanel` 与工作台顶部浮层统一为 `Material` 风格
+  - `LinkedKnowledgePointChipsView` 改为纸胶带式 `Washi` 标签
+  - `NoteDetailPane` 分析块改为层叠便利贴式面板
+  - 修复 `WorkspaceDesignTokens` 与 `NoteDetailPane` 一批 SwiftUI 编译错误，并重新验证 `BUILD SUCCEEDED`
 - 补充 `DesignSystem` 与增强版页面骨架：
   - `WorkspaceComponents / WorkspaceDesignTokens`
   - `ModernHomeView / ModernLibraryView / ModernReviewView`
@@ -713,4 +897,4 @@ rm -rf /tmp/CuoTiBen*
 
 ---
 
-文档更新时间：`2026-04-01`
+文档更新时间：`2026-04-02`

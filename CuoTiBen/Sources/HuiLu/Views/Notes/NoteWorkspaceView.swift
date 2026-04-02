@@ -48,6 +48,7 @@ struct NoteWorkspaceView: View {
                     .environmentObject(appViewModel)
             }
         }
+        .toolbar(supportsWorkspace ? .hidden : .automatic, for: .tabBar)
         .onAppear {
             workspaceViewModel.reload(using: appViewModel)
             syncRecentInkColorsFromStorage()
@@ -61,10 +62,10 @@ struct NoteWorkspaceView: View {
     }
 
     private var workspaceBody: some View {
-        ZStack {
+        ZStack(alignment: .top) {
             WorkspaceDeskBackdrop(appearance: workspaceAppearance)
 
-            HStack(spacing: 22) {
+            HStack(alignment: .top, spacing: 22) {
                 WorkspaceSidebar(
                     selection: $sidebarSelection,
                     panelState: $workspaceViewModel.panelState,
@@ -75,8 +76,9 @@ struct NoteWorkspaceView: View {
                         workspaceViewModel.addTextBlock()
                     }
                 )
+                .padding(.top, 74)
 
-                VStack(spacing: 12) {
+                VStack(spacing: 18) {
                     WorkspaceHeaderBar(
                         title: Binding(
                             get: { workspaceViewModel.title },
@@ -94,6 +96,8 @@ struct NoteWorkspaceView: View {
                             openSource(workspaceViewModel.sourceAnchor)
                         }
                     )
+                    .frame(maxWidth: 760)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
 
                     WorkspacePaperSurface(appearance: workspaceAppearance) {
                         NoteCanvasView(
@@ -143,8 +147,9 @@ struct NoteWorkspaceView: View {
                                 workspaceViewModel.clearHighlight()
                             }
                         )
-                        .padding(.top, 58)
+                        .padding(.top, 34)
                     }
+                    .frame(maxWidth: 1040, maxHeight: .infinity, alignment: .top)
                     .overlay(alignment: .top) {
                         WorkspaceFloatingToolPalette(
                             activeTool: $activeTool,
@@ -171,58 +176,34 @@ struct NoteWorkspaceView: View {
                             },
                             onGenerateCard: generateCard
                         )
-                        .padding(.top, 18)
+                        .padding(.top, -28)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-
-                if workspaceViewModel.panelState != .hidden {
-                    WorkspaceContextSidebar(
-                        selection: sidebarSelection,
-                        panelState: $workspaceViewModel.panelState,
-                        panelMode: $workspaceViewModel.panelMode,
-                        appearance: workspaceAppearance,
-                        sourceAnchor: workspaceViewModel.sourceAnchor,
-                        sourceHint: workspaceViewModel.sourceHint,
-                        outlineContext: workspaceViewModel.outlineContext,
-                        linkedKnowledgePoints: workspaceViewModel.linkedKnowledgePoints,
-                        candidateKnowledgePoints: workspaceViewModel.candidateKnowledgePoints,
-                        currentQuoteBlock: currentQuoteBlock,
-                        currentTextBlock: currentTextBlock,
-                        onSelectNode: { nodeID in
-                            withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
-                                workspaceViewModel.focus(on: nodeID)
-                            }
-                        },
-                        onSelectKnowledgePoint: { point in
-                            activeKnowledgePoint = point
-                        },
-                        onOpenSource: { anchor in
-                            openSource(anchor)
-                        },
-                        onOpenKnowledgePointSource: { point in
-                            openSource(for: point)
-                        },
-                        onGenerateCard: generateCard
-                    )
-                    .frame(width: contextSidebarWidth)
-                    .frame(maxHeight: .infinity)
-                    .padding(.top, 34)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
-                }
             }
-            .padding(.horizontal, 26)
+            .padding(.leading, 26)
+            .padding(.trailing, 34)
             .padding(.top, 18)
-            .padding(.bottom, 40)
+            .padding(.bottom, 24)
 
-            WorkspaceFooterStrip(
-                appearance: workspaceAppearance,
-                sourceTitle: workspaceViewModel.sourceAnchor.sourceTitle,
-                saveStatus: workspaceViewModel.saveStatusText
-            )
-            .padding(.horizontal, 30)
-            .padding(.bottom, 10)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            if workspaceViewModel.panelState != .hidden {
+                NoteOutlineFloatingPanel(
+                    state: workspaceViewModel.panelState,
+                    mode: $workspaceViewModel.panelMode,
+                    sourceTitle: workspaceViewModel.sourceAnchor.sourceTitle,
+                    context: workspaceViewModel.outlineContext,
+                    onSelectNode: { nodeID in
+                        withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+                            workspaceViewModel.focus(on: nodeID)
+                        }
+                    },
+                    onCycleState: togglePanelVisibility
+                )
+                .padding(.top, 92)
+                .padding(.trailing, 24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
         }
         .navigationBarHidden(true)
         .interactiveDismissDisabled(workspaceViewModel.isDirty)
@@ -399,10 +380,10 @@ private struct WorkspaceSidebar: View {
     let onQuickAdd: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 14) {
                 Text("Digital Archivist")
-                    .font(.system(size: 24, weight: .medium, design: .serif))
+                    .font(.system(size: 21, weight: .medium, design: .serif))
                     .italic()
                     .foregroundStyle(appearance.workspaceAccent)
 
@@ -411,8 +392,8 @@ private struct WorkspaceSidebar: View {
                         .fill(
                             LinearGradient(
                                 colors: [
-                                    appearance.workspaceSelectedFill,
-                                    Color.white.opacity(0.96)
+                                    WorkspaceColors.paperCanvas.opacity(0.82),
+                                    appearance.workspaceSelectedFill.opacity(0.72)
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
@@ -426,13 +407,13 @@ private struct WorkspaceSidebar: View {
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .stroke(appearance.workspacePanelStroke, lineWidth: 1)
+                                .fill(.clear)
                         )
 
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Research Library")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(appearance.workspaceText)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(appearance.workspaceText)
                         Text(sourceTitle)
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(appearance.workspaceMutedText)
@@ -447,7 +428,7 @@ private struct WorkspaceSidebar: View {
                     Button {
                         withAnimation(.spring(response: 0.24, dampingFraction: 0.88)) {
                             selection = item
-                            if panelState == .hidden {
+                            if item == .structure, panelState == .hidden {
                                 panelState = .expanded
                             }
                         }
@@ -463,15 +444,11 @@ private struct WorkspaceSidebar: View {
                             Spacer(minLength: 0)
                         }
                         .foregroundStyle(selection == item ? appearance.workspaceAccent : appearance.workspaceMutedText)
-                        .padding(.horizontal, 16)
-                        .frame(height: 56)
+                        .padding(.horizontal, 14)
+                        .frame(height: 48)
                         .background(
                             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(selection == item ? appearance.workspaceSelectedFill : Color.clear)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                        .stroke(selection == item ? appearance.workspacePanelStroke : Color.clear, lineWidth: 1)
-                                )
+                                .fill(selection == item ? appearance.workspaceSelectedFill.opacity(0.78) : WorkspaceColors.paperCanvas.opacity(0.28))
                         )
                     }
                     .buttonStyle(.plain)
@@ -482,14 +459,14 @@ private struct WorkspaceSidebar: View {
                 HStack {
                     Spacer(minLength: 0)
                     Text("New Document")
-                        .font(.system(size: 17, weight: .semibold))
+                        .font(.system(size: 15, weight: .semibold))
                     Spacer(minLength: 0)
                 }
                 .foregroundStyle(Color.white)
-                .frame(height: 50)
+                .frame(height: 44)
                 .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(appearance.workspaceAccent)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(appearance.workspaceAccent.opacity(0.92))
                 )
             }
             .buttonStyle(.plain)
@@ -504,7 +481,7 @@ private struct WorkspaceSidebar: View {
                 } label: {
                     HStack(spacing: 10) {
                         Image(systemName: panelState == .hidden ? "sidebar.right" : "sidebar.left")
-                        Text(panelState == .hidden ? "Show Context" : "Hide Context")
+                        Text(panelState == .hidden ? "Show Navigator" : "Hide Navigator")
                     }
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(appearance.workspaceMutedText)
@@ -516,18 +493,18 @@ private struct WorkspaceSidebar: View {
                     .foregroundStyle(appearance.workspaceMutedText.opacity(0.78))
             }
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 22)
-        .frame(width: 236, alignment: .topLeading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 14)
+        .frame(width: 174, alignment: .topLeading)
         .background(
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .fill(appearance.workspaceSidebarFill)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 28, style: .continuous)
-                        .stroke(appearance.workspacePanelStroke, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(WorkspaceColors.paperCanvas.opacity(0.22))
+                .background(
+                    .ultraThinMaterial,
+                    in: RoundedRectangle(cornerRadius: 24, style: .continuous)
                 )
         )
-        .shadow(color: Color.black.opacity(appearance == .night ? 0.14 : 0.05), radius: 20, y: 10)
+        .shadow(color: WorkspaceColors.paperShadow, radius: 20, x: 0, y: 8)
     }
 }
 
@@ -549,85 +526,60 @@ private struct WorkspaceHeaderBar: View {
                         Image(systemName: "chevron.left")
                         Text("Back")
                     }
-                    .font(.system(size: 16, weight: .medium))
+                    .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(appearance.workspaceText.opacity(0.82))
                 }
                 .buttonStyle(.plain)
-
-                Text("Digital Archivist")
-                    .font(.system(size: 24, weight: .medium, design: .serif))
-                    .italic()
-                    .foregroundStyle(appearance.workspaceAccent)
-
-                HStack(spacing: 8) {
-                    iconButton("arrow.uturn.backward", action: {})
-                    iconButton("arrow.uturn.forward", action: {})
-                }
             }
 
             Spacer(minLength: 0)
 
-            VStack(alignment: .center, spacing: 2) {
+            VStack(alignment: .center, spacing: 1) {
                 TextField("Untitled Note", text: $title)
-                    .font(.system(size: 20, weight: .semibold, design: .serif))
+                    .font(.system(size: 16, weight: .semibold, design: .serif))
                     .foregroundStyle(appearance.workspaceText)
                     .multilineTextAlignment(.center)
                     .textInputAutocapitalization(.never)
+                    .lineLimit(1)
 
                 Text(sourceHint.isEmpty ? sourceTitle : sourceHint)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(appearance.workspaceMutedText)
                     .lineLimit(1)
             }
-            .frame(maxWidth: 460)
+            .frame(maxWidth: 360)
 
             Spacer(minLength: 0)
 
-            HStack(spacing: 12) {
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text(sourceTitle)
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(appearance.workspaceAccent)
-                        .lineLimit(1)
-                    Text(sourceHint.uppercased())
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(appearance.workspaceMutedText.opacity(0.85))
-                        .lineLimit(1)
-                }
-                .frame(maxWidth: 160, alignment: .trailing)
-
+            HStack(spacing: 10) {
                 Text(saveStatus.uppercased())
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(saveStatus == "已保存" ? Color.green.opacity(0.92) : Color.orange.opacity(0.88))
 
                 iconButton("doc.text", action: onOpenSource)
                 iconButton("square.and.arrow.up", action: onSave)
-                iconButton("ellipsis", action: onSave)
             }
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 14)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
         .background(
-            RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .fill(appearance.workspaceToolbarFill)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 26, style: .continuous)
-                        .stroke(appearance.workspacePanelStroke, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(WorkspaceColors.paperCanvas.opacity(0.22))
+                .background(
+                    .ultraThinMaterial,
+                    in: RoundedRectangle(cornerRadius: 18, style: .continuous)
                 )
         )
-        .shadow(color: Color.black.opacity(appearance == .night ? 0.12 : 0.04), radius: 18, y: 10)
+        .shadow(color: WorkspaceColors.paperShadow, radius: 20, x: 0, y: 8)
     }
 
     private func iconButton(_ icon: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(appearance.workspaceText.opacity(0.78))
-                .frame(width: 34, height: 34)
-                .background(
-                    Circle()
-                        .fill(appearance.workspaceBadgeFill)
-                )
+                .frame(width: 30, height: 30)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
         .buttonStyle(.plain)
     }
@@ -643,26 +595,35 @@ private struct WorkspacePaperSurface<Content: View>: View {
                 .fill(appearance.workspaceMainSurface)
                 .overlay {
                     NotebookGrid(spacing: 34)
-                        .opacity(appearance == .night ? 0.05 : 0.07)
+                        .opacity(appearance == .night ? 0.03 : 0.055)
                         .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
                 }
                 .overlay(alignment: .leading) {
-                    Rectangle()
-                        .fill(appearance.workspaceAccent.opacity(0.14))
-                        .frame(width: 4)
-                        .padding(.vertical, 24)
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color.black.opacity(0.045),
+                                    Color.black.opacity(0.012),
+                                    .clear
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: 42)
+                        .padding(.vertical, 18)
                         .padding(.leading, 12)
                 }
-                .overlay(
-                    RoundedRectangle(cornerRadius: 30, style: .continuous)
-                        .stroke(appearance.workspacePanelStroke, lineWidth: 1)
-                )
 
             content()
-                .padding(12)
+                .padding(.top, 18)
+                .padding(.bottom, 20)
+                .padding(.leading, 40)
+                .padding(.trailing, 28)
         }
         .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
-        .shadow(color: Color.black.opacity(appearance == .night ? 0.12 : 0.045), radius: 24, y: 12)
+        .shadow(color: WorkspaceColors.paperShadow, radius: 32, x: 0, y: 8)
     }
 }
 
@@ -690,9 +651,6 @@ private struct WorkspaceFloatingToolPalette: View {
                 compactToolButton(kind: .eraser, title: "ERASER")
             }
 
-            Divider()
-                .frame(height: 28)
-
             HStack(spacing: 10) {
                 ForEach(recentColorChoices) { choice in
                     Button {
@@ -711,9 +669,6 @@ private struct WorkspaceFloatingToolPalette: View {
                     .buttonStyle(.plain)
                 }
             }
-
-            Divider()
-                .frame(height: 28)
 
             Menu {
                 Button("添加引用", action: onAddQuote)
@@ -747,13 +702,13 @@ private struct WorkspaceFloatingToolPalette: View {
         .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(appearance.workspaceToolTrayFill)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(appearance.workspacePanelStroke, lineWidth: 0.8)
+                .fill(WorkspaceColors.paperCanvas.opacity(0.26))
+                .background(
+                    .regularMaterial,
+                    in: RoundedRectangle(cornerRadius: 18, style: .continuous)
                 )
         )
-        .shadow(color: Color.black.opacity(appearance == .night ? 0.14 : 0.05), radius: 20, y: 8)
+        .shadow(color: WorkspaceColors.paperShadow, radius: 24, x: 0, y: 8)
     }
 
     private func compactToolButton(kind: NoteInkToolKind, title: String) -> some View {
@@ -828,8 +783,12 @@ private struct WorkspaceContextSidebar: View {
         .background(
             RoundedRectangle(cornerRadius: 30, style: .continuous)
                 .fill(appearance.workspaceContextFill)
+                .background(
+                    .ultraThinMaterial,
+                    in: RoundedRectangle(cornerRadius: 30, style: .continuous)
+                )
         )
-        .shadow(color: Color.black.opacity(appearance == .night ? 0.12 : 0.04), radius: 18, y: 10)
+        .shadow(color: WorkspaceColors.paperShadow, radius: 32, x: 0, y: 8)
     }
 
     private var headerBar: some View {
@@ -850,7 +809,7 @@ private struct WorkspaceContextSidebar: View {
                     .font(.system(size: 12, weight: .bold))
                     .foregroundStyle(appearance.workspaceMutedText)
                     .frame(width: 30, height: 30)
-                    .background(Circle().fill(appearance.workspaceBadgeFill))
+                    .background(.regularMaterial, in: Circle())
             }
             .buttonStyle(.plain)
 
@@ -863,7 +822,7 @@ private struct WorkspaceContextSidebar: View {
                     .font(.system(size: 12, weight: .bold))
                     .foregroundStyle(appearance.workspaceMutedText)
                     .frame(width: 30, height: 30)
-                    .background(Circle().fill(appearance.workspaceBadgeFill))
+                    .background(.regularMaterial, in: Circle())
             }
             .buttonStyle(.plain)
         }
@@ -1131,24 +1090,29 @@ private struct WorkspaceDeskBackdrop: View {
     var body: some View {
         ZStack {
             LinearGradient(
-                colors: appearance.deskGradient,
+                colors: [
+                    WorkspaceColors.deskLift,
+                    WorkspaceColors.deskBackground,
+                    WorkspaceColors.deskLift.opacity(0.96)
+                ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
             .ignoresSafeArea()
 
             NotebookGrid(spacing: 40)
-                .opacity(appearance == .night ? 0.04 : 0.08)
+                .opacity(appearance == .night ? 0.02 : 0.028)
                 .ignoresSafeArea()
 
-            LinearGradient(
+            RadialGradient(
                 colors: [
-                    Color.white.opacity(appearance == .night ? 0.02 : 0.22),
-                    .clear,
-                    AppPalette.paperTape.opacity(appearance == .night ? 0.03 : 0.05)
+                    Color.white.opacity(appearance == .night ? 0.03 : 0.36),
+                    Color.white.opacity(0.08),
+                    .clear
                 ],
-                startPoint: .top,
-                endPoint: .bottom
+                center: .center,
+                startRadius: 120,
+                endRadius: 860
             )
             .ignoresSafeArea()
         }
@@ -1183,11 +1147,8 @@ private struct WorkspaceFooterStrip: View {
         .padding(.vertical, 9)
         .background(
             Capsule(style: .continuous)
-                .fill(Color.white.opacity(appearance == .night ? 0.06 : 0.72))
-                .overlay(
-                    Capsule(style: .continuous)
-                        .stroke(appearance.workspacePanelStroke, lineWidth: 1)
-                )
+                .fill(appearance.workspaceToolTrayFill.opacity(0.82))
+                .background(.regularMaterial, in: Capsule(style: .continuous))
         )
     }
 }
@@ -1196,29 +1157,29 @@ private extension NoteWorkspaceAppearance {
     var workspaceMainSurface: Color {
         switch self {
         case .paper:
-            return Color.white.opacity(0.58)
+            return WorkspaceColors.paperCanvas
         case .night:
             return Color.white.opacity(0.03)
         case .eyeCare:
-            return Color.white.opacity(0.42)
+            return WorkspaceColors.paperCanvas.opacity(0.92)
         }
     }
 
     var workspacePanelFill: Color {
         switch self {
         case .paper:
-            return Color.white.opacity(0.84)
+            return WorkspaceColors.materialTint.opacity(0.5)
         case .night:
             return Color.white.opacity(0.07)
         case .eyeCare:
-            return Color.white.opacity(0.64)
+            return WorkspaceColors.materialTint.opacity(0.58)
         }
     }
 
     var workspaceSidebarFill: Color {
         switch self {
         case .paper:
-            return Color(red: 239 / 255, green: 237 / 255, blue: 231 / 255)
+            return WorkspaceColors.deskLift
         case .night:
             return Color(red: 27 / 255, green: 31 / 255, blue: 40 / 255)
         case .eyeCare:
@@ -1229,51 +1190,51 @@ private extension NoteWorkspaceAppearance {
     var workspaceContextFill: Color {
         switch self {
         case .paper:
-            return Color(red: 244 / 255, green: 242 / 255, blue: 238 / 255).opacity(0.94)
+            return WorkspaceColors.materialTint.opacity(0.46)
         case .night:
             return Color(red: 30 / 255, green: 35 / 255, blue: 46 / 255).opacity(0.95)
         case .eyeCare:
-            return Color(red: 238 / 255, green: 242 / 255, blue: 231 / 255).opacity(0.95)
+            return WorkspaceColors.materialTint.opacity(0.5)
         }
     }
 
     var workspaceToolTrayFill: Color {
         switch self {
         case .paper:
-            return Color(red: 245 / 255, green: 243 / 255, blue: 237 / 255).opacity(0.94)
+            return WorkspaceColors.materialTint.opacity(0.58)
         case .night:
             return Color(red: 35 / 255, green: 40 / 255, blue: 54 / 255).opacity(0.96)
         case .eyeCare:
-            return Color(red: 241 / 255, green: 245 / 255, blue: 233 / 255).opacity(0.94)
+            return WorkspaceColors.materialTint.opacity(0.6)
         }
     }
 
     var workspaceToolbarFill: Color {
         switch self {
         case .paper:
-            return Color.white.opacity(0.88)
+            return WorkspaceColors.materialTint.opacity(0.56)
         case .night:
             return Color(red: 31 / 255, green: 36 / 255, blue: 48 / 255).opacity(0.94)
         case .eyeCare:
-            return Color(red: 243 / 255, green: 246 / 255, blue: 236 / 255).opacity(0.92)
+            return WorkspaceColors.materialTint.opacity(0.6)
         }
     }
 
     var workspacePanelStroke: Color {
         switch self {
         case .paper:
-            return AppPalette.paperLine.opacity(0.58)
+            return .clear
         case .night:
             return Color.white.opacity(0.10)
         case .eyeCare:
-            return Color.white.opacity(0.46)
+            return .clear
         }
     }
 
     var workspaceSelectedFill: Color {
         switch self {
         case .paper:
-            return AppPalette.primary.opacity(0.12)
+            return WorkspaceColors.primaryInk.opacity(0.1)
         case .night:
             return AppPalette.primary.opacity(0.18)
         case .eyeCare:
@@ -1284,7 +1245,7 @@ private extension NoteWorkspaceAppearance {
     var workspaceBadgeFill: Color {
         switch self {
         case .paper:
-            return Color.white.opacity(0.92)
+            return WorkspaceColors.paperCanvas.opacity(0.74)
         case .night:
             return Color.white.opacity(0.08)
         case .eyeCare:
@@ -1295,7 +1256,7 @@ private extension NoteWorkspaceAppearance {
     var workspaceAccent: Color {
         switch self {
         case .paper:
-            return AppPalette.primaryDeep
+            return WorkspaceColors.primaryInk
         case .night:
             return AppPalette.primary
         case .eyeCare:
@@ -1306,7 +1267,7 @@ private extension NoteWorkspaceAppearance {
     var workspaceText: Color {
         switch self {
         case .paper:
-            return AppPalette.paperInk
+            return WorkspaceColors.textPrimary
         case .night:
             return AppPalette.softText
         case .eyeCare:
@@ -1317,7 +1278,7 @@ private extension NoteWorkspaceAppearance {
     var workspaceMutedText: Color {
         switch self {
         case .paper:
-            return AppPalette.paperMuted
+            return WorkspaceColors.textSecondary
         case .night:
             return AppPalette.softMutedText
         case .eyeCare:
@@ -1329,9 +1290,9 @@ private extension NoteWorkspaceAppearance {
         switch self {
         case .paper:
             return [
-                Color(red: 244 / 255, green: 241 / 255, blue: 233 / 255),
-                Color(red: 248 / 255, green: 245 / 255, blue: 237 / 255),
-                Color(red: 242 / 255, green: 239 / 255, blue: 232 / 255)
+                WorkspaceColors.deskBackground,
+                WorkspaceColors.deskLift,
+                WorkspaceColors.deskBackground
             ]
         case .night:
             return [

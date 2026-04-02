@@ -29,9 +29,13 @@ struct LinkedKnowledgePointChipsView: View {
             Button {
                 onSelect(point)
             } label: {
-                    NotesMetaPill(text: point.title, tint: .blue)
-                }
-                .buttonStyle(.plain)
+                WashiKnowledgeChip(
+                    title: point.title,
+                    tint: AppPalette.paperTapeBlue.opacity(0.28),
+                    foreground: WorkspaceColors.primaryInk
+                )
+            }
+            .buttonStyle(.plain)
 
             if let onOpenSource, !point.sourceAnchors.isEmpty {
                 Button {
@@ -39,17 +43,26 @@ struct LinkedKnowledgePointChipsView: View {
                 } label: {
                     Image(systemName: "arrow.up.forward.square")
                         .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(Color.blue.opacity(0.86))
+                        .foregroundStyle(WorkspaceColors.primaryInk.opacity(0.86))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 8)
                         .background(
-                            Capsule(style: .continuous)
-                                .fill(Color.white.opacity(0.76))
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(AppPalette.paperCard.opacity(0.84))
+                                .rotationEffect(.degrees(stableRotation(for: point.id + "-source")))
                         )
                 }
                 .buttonStyle(.plain)
             }
         }
+    }
+
+    private func stableRotation(for key: String) -> Double {
+        let hash = key.unicodeScalars.reduce(0) { partial, scalar in
+            partial + Int(scalar.value)
+        }
+        let normalized = Double((hash % 5) - 2)
+        return normalized * 0.45
     }
 }
 
@@ -63,6 +76,39 @@ struct FlexibleChipFlow<Data: RandomAccessCollection, Content: View>: View where
                 content(item)
             }
         }
+    }
+}
+
+struct WashiKnowledgeChip: View {
+    let title: String
+    let tint: Color
+    let foreground: Color
+
+    private var angle: Double {
+        let hash = title.unicodeScalars.reduce(0) { partial, scalar in
+            partial + Int(scalar.value)
+        }
+        let normalized = Double((hash % 5) - 2)
+        return normalized * 0.45
+    }
+
+    var body: some View {
+        Text(title)
+            .font(.system(size: 13, weight: .semibold, design: .rounded))
+            .foregroundStyle(foreground.opacity(0.9))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(tint)
+                    .overlay {
+                        NotebookGrid(spacing: 9)
+                            .opacity(0.08)
+                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    }
+            )
+            .rotationEffect(.degrees(angle))
+            .shadow(color: WorkspaceColors.paperShadow, radius: 6, x: 0, y: 2)
     }
 }
 

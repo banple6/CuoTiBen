@@ -70,6 +70,29 @@ struct SourceDetailView: View {
 
     var body: some View {
         GeometryReader { proxy in
+            let usesArchivistWorkspace = proxy.size.width >= 960
+
+            if usesArchivistWorkspace {
+                if let structuredSource {
+                    ArchivistWorkspaceView(
+                        document: liveDocument,
+                        bundle: structuredSource,
+                        onClose: onClose
+                    )
+                    .environmentObject(viewModel)
+                } else {
+                    ZStack {
+                        AppBackground(style: .light)
+                            .ignoresSafeArea()
+
+                        ProgressView("正在整理资料工作台…")
+                            .font(.system(size: 16, weight: .medium, design: .serif))
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 18)
+                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    }
+                }
+            } else {
             let safeBottom = max(proxy.safeAreaInsets.bottom, 14)
             let usesPadChrome = proxy.size.width >= 820
             let panelWidth = usesPadChrome ? min(proxy.size.width - 72, 920) : proxy.size.width
@@ -147,6 +170,7 @@ struct SourceDetailView: View {
 
                     Spacer(minLength: 0)
                 }
+            }
             }
         }
         .ignoresSafeArea()

@@ -7,30 +7,50 @@ import SwiftUI
 // MARK: - Color Tokens
 
 enum WorkspaceColors {
+  // MARK: - Digital Archivist Core
+
+  /// 底层书桌垫
+  static let deskBackground = Color(red: 240 / 255, green: 238 / 255, blue: 233 / 255)
+
+  /// 书桌上更浅一层的暖灰底，用于局部过渡
+  static let deskLift = Color(red: 246 / 255, green: 244 / 255, blue: 239 / 255)
+
+  /// 主纸张
+  static let paperCanvas = Color.white
+
+  /// 主墨水蓝
+  static let primaryInk = Color(red: 0 / 255, green: 93 / 255, blue: 167 / 255)
+
+  /// 纸边阴影的暖灰
+  static let paperShadow = Color.black.opacity(0.04)
+
+  /// 悬浮材质的暖白 tint
+  static let materialTint = Color.white.opacity(0.72)
+
   // MARK: - Base Neutrals (低饱和蓝灰基调)
   
   /// 主背景：温和的浅蓝灰色
-  static let backgroundPrimary = Color(red: 0.965, green: 0.970, blue: 0.980)
+  static let backgroundPrimary = deskBackground
   
   /// 次要背景：略深的蓝灰，用于分区
-  static let backgroundSecondary = Color(red: 0.940, green: 0.945, blue: 0.960)
+  static let backgroundSecondary = deskLift
   
   /// 卡片背景：半透明白色，轻微蓝调
-  static let cardBackground = Color.white.opacity(0.92)
+  static let cardBackground = paperCanvas.opacity(0.94)
   
   /// 玻璃表面：轻度磨砂效果
-  static let glassSurface = Color.white.opacity(0.75)
+  static let glassSurface = materialTint
   
   // MARK: - Text Colors (文本层级)
   
   /// 主标题：深灰蓝，非纯黑
-  static let textPrimary = Color(red: 0.180, green: 0.200, blue: 0.240)
+  static let textPrimary = Color(red: 34 / 255, green: 33 / 255, blue: 29 / 255)
   
   /// 正文：中等灰蓝
-  static let textSecondary = Color(red: 0.320, green: 0.340, blue: 0.380)
+  static let textSecondary = Color(red: 92 / 255, green: 88 / 255, blue: 78 / 255)
   
   /// 辅助文字：浅灰蓝
-  static let textTertiary = Color(red: 0.480, green: 0.500, blue: 0.540)
+  static let textTertiary = Color(red: 129 / 255, green: 124 / 255, blue: 112 / 255)
   
   /// 占位文字：更浅的灰
   static let textPlaceholder = Color(red: 0.640, green: 0.660, blue: 0.700)
@@ -38,7 +58,7 @@ enum WorkspaceColors {
   // MARK: - Accent Colors (强调色 - 克制使用)
   
   /// 主强调色：克制的靛蓝色 (用于关键操作、重点标记)
-  static let accentIndigo = Color(red: 0.280, green: 0.360, blue: 0.620)
+  static let accentIndigo = primaryInk
   
   /// 次要强调：柔和的青色 (用于知识点、链接)
   static let accentTeal = Color(red: 0.220, green: 0.520, blue: 0.560)
@@ -83,13 +103,13 @@ enum WorkspaceColors {
   // MARK: - Shadow Colors (阴影色 - 多层柔和)
   
   /// 轻阴影：用于卡片悬浮
-  static let shadowLight = Color(red: 0.600, green: 0.640, blue: 0.700).opacity(0.12)
+  static let shadowLight = paperShadow
   
   /// 中阴影：用于悬浮面板
-  static let shadowMedium = Color(red: 0.600, green: 0.640, blue: 0.700).opacity(0.18)
+  static let shadowMedium = Color.black.opacity(0.055)
   
   /// 重阴影：用于模态层
-  static let shadowHeavy = Color(red: 0.600, green: 0.640, blue: 0.700).opacity(0.28)
+  static let shadowHeavy = Color.black.opacity(0.08)
   
   // MARK: - Dark Mode Support (深色模式 - 可选)
   
@@ -106,8 +126,8 @@ enum WorkspaceColors {
 enum WorkspaceTypography {
   // MARK: - Font Families
   
-  private static let primaryFont = Font.SystemFontType.rounded
-  private static let monoFont = Font.SystemFontType.monospaced
+  private static let primaryFont = Font.Design.rounded
+  private static let monoFont = Font.Design.monospaced
   
   // MARK: - Display (超大标题 - 页面级)
   
@@ -125,15 +145,12 @@ enum WorkspaceTypography {
   
   /// 大正文：用于重要段落
   static let bodyLarge = Font.system(size: 17, weight: .regular, design: primaryFont)
-  .lineSpacing(6)
   
   /// 标准正文：主要内容
   static let body = Font.system(size: 15, weight: .regular, design: primaryFont)
-  .lineSpacing(5)
   
   /// 小正文：次要信息
   static let bodySmall = Font.system(size: 14, weight: .regular, design: primaryFont)
-  .lineSpacing(4)
   
   // MARK: - Label (标签/说明)
   
@@ -155,7 +172,11 @@ enum WorkspaceTypography {
   // MARK: - Code/Mono (代码/等宽)
   
   static let mono = Font.system(size: 14, weight: .regular, design: monoFont)
-  .lineSpacing(4)
+
+  static let bodyLargeLineSpacing: CGFloat = 6
+  static let bodyLineSpacing: CGFloat = 5
+  static let bodySmallLineSpacing: CGFloat = 4
+  static let monoLineSpacing: CGFloat = 4
 }
 
 // MARK: - Spacing Tokens
@@ -223,20 +244,28 @@ enum WorkspaceCornerRadius {
 // MARK: - Shadow System
 
 enum WorkspaceShadows {
+  /// Digital Archivist 标准纸张/浮层阴影
+  static let archivalFloat = ShadowConfig(
+    color: WorkspaceColors.paperShadow,
+    radius: 32,
+    x: 0,
+    y: 8
+  )
+
   /// 悬浮卡片：轻柔悬浮感
   static let cardFloating = ShadowConfig(
-    color: WorkspaceColors.shadowLight,
-    radius: 12,
+    color: WorkspaceColors.paperShadow,
+    radius: 20,
     x: 0,
-    y: 4
+    y: 8
   )
   
   /// 悬浮面板：更明显的悬浮
   static let panelFloating = ShadowConfig(
     color: WorkspaceColors.shadowMedium,
-    radius: 16,
+    radius: 24,
     x: 0,
-    y: 6
+    y: 10
   )
   
   /// 悬浮按钮：强调的可点击性
@@ -386,16 +415,16 @@ enum WorkspaceLayers {
 
 enum WorkspaceGlass {
   /// 轻度磨砂：用于卡片
-  static let light = Material.ultraThinMaterial.opacity(0.7)
+  static let light = Material.ultraThinMaterial
   
   /// 中度磨砂：用于面板
-  static let medium = Material.thinMaterial.opacity(0.75)
+  static let medium = Material.thinMaterial
   
   /// 重度磨砂：用于浮层
-  static let heavy = Material.regularMaterial.opacity(0.8)
+  static let heavy = Material.regularMaterial
   
   /// 背景虚化：用于 backdrop
-  static let backdrop = Material.ultraThinMaterial.opacity(0.5)
+  static let backdrop = Material.ultraThinMaterial
 }
 
 // MARK: - Divider Styles

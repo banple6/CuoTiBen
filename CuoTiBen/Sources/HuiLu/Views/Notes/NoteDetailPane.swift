@@ -48,6 +48,7 @@ struct NoteDetailPane: View {
                     VStack(alignment: .leading, spacing: 18) {
                         headerCard(for: detailModel)
                         quoteSection(for: detailModel)
+                        analysisCardsSection(for: detailModel)
                         textBlocksSection(for: detailModel)
                         knowledgePointSection(for: detailModel)
                         inkSection(for: detailModel)
@@ -63,15 +64,11 @@ struct NoteDetailPane: View {
         .background(
             RoundedRectangle(cornerRadius: 32, style: .continuous)
                 .fill(AppPalette.paperCard)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 32, style: .continuous)
-                        .stroke(Color.white.opacity(0.9), lineWidth: 1)
-                )
                 .overlay(alignment: .topTrailing) {
                     PaperTapeAccent(color: AppPalette.paperTapeBlue, width: 78, height: 18)
                         .offset(x: 10, y: -8)
                 }
-                .shadow(color: Color.black.opacity(0.08), radius: 22, y: 10)
+                .shadow(color: WorkspaceColors.paperShadow, radius: 32, x: 0, y: 8)
         )
         .onAppear {
             syncDraftNote(force: true)
@@ -254,6 +251,41 @@ struct NoteDetailPane: View {
                     )
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func analysisCardsSection(for model: NoteDetailViewModel) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            NotePaneSectionTitle(text: "桌面分析")
+
+            ZStack(alignment: .topLeading) {
+                stickyInsightCard(
+                    title: "原句线索",
+                    body: model.quoteText,
+                    tint: AppPalette.paperHighlightMint,
+                    noteAngle: -1.2
+                )
+                .offset(x: 12, y: 0)
+
+                stickyInsightCard(
+                    title: "自动关联",
+                    body: model.suggestedKnowledgePoints.first?.title ?? fallbackKnowledgeLine(for: model),
+                    tint: Color(red: 248 / 255, green: 228 / 255, blue: 153 / 255),
+                    noteAngle: 0.9
+                )
+                .offset(x: 168, y: 30)
+
+                stickyInsightCard(
+                    title: "反向回看",
+                    body: "相关来源 \(model.relatedSourceAnchors.count) 条 · 相关笔记 \(model.relatedNotes.count) 条 · 相关卡片 \(model.relatedCards.count) 张",
+                    tint: Color(red: 243 / 255, green: 212 / 255, blue: 220 / 255),
+                    noteAngle: -0.6
+                )
+                .offset(x: 40, y: 138)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 292)
         }
     }
 
@@ -565,11 +597,8 @@ private struct NotePaneActionButton: View {
             .background(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .fill(Color.white.opacity(0.76))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(Color.black.opacity(0.06), lineWidth: 1)
-                    )
             )
+            .shadow(color: WorkspaceColors.paperShadow, radius: 12, x: 0, y: 4)
         }
         .buttonStyle(.plain)
     }
@@ -585,8 +614,8 @@ private struct NoteDetailStatusPill: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
             .background(
-                Capsule(style: .continuous)
-                    .fill(Color.black.opacity(0.04))
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(AppPalette.paperHighlight.opacity(0.34))
             )
     }
 }
@@ -603,7 +632,11 @@ private struct NoteEditableKnowledgePointFlow: View {
                 Button {
                     onSelect(point)
                 } label: {
-                    NotesMetaPill(text: point.title, tint: .blue)
+                    WashiKnowledgeChip(
+                        title: point.title,
+                        tint: AppPalette.paperTapeBlue.opacity(0.28),
+                        foreground: WorkspaceColors.primaryInk
+                    )
                 }
                 .buttonStyle(.plain)
 
@@ -612,12 +645,12 @@ private struct NoteEditableKnowledgePointFlow: View {
                 } label: {
                     Image(systemName: "arrow.up.forward.square")
                         .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(Color.blue.opacity(0.86))
+                        .foregroundStyle(WorkspaceColors.primaryInk.opacity(0.86))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 8)
                         .background(
-                            Capsule(style: .continuous)
-                                .fill(Color.white.opacity(0.78))
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(AppPalette.paperCard.opacity(0.84))
                         )
                 }
                 .buttonStyle(.plain)
@@ -631,13 +664,50 @@ private struct NoteEditableKnowledgePointFlow: View {
                         .padding(.horizontal, 10)
                         .padding(.vertical, 8)
                         .background(
-                            Capsule(style: .continuous)
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
                                 .fill(Color.red.opacity(0.08))
                         )
                 }
                 .buttonStyle(.plain)
             }
         }
+    }
+}
+
+private extension NoteDetailPane {
+    func stickyInsightCard(
+        title: String,
+        body: String,
+        tint: Color,
+        noteAngle: Double
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.system(size: 14, weight: .bold, design: .rounded))
+                .foregroundStyle(AppPalette.paperInk.opacity(0.84))
+
+            Text(body)
+                .font(.system(size: 16, weight: .regular, design: .serif))
+                .foregroundStyle(AppPalette.paperInk.opacity(0.86))
+                .lineSpacing(5)
+                .lineLimit(5)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 16)
+        .frame(width: 226, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(tint.opacity(0.7))
+        )
+        .shadow(color: WorkspaceColors.paperShadow, radius: 14, x: 0, y: 6)
+        .rotationEffect(.degrees(noteAngle))
+    }
+
+    func fallbackKnowledgeLine(for model: NoteDetailViewModel) -> String {
+        if let point = model.knowledgePoints.first {
+            return "已关联知识点：\(point.title)"
+        }
+        return "当前还没有明确知识点，建议从这句原文开始标注。"
     }
 }
 

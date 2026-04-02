@@ -53,7 +53,7 @@ struct NoteCanvasView: View {
         ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
                 HStack {
-                    Spacer(minLength: 0)
+                    Spacer(minLength: 28)
 
                     VStack(alignment: .leading, spacing: 28) {
                         if showsCanvasHeader {
@@ -73,16 +73,27 @@ struct NoteCanvasView: View {
                             addBlockBar
                         }
                     }
-                    .padding(.horizontal, 72)
-                    .padding(.vertical, 54)
+                    .padding(.leading, 88)
+                    .padding(.trailing, 64)
+                    .padding(.vertical, 60)
                     .frame(maxWidth: maxPaperWidth, alignment: .leading)
                     .background(NotebookPaperBackground())
                     .overlay(alignment: .leading) {
-                        Rectangle()
-                            .fill(AppPalette.paperTapeBlue.opacity(0.18))
-                            .frame(width: 1.5)
-                            .padding(.vertical, 30)
-                            .padding(.leading, 42)
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color.black.opacity(0.06),
+                                        Color.black.opacity(0.018),
+                                        .clear
+                                    ],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .frame(width: 38)
+                            .padding(.vertical, 22)
+                            .padding(.leading, 18)
                     }
                     .overlay(alignment: .topLeading) {
                         PaperTapeAccent(color: AppPalette.paperTapeBlue, width: 70, height: 18, angle: -6)
@@ -97,7 +108,7 @@ struct NoteCanvasView: View {
                     .shadow(color: Color.black.opacity(0.05), radius: 32, y: 16)
                     .padding(.vertical, 8)
 
-                    Spacer(minLength: 0)
+                    Spacer(minLength: 12)
                 }
                 .padding(.horizontal, 12)
                 .padding(.bottom, 36)
@@ -229,14 +240,14 @@ struct NoteCanvasView: View {
             }
 
             Text(notebookDisplayTitle)
-                .font(.system(size: 54, weight: .medium, design: .serif))
+                .font(.system(size: 48, weight: .medium, design: .serif))
                 .foregroundStyle(AppPalette.paperInk)
-                .lineSpacing(6)
+                .lineSpacing(8)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Rectangle()
-                .fill(AppPalette.paperLine.opacity(0.8))
-                .frame(height: 1)
+            Text(sourceAnchor.anchorLabel)
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .foregroundStyle(AppPalette.paperMuted)
 
             HStack(spacing: 12) {
                 if let pageIndex = sourceAnchor.pageIndex {
@@ -256,7 +267,7 @@ struct NoteCanvasView: View {
                         .foregroundStyle(AppPalette.paperMuted)
 
                     Text(quote)
-                        .font(.system(size: 22, weight: .regular, design: .serif))
+                        .font(.system(size: 21, weight: .regular, design: .serif))
                         .foregroundStyle(AppPalette.paperInk.opacity(0.82))
                         .italic()
                         .lineSpacing(8)
@@ -627,6 +638,7 @@ struct NoteCanvasView: View {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(tint)
             )
+            .rotationEffect(.degrees(Double((text.count % 3) - 1)))
     }
 
     private var emptyState: some View {
@@ -646,10 +658,7 @@ struct NoteCanvasView: View {
         .background(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .fill(Color.white.opacity(0.72))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .stroke(Color.black.opacity(0.05), style: StrokeStyle(lineWidth: 1, dash: [7, 7]))
-                )
+                .shadow(color: Color.black.opacity(0.04), radius: 18, y: 8)
         )
     }
 
@@ -696,6 +705,16 @@ struct NoteCanvasView: View {
                 onAddQuoteBlock()
             }
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 14)
+        .background(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(Color.white.opacity(0.46))
+                .background(
+                    .ultraThinMaterial,
+                    in: RoundedRectangle(cornerRadius: 22, style: .continuous)
+                )
+        )
     }
 
     private func canvasButton(title: String, icon: String, action: @escaping () -> Void) -> some View {
@@ -711,10 +730,6 @@ struct NoteCanvasView: View {
             .background(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .fill(Color.white.opacity(0.76))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(Color.black.opacity(0.05), lineWidth: 1)
-                    )
             )
         }
         .buttonStyle(.plain)
@@ -837,7 +852,7 @@ private struct NotebookPaperBackground: View {
             )
             .overlay {
                 NotebookGrid(spacing: 28)
-                    .opacity(0.16)
+                    .opacity(0.11)
                     .clipShape(RoundedRectangle(cornerRadius: 34, style: .continuous))
             }
             .overlay {
@@ -852,10 +867,7 @@ private struct NotebookPaperBackground: View {
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 34, style: .continuous))
             }
-            .overlay(
-                RoundedRectangle(cornerRadius: 34, style: .continuous)
-                    .stroke(AppPalette.paperLine.opacity(0.7), lineWidth: 0.8)
-            )
+            .shadow(color: Color.black.opacity(0.04), radius: 32, x: 0, y: 8)
     }
 }
 
