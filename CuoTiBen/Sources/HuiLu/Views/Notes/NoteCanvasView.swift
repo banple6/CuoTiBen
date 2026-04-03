@@ -53,9 +53,9 @@ struct NoteCanvasView: View {
         ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
                 HStack {
-                    Spacer(minLength: 28)
+                    Spacer(minLength: 24)
 
-                    VStack(alignment: .leading, spacing: 28) {
+                    VStack(alignment: .leading, spacing: 36) {
                         if showsCanvasHeader {
                             notebookHeader
                         }
@@ -73,9 +73,9 @@ struct NoteCanvasView: View {
                             addBlockBar
                         }
                     }
-                    .padding(.leading, 88)
-                    .padding(.trailing, 64)
-                    .padding(.vertical, 60)
+                    .padding(.leading, 104)
+                    .padding(.trailing, 74)
+                    .padding(.vertical, 72)
                     .frame(maxWidth: maxPaperWidth, alignment: .leading)
                     .background(NotebookPaperBackground())
                     .overlay(alignment: .leading) {
@@ -96,14 +96,14 @@ struct NoteCanvasView: View {
                             .padding(.leading, 18)
                     }
                     .overlay(alignment: .topLeading) {
-                        PaperTapeAccent(color: AppPalette.paperTapeBlue, width: 70, height: 18, angle: -6)
-                            .padding(.top, 20)
-                            .padding(.leading, 78)
+                        PaperTapeAccent(color: AppPalette.paperTapeBlue, width: 60, height: 16, angle: -5)
+                            .padding(.top, 18)
+                            .padding(.leading, 92)
                     }
                     .overlay(alignment: .topTrailing) {
-                        PaperTapeAccent(color: AppPalette.paperTape, width: 64, height: 18, angle: 7)
-                            .padding(.top, 16)
-                            .padding(.trailing, 76)
+                        PaperTapeAccent(color: AppPalette.paperTape, width: 54, height: 16, angle: 6)
+                            .padding(.top, 18)
+                            .padding(.trailing, 90)
                     }
                     .shadow(color: Color.black.opacity(0.05), radius: 32, y: 16)
                     .padding(.vertical, 8)
@@ -228,7 +228,7 @@ struct NoteCanvasView: View {
     }
 
     private var editorialNotebookHeader: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 24) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
                     editorMetaTag(text: "Source: \(sourceAnchor.sourceTitle)", tint: AppPalette.paperTapeBlue.opacity(0.28))
@@ -240,14 +240,20 @@ struct NoteCanvasView: View {
             }
 
             Text(notebookDisplayTitle)
-                .font(.system(size: 48, weight: .medium, design: .serif))
+                .font(.system(size: 42, weight: .medium, design: .serif))
                 .foregroundStyle(AppPalette.paperInk)
-                .lineSpacing(8)
+                .lineSpacing(10)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text(sourceAnchor.anchorLabel)
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                .foregroundStyle(AppPalette.paperMuted)
+            VStack(alignment: .leading, spacing: 8) {
+                Text(sourceAnchor.anchorLabel)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(AppPalette.paperMuted)
+
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(AppPalette.paperLine.opacity(0.68))
+                    .frame(width: 128, height: 2)
+            }
 
             HStack(spacing: 12) {
                 if let pageIndex = sourceAnchor.pageIndex {
@@ -261,23 +267,23 @@ struct NoteCanvasView: View {
 
             if let quote = sourceAnchor.quotedText.nonEmpty {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Quoted Focus")
-                        .font(.system(size: 11, weight: .bold))
-                        .tracking(1.2)
+                    Text("Focus Excerpt")
+                        .font(.system(size: 10, weight: .bold))
+                        .tracking(1.6)
                         .foregroundStyle(AppPalette.paperMuted)
 
                     Text(quote)
-                        .font(.system(size: 21, weight: .regular, design: .serif))
+                        .font(.system(size: 22, weight: .regular, design: .serif))
                         .foregroundStyle(AppPalette.paperInk.opacity(0.82))
                         .italic()
-                        .lineSpacing(8)
+                        .lineSpacing(10)
                         .frame(maxWidth: 780, alignment: .leading)
                 }
-                .padding(.top, 2)
+                .padding(.top, 4)
             }
         }
         .padding(.top, 4)
-        .padding(.bottom, 14)
+        .padding(.bottom, 8)
     }
 
     private var studioSourceStrip: some View {
@@ -582,43 +588,51 @@ struct NoteCanvasView: View {
 
     @ViewBuilder
     private func blockCard(_ block: NoteBlock) -> some View {
-        switch block.kind {
-        case .quote:
-            QuoteBlockView(
-                block: block,
-                sourceAnchor: sourceAnchorForBlock(block),
-                onOpenSource: {
-                    onOpenSourceAnchor(sourceAnchorForBlock(block))
-                }
-            )
-            .overlay(highlightOverlay(for: block.id))
+        VStack(alignment: .leading, spacing: 14) {
+            sectionMarker(for: block.kind)
 
-        case .text:
-            TextBlockEditorView(
-                text: Binding(
-                    get: { block.text ?? "" },
-                    set: { onUpdateTextBlock(block.id, $0) }
-                ),
-                isHighlighted: highlightedBlockID == block.id
-            )
-            .overlay(highlightOverlay(for: block.id))
+            switch block.kind {
+            case .quote:
+                QuoteBlockView(
+                    block: block,
+                    sourceAnchor: sourceAnchorForBlock(block),
+                    presentationStyle: .editorial,
+                    onOpenSource: {
+                        onOpenSourceAnchor(sourceAnchorForBlock(block))
+                    }
+                )
+                .overlay(highlightOverlay(for: block.id))
 
-        case .ink:
-            InkBlockWorkspaceView(
-                block: Binding(
-                    get: { block },
-                    set: { onUpdateInkBlock($0) }
-                ),
-                sourceAnchor: sourceAnchor,
-                candidateKnowledgePoints: candidateKnowledgePoints,
-                toolState: $inkToolState,
-                doubleTapBehavior: doubleTapBehavior,
-                appearance: appearance,
-                onLinkKnowledgePoint: { pointID in
-                    onLinkKnowledgePointToBlock(pointID, block.id)
-                }
-            )
-            .overlay(highlightOverlay(for: block.id))
+            case .text:
+                TextBlockEditorView(
+                    text: Binding(
+                        get: { block.text ?? "" },
+                        set: { onUpdateTextBlock(block.id, $0) }
+                    ),
+                    title: "Analysis Notes",
+                    isHighlighted: highlightedBlockID == block.id,
+                    minimumHeight: 190,
+                    presentationStyle: .editorial
+                )
+                .overlay(highlightOverlay(for: block.id))
+
+            case .ink:
+                InkBlockWorkspaceView(
+                    block: Binding(
+                        get: { block },
+                        set: { onUpdateInkBlock($0) }
+                    ),
+                    sourceAnchor: sourceAnchor,
+                    candidateKnowledgePoints: candidateKnowledgePoints,
+                    toolState: $inkToolState,
+                    doubleTapBehavior: doubleTapBehavior,
+                    appearance: appearance,
+                    onLinkKnowledgePoint: { pointID in
+                        onLinkKnowledgePointToBlock(pointID, block.id)
+                    }
+                )
+                .overlay(highlightOverlay(for: block.id))
+            }
         }
     }
 
@@ -630,10 +644,10 @@ struct NoteCanvasView: View {
 
     private func editorMetaTag(text: String, tint: Color) -> some View {
         Text(text)
-            .font(.system(size: 12.5, weight: .medium))
+            .font(.system(size: 11.5, weight: .medium))
             .foregroundStyle(AppPalette.paperInk.opacity(0.82))
             .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.vertical, 7)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(tint)
@@ -645,21 +659,16 @@ struct NoteCanvasView: View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 10) {
                 Text("工作台还是空的")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(Color.black.opacity(0.82))
+                    .font(.system(size: 24, weight: .medium, design: .serif))
+                    .foregroundStyle(AppPalette.paperInk)
 
                 Text("先添加一个文本块或手写块，把引用、理解和联想整理成自己的笔记。")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(Color.black.opacity(0.56))
-                    .lineSpacing(4)
+                    .font(.system(size: 16, weight: .regular, design: .serif))
+                    .foregroundStyle(AppPalette.paperMuted)
+                    .lineSpacing(8)
             }
         }
-        .padding(24)
-        .background(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(Color.white.opacity(0.72))
-                .shadow(color: Color.black.opacity(0.04), radius: 18, y: 8)
-        )
+        .padding(.vertical, 20)
     }
 
     private var studioEmptyState: some View {
@@ -709,7 +718,7 @@ struct NoteCanvasView: View {
         .padding(.vertical, 14)
         .background(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(Color.white.opacity(0.46))
+                .fill(Color.white.opacity(0.34))
                 .background(
                     .ultraThinMaterial,
                     in: RoundedRectangle(cornerRadius: 22, style: .continuous)
@@ -729,10 +738,33 @@ struct NoteCanvasView: View {
             .padding(.vertical, 13)
             .background(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(Color.white.opacity(0.76))
+                    .fill(Color.white.opacity(0.68))
             )
         }
         .buttonStyle(.plain)
+    }
+
+    private func sectionMarker(for kind: NoteBlockKind) -> some View {
+        HStack(spacing: 10) {
+            Text(sectionTitle(for: kind))
+                .font(.system(size: 10, weight: .bold))
+                .tracking(1.8)
+                .foregroundStyle(AppPalette.paperMuted)
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .fill(AppPalette.paperLine.opacity(0.54))
+                .frame(height: 1)
+        }
+    }
+
+    private func sectionTitle(for kind: NoteBlockKind) -> String {
+        switch kind {
+        case .quote:
+            return "PRIMARY SOURCE"
+        case .text:
+            return "EDITORIAL NOTES"
+        case .ink:
+            return "INK LAYER"
+        }
     }
 
     private var pageCounter: some View {
@@ -844,7 +876,7 @@ private struct NotebookPaperBackground: View {
                 LinearGradient(
                     colors: [
                         Color.white,
-                        Color(red: 0.986, green: 0.982, blue: 0.973)
+                        Color(red: 0.991, green: 0.988, blue: 0.98)
                     ],
                     startPoint: .top,
                     endPoint: .bottom
@@ -852,15 +884,15 @@ private struct NotebookPaperBackground: View {
             )
             .overlay {
                 NotebookGrid(spacing: 28)
-                    .opacity(0.11)
+                    .opacity(0.08)
                     .clipShape(RoundedRectangle(cornerRadius: 34, style: .continuous))
             }
             .overlay {
                 LinearGradient(
                     colors: [
-                        Color.white.opacity(0.56),
+                        Color.white.opacity(0.48),
                         .clear,
-                        Color(red: 0.96, green: 0.95, blue: 0.92).opacity(0.3)
+                        Color(red: 0.96, green: 0.95, blue: 0.92).opacity(0.22)
                     ],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing

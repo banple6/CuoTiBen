@@ -1,11 +1,19 @@
 import SwiftUI
 
+#if os(iOS)
+import UIKit
+#endif
+
 struct LibraryView: View {
     @EnvironmentObject var viewModel: AppViewModel
     @State private var searchText = ""
     @State private var selectedFilter: LibraryFilter = .recent
     @State private var selectedDocument: SourceDocument?
     @State private var showingImport = false
+
+    private var isPad: Bool {
+        UIDevice.current.userInterfaceIdiom == .pad
+    }
 
     enum LibraryFilter: String, CaseIterable {
         case recent = "最近"
@@ -32,73 +40,14 @@ struct LibraryView: View {
 
     var body: some View {
         ZStack {
-            PaperCanvasBackground()
-
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 22) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("活跃知识库")
-                            .font(.system(size: 32, weight: .bold, design: .serif))
-                            .foregroundStyle(AppPalette.paperInk)
-
-                        Text("把导入资料整理成可随时检索、回看的知识地图。")
-                            .font(.system(size: 15, weight: .medium, design: .serif))
-                            .foregroundStyle(AppPalette.paperMuted)
-                    }
-
-                    HStack(spacing: 12) {
-                        SearchBar(text: $searchText)
-
-                        Button {
-                            showingImport = true
-                        } label: {
-                            Image(systemName: "plus")
-                                .font(.system(size: 18, weight: .bold))
-                                .foregroundStyle(AppPalette.paperInk.opacity(0.75))
-                                .frame(width: 48, height: 48)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                        .fill(Color.white.opacity(0.78))
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                        .stroke(Color.white.opacity(0.94), lineWidth: 1)
-                                )
-                        }
-                        .buttonStyle(.plain)
-                    }
-
-                    SegmentedGlassControl(
-                        items: LibraryFilter.allCases,
-                        selected: $selectedFilter,
-                        label: \.rawValue
-                    )
-
-                    HStack(spacing: 14) {
-                        LibraryToolbarChip(icon: "slider.horizontal.3", title: "筛选")
-                        LibraryToolbarChip(icon: "arrow.up.arrow.down", title: "排序")
-                        LibraryToolbarChip(icon: "tag", title: "标签")
-                    }
-
-                    ForEach(Array(filteredDocuments.enumerated()), id: \.element.id) { index, document in
-                        Button {
-                            withAnimation(.spring(response: 0.35, dampingFraction: 0.88)) {
-                                selectedDocument = document
-                            }
-                        } label: {
-                            LibraryDocumentCard(document: document, paletteIndex: index)
-                        }
-                        .buttonStyle(.plain)
-                    }
-
-                    Spacer(minLength: 150)
-                }
-                .padding(.horizontal, 24)
-                .padding(.top, 52)
+            if isPad {
+                archivistPadBody
+            } else {
+                phoneLibraryBody
             }
 
             if let selectedDocument {
-                Color.black.opacity(0.22)
+                Color.black.opacity(isPad ? 0.28 : 0.22)
                     .ignoresSafeArea()
                     .transition(.opacity)
                     .onTapGesture {
@@ -221,6 +170,500 @@ struct SegmentedGlassControl<T: Hashable>: View {
         case .subjects:
             return "shippingbox"
         }
+    }
+}
+
+private extension LibraryView {
+    var phoneLibraryBody: some View {
+        ZStack {
+            PaperCanvasBackground()
+
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 22) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("活跃知识库")
+                            .font(.system(size: 32, weight: .bold, design: .serif))
+                            .foregroundStyle(AppPalette.paperInk)
+
+                        Text("把导入资料整理成可随时检索、回看的知识地图。")
+                            .font(.system(size: 15, weight: .medium, design: .serif))
+                            .foregroundStyle(AppPalette.paperMuted)
+                    }
+
+                    HStack(spacing: 12) {
+                        SearchBar(text: $searchText)
+
+                        Button {
+                            showingImport = true
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.system(size: 18, weight: .bold))
+                                .foregroundStyle(AppPalette.paperInk.opacity(0.75))
+                                .frame(width: 48, height: 48)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                        .fill(Color.white.opacity(0.78))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                        .stroke(Color.white.opacity(0.94), lineWidth: 1)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    SegmentedGlassControl(
+                        items: LibraryFilter.allCases,
+                        selected: $selectedFilter,
+                        label: \.rawValue
+                    )
+
+                    HStack(spacing: 14) {
+                        LibraryToolbarChip(icon: "slider.horizontal.3", title: "筛选")
+                        LibraryToolbarChip(icon: "arrow.up.arrow.down", title: "排序")
+                        LibraryToolbarChip(icon: "tag", title: "标签")
+                    }
+
+                    ForEach(Array(filteredDocuments.enumerated()), id: \.element.id) { index, document in
+                        Button {
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.88)) {
+                                selectedDocument = document
+                            }
+                        } label: {
+                            LibraryDocumentCard(document: document, paletteIndex: index)
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    Spacer(minLength: 150)
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 52)
+            }
+        }
+    }
+
+    var archivistPadBody: some View {
+        ZStack {
+            LinearGradient(
+                colors: [ArchivistColors.deskMatStart, ArchivistColors.deskMatEnd],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .overlay {
+                NotebookGrid(spacing: 20)
+                    .opacity(0.04)
+            }
+            .ignoresSafeArea()
+
+            HStack(spacing: 0) {
+                ArchivistLibrarySideRail(onImport: {
+                    showingImport = true
+                })
+
+                VStack(spacing: 0) {
+                    ArchivistLibraryTopBar(
+                        searchText: $searchText,
+                        selectedFilter: $selectedFilter,
+                        onImport: { showingImport = true }
+                    )
+                    .padding(.horizontal, 28)
+                    .padding(.top, 20)
+
+                    ScrollView(showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: 28) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Academic Semester 2026")
+                                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                                    .textCase(.uppercase)
+                                    .tracking(4)
+                                    .foregroundStyle(Color.white.opacity(0.52))
+
+                                Capsule()
+                                    .fill(ArchivistColors.blueWash.opacity(0.8))
+                                    .frame(width: 58, height: 3)
+                            }
+
+                            LazyVGrid(
+                                columns: [GridItem(.adaptive(minimum: 248), spacing: 22)],
+                                spacing: 26
+                            ) {
+                                ForEach(Array(filteredDocuments.enumerated()), id: \.element.id) { index, document in
+                                    Button {
+                                        withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+                                            selectedDocument = document
+                                        }
+                                    } label: {
+                                        ArchivistLibraryFolderCard(
+                                            document: document,
+                                            paletteIndex: index
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+
+                                ArchivistAddArchiveCard {
+                                    showingImport = true
+                                }
+                            }
+
+                            VStack(alignment: .leading, spacing: 18) {
+                                Text("Active Notebooks")
+                                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                                    .textCase(.uppercase)
+                                    .tracking(4)
+                                    .foregroundStyle(Color.white.opacity(0.46))
+
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 22) {
+                                        ForEach(Array(filteredDocuments.prefix(8).enumerated()), id: \.element.id) { index, document in
+                                            ArchivistNotebookSpine(document: document, paletteIndex: index)
+                                        }
+                                    }
+                                    .padding(.vertical, 6)
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 28)
+                        .padding(.top, 34)
+                        .padding(.bottom, 54)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+}
+
+private struct ArchivistLibrarySideRail: View {
+    let onImport: () -> Void
+
+    private let items: [(String, String, Bool)] = [
+        ("Notebooks", "book_5", false),
+        ("Library", "inventory_2", true),
+        ("Research", "analytics", false),
+        ("Favorites", "star", false),
+        ("Trash", "delete", false)
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 10) {
+                    Image(systemName: "archivebox.fill")
+                        .font(.system(size: 26, weight: .medium))
+                        .foregroundStyle(ArchivistColors.primaryInk)
+                    Text("The Archivist")
+                        .font(.system(size: 22, weight: .semibold, design: .serif))
+                        .foregroundStyle(ArchivistColors.primaryInk)
+                }
+
+                Text("Digital Archivist")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .textCase(.uppercase)
+                    .tracking(1.6)
+                    .foregroundStyle(ArchivistColors.softInk)
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 10)
+
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(items, id: \.0) { item in
+                    HStack(spacing: 14) {
+                        Image(systemName: item.1)
+                            .font(.system(size: 18, weight: item.2 ? .bold : .medium))
+                        Text(item.0)
+                            .font(.system(size: 14, weight: item.2 ? .semibold : .medium))
+                    }
+                    .foregroundStyle(item.2 ? ArchivistColors.primaryInk : ArchivistColors.mutedInk.opacity(0.84))
+                    .padding(.horizontal, 14)
+                    .frame(height: 46)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(item.2 ? ArchivistColors.blueWash.opacity(0.9) : Color.clear)
+                    )
+                }
+            }
+
+            Spacer()
+
+            Button(action: onImport) {
+                HStack(spacing: 10) {
+                    Image(systemName: "plus")
+                    Text("New Document")
+                        .font(.system(size: 14, weight: .semibold))
+                }
+                .foregroundStyle(Color.white)
+                .frame(maxWidth: .infinity)
+                .frame(height: 46)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(ArchivistColors.primaryInk)
+                )
+            }
+            .buttonStyle(.plain)
+
+            VStack(alignment: .leading, spacing: 4) {
+                railFooterItem(icon: "gearshape", title: "Settings")
+                railFooterItem(icon: "questionmark.circle", title: "Support")
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 24)
+        .frame(width: 272, alignment: .topLeading)
+        .background(ArchivistColors.railFill)
+        .shadow(color: ArchivistColors.paperShadow, radius: 24, x: 8, y: 0)
+    }
+
+    private func railFooterItem(icon: String, title: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+            Text(title)
+                .font(.system(size: 13, weight: .medium))
+        }
+        .foregroundStyle(ArchivistColors.mutedInk.opacity(0.84))
+        .padding(.horizontal, 10)
+        .frame(height: 38)
+    }
+}
+
+private struct ArchivistLibraryTopBar: View {
+    @Binding var searchText: String
+    @Binding var selectedFilter: LibraryView.LibraryFilter
+    let onImport: () -> Void
+
+    var body: some View {
+        HStack(spacing: 18) {
+            HStack(spacing: 12) {
+                Text("Resources Library")
+                    .font(.system(size: 24, weight: .semibold, design: .serif))
+                    .foregroundStyle(Color.white.opacity(0.9))
+
+                HStack(spacing: 10) {
+                    topLink("Tools", active: false)
+                    topLink("Library", active: true)
+                    topLink("Export", active: false)
+                }
+                .padding(.leading, 12)
+            }
+
+            Spacer()
+
+            HStack(spacing: 12) {
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(Color.white.opacity(0.45))
+
+                    TextField("Search archives...", text: $searchText)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.white)
+                        .textInputAutocapitalization(.never)
+                }
+                .padding(.horizontal, 16)
+                .frame(width: 280, height: 42)
+                .background(Color.white.opacity(0.1), in: Capsule())
+
+                Button(action: onImport) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 42, height: 42)
+                        .background(ArchivistColors.primaryInk, in: Circle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func topLink(_ title: String, active: Bool) -> some View {
+        Text(title)
+            .font(.system(size: 14, weight: active ? .semibold : .medium))
+            .foregroundStyle(active ? Color.white : Color.white.opacity(0.58))
+            .padding(.bottom, 4)
+            .overlay(alignment: .bottom) {
+                if active {
+                    Capsule()
+                        .fill(ArchivistColors.blueWash)
+                        .frame(height: 2)
+                }
+            }
+    }
+}
+
+private struct ArchivistLibraryFolderCard: View {
+    let document: SourceDocument
+    let paletteIndex: Int
+
+    private var palette: (folder: Color, tab: Color, stamp: String) {
+        switch paletteIndex % 3 {
+        case 0:
+            return (ArchivistColors.tanFolder, ArchivistColors.folderTabTan, "READING")
+        case 1:
+            return (ArchivistColors.blueFolder, ArchivistColors.folderTabBlue, "RESEARCH")
+        default:
+            return (ArchivistColors.roseFolder, ArchivistColors.folderTabRose, "NOTES")
+        }
+    }
+
+    private var progress: CGFloat {
+        switch document.processingStatus {
+        case .ready:
+            return 1
+        case .parsing:
+            return 0.42
+        case .failed:
+            return 0.12
+        case .imported:
+            return 0.2
+        }
+    }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(palette.folder)
+
+            VStack(alignment: .leading, spacing: 14) {
+                Capsule()
+                    .fill(Color.black.opacity(0.08))
+                    .frame(width: 42, height: 4)
+
+                Text(document.title)
+                    .font(.system(size: 28, weight: .semibold, design: .serif))
+                    .foregroundStyle(Color.black.opacity(0.78))
+                    .lineLimit(3)
+
+                Text(document.documentType.displayName)
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .textCase(.uppercase)
+                    .tracking(1.6)
+                    .foregroundStyle(Color.black.opacity(0.42))
+
+                Spacer(minLength: 12)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Capsule()
+                        .fill(Color.black.opacity(0.06))
+                        .frame(height: 6)
+                        .overlay(alignment: .leading) {
+                            Capsule()
+                                .fill(ArchivistColors.primaryInk)
+                                .frame(width: max(progress * 210, 24), height: 6)
+                        }
+
+                    HStack {
+                        Text(progressLabel)
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .foregroundStyle(Color.black.opacity(0.42))
+
+                        Spacer()
+
+                        Text("\(Int(progress * 100))%")
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .foregroundStyle(Color.black.opacity(0.78))
+                    }
+                }
+            }
+            .padding(24)
+
+            HStack(spacing: 8) {
+                Spacer()
+                Text(palette.stamp)
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.black.opacity(0.42))
+                    .padding(.horizontal, 12)
+                    .frame(height: 24)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(palette.tab)
+                    )
+            }
+            .offset(x: -20, y: -10)
+        }
+        .frame(height: 316)
+        .overlay(alignment: .bottomTrailing) {
+            if document.processingStatus == .ready {
+                Text("Archived")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .textCase(.uppercase)
+                    .foregroundStyle(ArchivistColors.primaryInk.opacity(0.45))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(ArchivistColors.primaryInk.opacity(0.25), lineWidth: 1.5)
+                    )
+                    .rotationEffect(.degrees(-11))
+                    .padding(18)
+            }
+        }
+        .shadow(color: Color.black.opacity(0.14), radius: 24, y: 14)
+    }
+
+    private var progressLabel: String {
+        switch document.processingStatus {
+        case .ready: return "ARCHIVED"
+        case .parsing: return "PARSING"
+        case .failed: return "FAILED"
+        case .imported: return "IMPORTED"
+        }
+    }
+}
+
+private struct ArchivistAddArchiveCard: View {
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            VStack(spacing: 14) {
+                Image(systemName: "folder.badge.plus")
+                    .font(.system(size: 44, weight: .light))
+                    .foregroundStyle(Color.white.opacity(0.34))
+
+                Text("Add New Archive")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .textCase(.uppercase)
+                    .tracking(2)
+                    .foregroundStyle(Color.white.opacity(0.42))
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 316)
+            .background(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.14), style: StrokeStyle(lineWidth: 2, dash: [8, 8]))
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct ArchivistNotebookSpine: View {
+    let document: SourceDocument
+    let paletteIndex: Int
+
+    private var color: Color {
+        switch paletteIndex % 4 {
+        case 0: return ArchivistColors.primaryInk
+        case 1: return ArchivistColors.tertiaryContainerFallback
+        case 2: return ArchivistColors.secondarySpine
+        default: return Color(red: 193 / 255, green: 188 / 255, blue: 181 / 255)
+        }
+    }
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(color)
+            .frame(width: 62, height: 244)
+            .overlay(alignment: .center) {
+                Text(document.title.uppercased())
+                    .font(.system(size: 11, weight: .bold, design: .serif))
+                    .foregroundStyle(Color.white.opacity(0.92))
+                    .rotationEffect(.degrees(90))
+                    .lineLimit(1)
+                    .frame(width: 200)
+            }
+            .shadow(color: Color.black.opacity(0.2), radius: 16, y: 10)
     }
 }
 

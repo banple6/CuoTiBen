@@ -1,6 +1,6 @@
 # 慧录 / CuoTiBen 开发记录
 
-截至 `2026-04-02`，这个项目已经从最初的 SwiftUI 原型推进到了一个可运行的英语学习工作台，主链路包括：
+截至 `2026-04-03`，这个项目已经从最初的 SwiftUI 原型推进到了一个可运行的英语学习工作台，主链路包括：
 
 - 英语资料导入、OCR、结构化理解与大纲树
 - 原始 PDF / 阅读版 PDF 双模式阅读
@@ -8,6 +8,7 @@
 - iPhone / iPad 复盘工作台
 - 完整笔记编辑、工作台与 Obsidian-lite 式自动关联
 - `Digital Archivist` 风格的 iPad 学术工作区
+- `Repository -> UseCase -> Coordinator` 中间层架构
 - `LearningRecordContext` 与 PDF 高亮的性能优化
 
 当前主界面正在继续向统一的“纸张隐喻 + 档案工作台 + 学术阅读台”设计语言收敛：
@@ -46,6 +47,11 @@
   - 首页正从玻璃卡片过渡到桌面/便签式 dashboard
   - 知识库正过渡到文件夹/练习册式资料柜
   - 笔记工作台已完成一轮 `Digital Archivist` 风格重构，并已修复相关设计系统编译问题
+- 中间层架构已经开始成型：
+  - `Repository` 负责数据访问抽象
+  - `UseCase` 负责笔记相关动作
+  - `Coordinator / WorkspaceContext` 负责跨界面流转
+  - `ViewModel` 逐步从跨功能编排逻辑中减负
 - 关键性能热点已做过一轮缓存与重绘优化：
   - `LearningRecordContext` 结果级缓存
   - ranked 中间结果缓存
@@ -462,6 +468,11 @@ CuoTiBen/
 │   └── Sources/HuiLu/
 │       ├── App/
 │       │   └── HuiLuApp.swift
+│       ├── Architecture/
+│       │   └── DependencyContainer.swift
+│       ├── Coordinators/
+│       │   ├── FlowCoordinators.swift
+│       │   └── WorkspaceFlow.swift
 │       ├── Models/
 │       │   ├── Card.swift
 │       │   ├── DailyProgress.swift
@@ -473,6 +484,9 @@ CuoTiBen/
 │       │   ├── StructuredSourceModels.swift
 │       │   ├── Subject.swift
 │       │   └── Subscription.swift
+│       ├── Repositories/
+│       │   ├── AppStateRepositories.swift
+│       │   └── RepositoryProtocols.swift
 │       ├── Services/
 │       │   ├── AIExplainSentenceService.swift
 │       │   ├── AISourceParsingService.swift
@@ -487,6 +501,8 @@ CuoTiBen/
 │       │   ├── NoteRepository.swift
 │       │   ├── ReviewScheduler.swift
 │       │   └── SourceJumpCoordinator.swift
+│       ├── UseCases/
+│       │   └── NoteUseCases.swift
 │       ├── ViewModels/
 │       │   ├── AppViewModel.swift
 │       │   ├── ConceptSummaryItem.swift
@@ -709,6 +725,28 @@ rm -rf /tmp/CuoTiBen*
 
 ## 最近开发日志
 
+### 2026-04-03
+
+- 完成笔记中间层架构第一轮解耦：
+  - 新增 `NoteRepositoryProtocol / SourceRepositoryProtocol / KnowledgePointRepositoryProtocol / ReviewRepositoryProtocol`
+  - 新增 `DependencyContainer` 统一注入仓储、能力服务与 use case
+  - 新增 `CreateNoteFromSentenceUseCase / CreateNoteFromWordUseCase / AppendNoteBlockUseCase / LinkKnowledgePointToNoteUseCase`
+  - 新增 `WorkspaceContext / WorkspaceRoute / WorkspaceActionDispatcher`
+  - 新增 `NotesFlowCoordinator / SourceLearningCoordinator / ReviewFlowCoordinator`
+  - `NoteEditorSheet / NoteDetailViewModel / NoteWorkspaceViewModel` 已开始改走 use case，而不是直接编排底层持久化逻辑
+- 完成 iPad 笔记工作台继续向 `paper-first academic workspace` 收敛：
+  - `NoteWorkspaceView` 进一步压缩 chrome，突出中央纸页
+  - 右侧 `Navigator` 继续降权，顶部工具条收成更细的浮动 tray
+  - iPad 编辑态维持弱化 rail 与隐藏 tab bar 的策略
+- 完成 `NoteCanvasView` 正文排版细化，收成更像学术稿纸：
+  - 标题区改为更克制的 serif 稿纸标题与轻量元数据
+  - `quote / text` block 支持 `editorial` 呈现模式，不再默认都像 app 卡片
+  - 正文 section marker、装订侧边距、胶带标签与纸面纹理继续减重
+  - 空状态和新增块动作条改成更轻的纸面动作
+- 清理外置盘带入的 `._*` AppleDouble 副文件，并补充 `.gitignore` 避免 `.codex/` 再进入仓库
+- 完成命令行编译验证：
+  - `xcodebuild ... build` 结果为 `BUILD SUCCEEDED`
+
 ### 2026-04-02
 
 - 完成 iPad 笔记工作台的第三轮空间重排，明确停止沿用旧的 dark dashboard 结构：
@@ -897,4 +935,4 @@ rm -rf /tmp/CuoTiBen*
 
 ---
 
-文档更新时间：`2026-04-02`
+文档更新时间：`2026-04-03`

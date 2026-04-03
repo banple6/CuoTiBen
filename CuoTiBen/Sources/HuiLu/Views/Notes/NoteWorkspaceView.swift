@@ -34,6 +34,14 @@ struct NoteWorkspaceView: View {
         nonmutating set { appearanceRawValue = newValue.rawValue }
     }
 
+    private var effectiveWorkspaceAppearance: NoteWorkspaceAppearance {
+        let stored = workspaceAppearance
+        if supportsWorkspace, stored == .night {
+            return .paper
+        }
+        return stored
+    }
+
     private var pencilDoubleTapBehavior: NotePencilDoubleTapBehavior {
         get { NotePencilDoubleTapBehavior(rawValue: doubleTapBehaviorRawValue) ?? .switchToEraser }
         nonmutating set { doubleTapBehaviorRawValue = newValue.rawValue }
@@ -63,128 +71,127 @@ struct NoteWorkspaceView: View {
 
     private var workspaceBody: some View {
         ZStack(alignment: .top) {
-            WorkspaceDeskBackdrop(appearance: workspaceAppearance)
+            WorkspaceDeskBackdrop(appearance: effectiveWorkspaceAppearance)
 
-            HStack(alignment: .top, spacing: 22) {
-                WorkspaceSidebar(
-                    selection: $sidebarSelection,
-                    panelState: $workspaceViewModel.panelState,
-                    appearance: workspaceAppearance,
+            WorkspaceSidebar(
+                selection: $sidebarSelection,
+                panelState: $workspaceViewModel.panelState,
+                appearance: effectiveWorkspaceAppearance,
+                sourceTitle: workspaceViewModel.sourceAnchor.sourceTitle,
+                onQuickAdd: {
+                    activeTool = .text
+                    workspaceViewModel.addTextBlock()
+                }
+            )
+            .padding(.leading, 18)
+            .padding(.top, 92)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+            VStack(spacing: 14) {
+                WorkspaceMetadataStrip(
+                    title: Binding(
+                        get: { workspaceViewModel.title },
+                        set: { workspaceViewModel.updateTitle($0) }
+                    ),
                     sourceTitle: workspaceViewModel.sourceAnchor.sourceTitle,
-                    onQuickAdd: {
-                        activeTool = .text
-                        workspaceViewModel.addTextBlock()
+                    sourceHint: workspaceViewModel.sourceHint,
+                    saveStatus: workspaceViewModel.saveStatusText,
+                    appearance: effectiveWorkspaceAppearance,
+                    onBack: handleBack,
+                    onSave: {
+                        _ = workspaceViewModel.save(using: appViewModel)
+                    },
+                    onOpenSource: {
+                        openSource(workspaceViewModel.sourceAnchor)
                     }
                 )
-                .padding(.top, 74)
+                .frame(maxWidth: 720)
+                .padding(.horizontal, 20)
 
-                VStack(spacing: 18) {
-                    WorkspaceHeaderBar(
-                        title: Binding(
-                            get: { workspaceViewModel.title },
-                            set: { workspaceViewModel.updateTitle($0) }
-                        ),
-                        sourceTitle: workspaceViewModel.sourceAnchor.sourceTitle,
-                        sourceHint: workspaceViewModel.sourceHint,
-                        saveStatus: workspaceViewModel.saveStatusText,
-                        appearance: workspaceAppearance,
-                        onBack: handleBack,
-                        onSave: {
-                            _ = workspaceViewModel.save(using: appViewModel)
+                WorkspacePaperSurface(appearance: effectiveWorkspaceAppearance) {
+                    NoteCanvasView(
+                        sourceAnchor: workspaceViewModel.sourceAnchor,
+                        blocks: workspaceViewModel.blocks,
+                        linkedKnowledgePoints: workspaceViewModel.linkedKnowledgePoints,
+                        candidateKnowledgePoints: workspaceViewModel.candidateKnowledgePoints,
+                        highlightedBlockID: workspaceViewModel.highlightedBlockID,
+                        currentOutlineTitle: workspaceViewModel.outlineContext.currentNode?.title,
+                        canvasTitle: workspaceViewModel.title,
+                        layoutStyle: .notebook,
+                        appearance: effectiveWorkspaceAppearance,
+                        showsCanvasHeader: true,
+                        maxPaperWidth: 1160,
+                        inkToolState: $inkToolState,
+                        doubleTapBehavior: pencilDoubleTapBehavior,
+                        showsAddBlockBar: false,
+                        onUpdateTextBlock: { id, text in
+                            workspaceViewModel.updateTextBlock(id: id, text: text)
                         },
-                        onOpenSource: {
-                            openSource(workspaceViewModel.sourceAnchor)
+                        onUpdateInkBlock: { block in
+                            workspaceViewModel.updateInkBlock(block)
+                        },
+                        onLinkKnowledgePointToBlock: { pointID, blockID in
+                            workspaceViewModel.linkKnowledgePoint(pointID, using: appViewModel, to: blockID)
+                        },
+                        onAddTextBlock: {
+                            workspaceViewModel.addTextBlock()
+                        },
+                        onAddInkBlock: {
+                            workspaceViewModel.ensureInkBlock()
+                        },
+                        onAddQuoteBlock: {
+                            workspaceViewModel.addQuoteBlockFromSource()
+                        },
+                        onSelectKnowledgePoint: { point in
+                            activeKnowledgePoint = point
+                        },
+                        onOpenSourceAnchor: openSource,
+                        sourceAnchorForBlock: { block in
+                            workspaceViewModel.sourceAnchor(for: block)
+                        },
+                        onOpenKnowledgePointSource: { point in
+                            openSource(for: point)
+                        },
+                        onHighlightHandled: {
+                            workspaceViewModel.clearHighlight()
                         }
                     )
-                    .frame(maxWidth: 760)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-
-                    WorkspacePaperSurface(appearance: workspaceAppearance) {
-                        NoteCanvasView(
-                            sourceAnchor: workspaceViewModel.sourceAnchor,
-                            blocks: workspaceViewModel.blocks,
-                            linkedKnowledgePoints: workspaceViewModel.linkedKnowledgePoints,
-                            candidateKnowledgePoints: workspaceViewModel.candidateKnowledgePoints,
-                            highlightedBlockID: workspaceViewModel.highlightedBlockID,
-                            currentOutlineTitle: workspaceViewModel.outlineContext.currentNode?.title,
-                            canvasTitle: workspaceViewModel.title,
-                            layoutStyle: .notebook,
-                            appearance: workspaceAppearance,
-                            showsCanvasHeader: true,
-                            maxPaperWidth: 1160,
-                            inkToolState: $inkToolState,
-                            doubleTapBehavior: pencilDoubleTapBehavior,
-                            showsAddBlockBar: false,
-                            onUpdateTextBlock: { id, text in
-                                workspaceViewModel.updateTextBlock(id: id, text: text)
-                            },
-                            onUpdateInkBlock: { block in
-                                workspaceViewModel.updateInkBlock(block)
-                            },
-                            onLinkKnowledgePointToBlock: { pointID, blockID in
-                                workspaceViewModel.linkKnowledgePoint(pointID, using: appViewModel, to: blockID)
-                            },
-                            onAddTextBlock: {
-                                workspaceViewModel.addTextBlock()
-                            },
-                            onAddInkBlock: {
-                                workspaceViewModel.ensureInkBlock()
-                            },
-                            onAddQuoteBlock: {
-                                workspaceViewModel.addQuoteBlockFromSource()
-                            },
-                            onSelectKnowledgePoint: { point in
-                                activeKnowledgePoint = point
-                            },
-                            onOpenSourceAnchor: openSource,
-                            sourceAnchorForBlock: { block in
-                                workspaceViewModel.sourceAnchor(for: block)
-                            },
-                            onOpenKnowledgePointSource: { point in
-                                openSource(for: point)
-                            },
-                            onHighlightHandled: {
-                                workspaceViewModel.clearHighlight()
-                            }
-                        )
-                        .padding(.top, 34)
-                    }
-                    .frame(maxWidth: 1040, maxHeight: .infinity, alignment: .top)
-                    .overlay(alignment: .top) {
-                        WorkspaceFloatingToolPalette(
-                            activeTool: $activeTool,
-                            inkToolState: $inkToolState,
-                            doubleTapBehavior: Binding(
-                                get: { pencilDoubleTapBehavior },
-                                set: { pencilDoubleTapBehavior = $0 }
-                            ),
-                            appearance: workspaceAppearance,
-                            onSelectAppearance: { mode in
-                                workspaceAppearance = mode
-                            },
-                            onAddQuote: {
-                                workspaceViewModel.addQuoteBlockFromSource()
-                            },
-                            onAddText: {
-                                workspaceViewModel.addTextBlock()
-                            },
-                            onAddInk: {
-                                workspaceViewModel.ensureInkBlock()
-                            },
-                            onSave: {
-                                _ = workspaceViewModel.save(using: appViewModel)
-                            },
-                            onGenerateCard: generateCard
-                        )
-                        .padding(.top, -28)
-                    }
+                    .padding(.top, 26)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .frame(maxWidth: 1020, maxHeight: .infinity, alignment: .top)
             }
-            .padding(.leading, 26)
-            .padding(.trailing, 34)
-            .padding(.top, 18)
-            .padding(.bottom, 24)
+            .padding(.top, 96)
+            .padding(.bottom, 30)
+            .padding(.horizontal, 136)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+
+            WorkspaceFloatingToolPalette(
+                activeTool: $activeTool,
+                inkToolState: $inkToolState,
+                doubleTapBehavior: Binding(
+                    get: { pencilDoubleTapBehavior },
+                    set: { pencilDoubleTapBehavior = $0 }
+                ),
+                appearance: effectiveWorkspaceAppearance,
+                onSelectAppearance: { mode in
+                    workspaceAppearance = mode
+                },
+                onAddQuote: {
+                    workspaceViewModel.addQuoteBlockFromSource()
+                },
+                onAddText: {
+                    workspaceViewModel.addTextBlock()
+                },
+                onAddInk: {
+                    workspaceViewModel.ensureInkBlock()
+                },
+                onSave: {
+                    _ = workspaceViewModel.save(using: appViewModel)
+                },
+                onGenerateCard: generateCard
+            )
+            .padding(.top, 20)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
             if workspaceViewModel.panelState != .hidden {
                 NoteOutlineFloatingPanel(
@@ -199,7 +206,7 @@ struct NoteWorkspaceView: View {
                     },
                     onCycleState: togglePanelVisibility
                 )
-                .padding(.top, 92)
+                .padding(.top, 108)
                 .padding(.trailing, 24)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                 .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -380,10 +387,10 @@ private struct WorkspaceSidebar: View {
     let onQuickAdd: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 12) {
                 Text("Digital Archivist")
-                    .font(.system(size: 21, weight: .medium, design: .serif))
+                    .font(.system(size: 18, weight: .medium, design: .serif))
                     .italic()
                     .foregroundStyle(appearance.workspaceAccent)
 
@@ -412,15 +419,14 @@ private struct WorkspaceSidebar: View {
 
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Research Library")
-                            .font(.system(size: 15, weight: .semibold))
+                            .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(appearance.workspaceText)
                         Text(sourceTitle)
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(appearance.workspaceMutedText)
                             .lineLimit(2)
                     }
                 }
-                .padding(.vertical, 6)
             }
 
             VStack(spacing: 8) {
@@ -444,11 +450,11 @@ private struct WorkspaceSidebar: View {
                             Spacer(minLength: 0)
                         }
                         .foregroundStyle(selection == item ? appearance.workspaceAccent : appearance.workspaceMutedText)
-                        .padding(.horizontal, 14)
-                        .frame(height: 48)
+                        .padding(.horizontal, 12)
+                        .frame(height: 42)
                         .background(
                             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(selection == item ? appearance.workspaceSelectedFill.opacity(0.78) : WorkspaceColors.paperCanvas.opacity(0.28))
+                                .fill(selection == item ? appearance.workspaceSelectedFill.opacity(0.88) : Color.clear)
                         )
                     }
                     .buttonStyle(.plain)
@@ -463,7 +469,7 @@ private struct WorkspaceSidebar: View {
                     Spacer(minLength: 0)
                 }
                 .foregroundStyle(Color.white)
-                .frame(height: 44)
+                .frame(height: 40)
                 .background(
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .fill(appearance.workspaceAccent.opacity(0.92))
@@ -495,10 +501,10 @@ private struct WorkspaceSidebar: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 14)
-        .frame(width: 174, alignment: .topLeading)
+        .frame(width: 156, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(WorkspaceColors.paperCanvas.opacity(0.22))
+                .fill(WorkspaceColors.paperCanvas.opacity(0.16))
                 .background(
                     .ultraThinMaterial,
                     in: RoundedRectangle(cornerRadius: 24, style: .continuous)
@@ -508,7 +514,7 @@ private struct WorkspaceSidebar: View {
     }
 }
 
-private struct WorkspaceHeaderBar: View {
+private struct WorkspaceMetadataStrip: View {
     @Binding var title: String
     let sourceTitle: String
     let sourceHint: String
@@ -519,26 +525,13 @@ private struct WorkspaceHeaderBar: View {
     let onOpenSource: () -> Void
 
     var body: some View {
-        HStack(spacing: 16) {
-            HStack(spacing: 10) {
-                Button(action: onBack) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "chevron.left")
-                        Text("Back")
-                    }
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(appearance.workspaceText.opacity(0.82))
-                }
-                .buttonStyle(.plain)
-            }
+        HStack(spacing: 14) {
+            iconButton("chevron.left", action: onBack)
 
-            Spacer(minLength: 0)
-
-            VStack(alignment: .center, spacing: 1) {
+            VStack(alignment: .leading, spacing: 2) {
                 TextField("Untitled Note", text: $title)
-                    .font(.system(size: 16, weight: .semibold, design: .serif))
+                    .font(.system(size: 15, weight: .semibold, design: .serif))
                     .foregroundStyle(appearance.workspaceText)
-                    .multilineTextAlignment(.center)
                     .textInputAutocapitalization(.never)
                     .lineLimit(1)
 
@@ -547,24 +540,21 @@ private struct WorkspaceHeaderBar: View {
                     .foregroundStyle(appearance.workspaceMutedText)
                     .lineLimit(1)
             }
-            .frame(maxWidth: 360)
 
             Spacer(minLength: 0)
 
-            HStack(spacing: 10) {
-                Text(saveStatus.uppercased())
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(saveStatus == "已保存" ? Color.green.opacity(0.92) : Color.orange.opacity(0.88))
+            Text(saveStatus.uppercased())
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(saveStatus == "已保存" ? Color.green.opacity(0.92) : Color.orange.opacity(0.88))
 
-                iconButton("doc.text", action: onOpenSource)
-                iconButton("square.and.arrow.up", action: onSave)
-            }
+            iconButton("doc.text", action: onOpenSource)
+            iconButton("square.and.arrow.up", action: onSave)
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(WorkspaceColors.paperCanvas.opacity(0.22))
+                .fill(WorkspaceColors.paperCanvas.opacity(0.16))
                 .background(
                     .ultraThinMaterial,
                     in: RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -578,7 +568,7 @@ private struct WorkspaceHeaderBar: View {
             Image(systemName: icon)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(appearance.workspaceText.opacity(0.78))
-                .frame(width: 30, height: 30)
+                .frame(width: 28, height: 28)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
         .buttonStyle(.plain)
@@ -698,11 +688,11 @@ private struct WorkspaceFloatingToolPalette: View {
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(WorkspaceColors.paperCanvas.opacity(0.26))
+                .fill(WorkspaceColors.paperCanvas.opacity(0.18))
                 .background(
                     .regularMaterial,
                     in: RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -718,13 +708,13 @@ private struct WorkspaceFloatingToolPalette: View {
         } label: {
             VStack(spacing: 5) {
                 Image(systemName: kind.icon)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: 13, weight: .semibold))
                 Text(title)
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.system(size: 9, weight: .medium))
             }
             .foregroundStyle(inkToolState.kind == kind ? appearance.workspaceAccent : appearance.workspaceMutedText)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 13)
+            .padding(.vertical, 7)
             .background(
                 VStack(spacing: 0) {
                     Color.clear
@@ -1093,7 +1083,7 @@ private struct WorkspaceDeskBackdrop: View {
                 colors: [
                     WorkspaceColors.deskLift,
                     WorkspaceColors.deskBackground,
-                    WorkspaceColors.deskLift.opacity(0.96)
+                    WorkspaceColors.deskLift
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
@@ -1101,18 +1091,18 @@ private struct WorkspaceDeskBackdrop: View {
             .ignoresSafeArea()
 
             NotebookGrid(spacing: 40)
-                .opacity(appearance == .night ? 0.02 : 0.028)
+                .opacity(0.022)
                 .ignoresSafeArea()
 
             RadialGradient(
                 colors: [
-                    Color.white.opacity(appearance == .night ? 0.03 : 0.36),
-                    Color.white.opacity(0.08),
+                    Color.white.opacity(0.34),
+                    Color.white.opacity(0.09),
                     .clear
                 ],
-                center: .center,
-                startRadius: 120,
-                endRadius: 860
+                center: .top,
+                startRadius: 90,
+                endRadius: 920
             )
             .ignoresSafeArea()
         }

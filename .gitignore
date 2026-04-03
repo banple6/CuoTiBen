@@ -10,6 +10,7 @@ xcuserdata/
 # Build artifacts
 DerivedData/
 .codex-derived/
+.codex/
 
 # Backend
 backend/node_modules/

@@ -5,6 +5,7 @@ struct TextBlockEditorView: View {
     var title: String = "文本"
     var isHighlighted: Bool = false
     var minimumHeight: CGFloat = 160
+    var presentationStyle: NoteBlockPresentationStyle = .card
     var onDelete: (() -> Void)? = nil
 
     var body: some View {
@@ -35,26 +36,58 @@ struct TextBlockEditorView: View {
             }
 
             TextEditor(text: $text)
-                .font(.system(size: 18, weight: .regular))
+                .font(
+                    presentationStyle == .editorial
+                    ? .system(size: 19, weight: .regular, design: .serif)
+                    : .system(size: 18, weight: .regular)
+                )
                 .foregroundStyle(AppPalette.paperInk.opacity(0.82))
                 .frame(minHeight: minimumHeight)
                 .scrollContentBackground(.hidden)
                 .background(Color.clear)
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 22)
-        .background(
+        .padding(.horizontal, presentationStyle == .editorial ? 0 : 24)
+        .padding(.vertical, presentationStyle == .editorial ? 12 : 22)
+        .background(backgroundView)
+        .overlay(alignment: .topLeading) {
+            topAccent
+        }
+        .overlay(alignment: .leading) {
+            if presentationStyle == .editorial {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill((isHighlighted ? AppPalette.paperTapeBlue : AppPalette.paperHighlightMint).opacity(0.36))
+                    .frame(width: 3)
+                    .padding(.vertical, 8)
+                    .offset(x: -18)
+            }
+        }
+        .shadow(color: presentationStyle == .editorial ? .clear : Color.black.opacity(isHighlighted ? 0.05 : 0.03), radius: 14, y: 8)
+    }
+
+    @ViewBuilder
+    private var backgroundView: some View {
+        if presentationStyle == .editorial {
+            Color.clear
+        } else {
             RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .fill(isHighlighted ? AppPalette.paperCard : Color.white.opacity(0.82))
-        )
-        .overlay(alignment: .topLeading) {
+        }
+    }
+
+    @ViewBuilder
+    private var topAccent: some View {
+        if presentationStyle == .editorial {
+            Rectangle()
+                .fill((isHighlighted ? AppPalette.paperTapeBlue : AppPalette.paperHighlightMint).opacity(0.44))
+                .frame(width: 96, height: 4)
+                .padding(.top, 6)
+        } else {
             Capsule(style: .continuous)
                 .fill(isHighlighted ? AppPalette.paperTapeBlue.opacity(0.72) : AppPalette.paperHighlightMint.opacity(0.62))
                 .frame(width: 72, height: 6)
                 .padding(.top, 12)
                 .padding(.leading, 18)
         }
-        .shadow(color: Color.black.opacity(isHighlighted ? 0.05 : 0.03), radius: 14, y: 8)
     }
 }
 

@@ -23,13 +23,14 @@ struct NoteOutlineFloatingPanel: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 10) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(mode == .structure ? "结构树导航" : "导图导航")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(Color.black.opacity(0.82))
+                    Text(mode == .structure ? "Navigator" : "Mind Map")
+                        .font(.system(size: 11, weight: .bold))
+                        .tracking(1.1)
+                        .foregroundStyle(WorkspaceColors.textSecondary)
 
                     Text(sourceTitle)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Color.black.opacity(0.46))
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(WorkspaceColors.textSecondary.opacity(0.76))
                         .lineLimit(1)
                 }
 
@@ -53,8 +54,8 @@ struct NoteOutlineFloatingPanel: View {
                 mindMapContent
             }
         }
-        .padding(16)
-        .frame(width: 272)
+        .padding(14)
+        .frame(width: 236)
         .background(panelBackground)
     }
 
@@ -63,7 +64,7 @@ struct NoteOutlineFloatingPanel: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text("当前路径")
                     .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(Color.black.opacity(0.68))
+                    .foregroundStyle(WorkspaceColors.textSecondary)
 
                 OutlinePathView(nodes: context.pathNodes)
             }
@@ -72,7 +73,7 @@ struct NoteOutlineFloatingPanel: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("当前节点")
                         .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(Color.black.opacity(0.68))
+                        .foregroundStyle(WorkspaceColors.textSecondary)
 
                     OutlineNodeRow(node: currentNode, isCurrent: true) {
                         onSelectNode(currentNode.id)
@@ -84,7 +85,7 @@ struct NoteOutlineFloatingPanel: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("邻近节点")
                         .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(Color.black.opacity(0.68))
+                        .foregroundStyle(WorkspaceColors.textSecondary)
 
                     ForEach(context.nearbyNodes) { node in
                         OutlineNodeRow(node: node, isCurrent: node.id == context.currentNode?.id) {
@@ -100,7 +101,7 @@ struct NoteOutlineFloatingPanel: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("当前路径")
                 .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(Color.black.opacity(0.68))
+                .foregroundStyle(WorkspaceColors.textSecondary)
 
             OutlinePathView(nodes: context.pathNodes)
 
@@ -121,14 +122,14 @@ struct NoteOutlineFloatingPanel: View {
                         mode = item
                     }
                 } label: {
-                    Text(item.title)
-                        .font(.system(size: 12.5, weight: .bold))
+                        Text(item.title)
+                        .font(.system(size: 11.5, weight: .bold))
                         .foregroundStyle(mode == item ? WorkspaceColors.primaryInk : WorkspaceColors.textSecondary)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
                         .background(
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(mode == item ? WorkspaceColors.primaryInk.opacity(0.12) : WorkspaceColors.paperCanvas.opacity(0.36))
+                                .fill(mode == item ? WorkspaceColors.primaryInk.opacity(0.1) : WorkspaceColors.paperCanvas.opacity(0.2))
                         )
                 }
                 .buttonStyle(.plain)
@@ -141,11 +142,11 @@ struct NoteOutlineFloatingPanel: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(mode == .structure ? "结构树" : "导图")
                     .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(Color.black.opacity(0.44))
+                    .foregroundStyle(WorkspaceColors.textSecondary)
 
                 Text(context.currentNode?.title ?? "展开导航")
                     .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(Color.black.opacity(0.78))
+                    .foregroundStyle(WorkspaceColors.textPrimary)
                     .lineLimit(2)
             }
 
@@ -161,7 +162,7 @@ struct NoteOutlineFloatingPanel: View {
             .buttonStyle(.plain)
         }
         .padding(16)
-        .frame(width: 190)
+        .frame(width: 168)
         .background(panelBackground)
     }
 
@@ -172,7 +173,7 @@ struct NoteOutlineFloatingPanel: View {
                 Text("结构树")
             }
             .font(.system(size: 13, weight: .bold))
-            .foregroundStyle(Color.black.opacity(0.72))
+            .foregroundStyle(WorkspaceColors.textPrimary)
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
             .background(panelBackground)
@@ -182,7 +183,7 @@ struct NoteOutlineFloatingPanel: View {
 
     private var panelBackground: some View {
         RoundedRectangle(cornerRadius: 24, style: .continuous)
-            .fill(WorkspaceColors.paperCanvas.opacity(0.18))
+            .fill(WorkspaceColors.paperCanvas.opacity(0.14))
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
             .shadow(color: WorkspaceColors.paperShadow, radius: 32, x: 0, y: 8)
     }

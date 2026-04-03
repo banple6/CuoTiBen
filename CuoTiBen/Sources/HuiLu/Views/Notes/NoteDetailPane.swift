@@ -27,6 +27,10 @@ struct NoteDetailPane: View {
     @State private var cachedLinkedKnowledgePoints: [KnowledgePoint] = []
     @State private var cachedSourceDocument: SourceDocument?
 
+    private var isPad: Bool {
+        UIDevice.current.userInterfaceIdiom == .pad
+    }
+
     private var detailModel: NoteDetailViewModel? {
         guard let draftNote else { return nil }
         return NoteDetailViewModel(
@@ -60,16 +64,8 @@ struct NoteDetailPane: View {
                 emptyState
             }
         }
-        .padding(24)
-        .background(
-            RoundedRectangle(cornerRadius: 32, style: .continuous)
-                .fill(AppPalette.paperCard)
-                .overlay(alignment: .topTrailing) {
-                    PaperTapeAccent(color: AppPalette.paperTapeBlue, width: 78, height: 18)
-                        .offset(x: 10, y: -8)
-                }
-                .shadow(color: WorkspaceColors.paperShadow, radius: 32, x: 0, y: 8)
-        )
+        .padding(isPad ? 34 : 24)
+        .background(notePaneShell)
         .onAppear {
             syncDraftNote(force: true)
         }
@@ -109,6 +105,45 @@ struct NoteDetailPane: View {
                 sourceJumpTarget = nil
             }
             .environmentObject(appViewModel)
+        }
+    }
+
+    @ViewBuilder
+    private var notePaneShell: some View {
+        if isPad {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(ArchivistColors.paperCanvas)
+                .overlay {
+                    PaperTextureOverlay()
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                }
+                .overlay(alignment: .topLeading) {
+                    Rectangle()
+                        .fill(ArchivistColors.blueWash.opacity(0.72))
+                        .frame(width: 96, height: 20)
+                        .rotationEffect(.degrees(-2.4))
+                        .offset(x: 34, y: -8)
+                }
+                .overlay(alignment: .topTrailing) {
+                    if let sourceTitle = draftNote?.sourceAnchor.sourceTitle.nonEmpty {
+                        Text(sourceTitle)
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .textCase(.uppercase)
+                            .tracking(1.8)
+                            .foregroundStyle(ArchivistColors.softInk)
+                            .padding(.top, 24)
+                            .padding(.trailing, 30)
+                    }
+                }
+                .archivistFloatingShadow()
+        } else {
+            RoundedRectangle(cornerRadius: 32, style: .continuous)
+                .fill(AppPalette.paperCard)
+                .overlay(alignment: .topTrailing) {
+                    PaperTapeAccent(color: AppPalette.paperTapeBlue, width: 78, height: 18)
+                        .offset(x: 10, y: -8)
+                }
+                .shadow(color: WorkspaceColors.paperShadow, radius: 32, x: 0, y: 8)
         }
     }
 

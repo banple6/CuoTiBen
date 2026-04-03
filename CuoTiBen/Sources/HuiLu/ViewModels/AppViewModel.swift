@@ -73,6 +73,7 @@ final class AppViewModel: ObservableObject {
     private let reviewScheduler: ReviewScheduler
     private let noteRepository: NoteRepository
     private let knowledgePointExtractionService: KnowledgePointExtractionService
+    lazy var dependencies: DependencyContainer = makeDependencyContainer()
     private var cachedKnowledgePoints: [KnowledgePoint]?
     private var cachedKnowledgePointLookup: [String: KnowledgePoint]?
     private var cachedLearningRecordContextService: LearningRecordContextService?
@@ -119,6 +120,26 @@ final class AppViewModel: ObservableObject {
         self.streakDays = dailyProgress.streakDays
         self.dailyGoal = max(dailyProgress.pendingReviewsCount, 20)
         self.sourceReaderMode = Self.restoreSourceReaderMode()
+    }
+
+    private func makeDependencyContainer() -> DependencyContainer {
+        let sourceRepository = AppStateSourceRepository(appViewModel: self)
+        let knowledgePointRepository = AppStateKnowledgePointRepository(appViewModel: self)
+        let reviewRepository = AppStateReviewRepository(appViewModel: self)
+        let learningRecordContextProvider = AppLearningRecordContextProvider(appViewModel: self)
+        let sourceJumpRouter = AppStateSourceJumpRouter(appViewModel: self)
+        return DependencyContainer(
+            noteRepository: noteRepository,
+            sourceRepository: sourceRepository,
+            knowledgePointRepository: knowledgePointRepository,
+            reviewRepository: reviewRepository,
+            knowledgePointExtractionService: knowledgePointExtractionService,
+            learningRecordContextProvider: learningRecordContextProvider,
+            sourceJumpRouter: sourceJumpRouter,
+            onNotesChanged: { [weak self] notes in
+                self?.notes = notes
+            }
+        )
     }
 
     var progressPercentage: Double {
@@ -221,6 +242,10 @@ final class AppViewModel: ObservableObject {
 
     func structuredSource(for document: SourceDocument) -> StructuredSourceBundle? {
         structuredSources[document.id]
+    }
+
+    func structuredSource(for sourceID: UUID) -> StructuredSourceBundle? {
+        structuredSources[sourceID]
     }
 
     func reviewWorkbenchProgress(for document: SourceDocument) -> ReviewWorkbenchProgress {
@@ -656,21 +681,7 @@ final class AppViewModel: ObservableObject {
 
     @discardableResult
     func persistWorkspaceNote(_ note: Note) -> Note? {
-        var updated = note
-        updated.knowledgePoints = mergedKnowledgePoints(
-            explicit: updated.knowledgePoints,
-            linkedIDs: updated.linkedKnowledgePointIDs
-        )
-        updated.updatedAt = Date()
-
-        do {
-            try noteRepository.updateNote(updated)
-            notes = (try? noteRepository.fetchAllNotes()) ?? notes
-            return updated
-        } catch {
-            print("[AppViewModel] persist workspace note failed: \(error.localizedDescription)")
-            return nil
-        }
+        dependencies.notesFlowCoordinator.persistWorkspaceNote(note)
     }
 
     func noteSourceBundle(for note: Note) -> StructuredSourceBundle? {
@@ -693,67 +704,20 @@ final class AppViewModel: ObservableObject {
         inkData: Data?,
         inkBlock: NoteBlock? = nil
     ) -> Note? {
-        let normalizedTags = normalizedItems(from: tags)
-        let resolvedTitle = title.nonEmpty ?? existingNote?.title ?? seed.suggestedTitle
-        let knowledgePoints = knowledgePointExtractionService.extract(
-            titles: knowledgePointTitles,
-            suggestedPoints: existingNote?.knowledgePoints ?? seed.suggestedKnowledgePoints,
-            tags: normalizedTags,
-            noteTitle: resolvedTitle,
-            body: body.nonEmpty ?? seed.suggestedBody,
-            quote: seed.anchor.quotedText
+        let request = NoteDraftRequest(
+            existingNote: existingNote,
+            seed: seed,
+            title: title,
+            body: body,
+            tags: tags,
+            knowledgePointTitles: knowledgePointTitles,
+            inkData: inkData,
+            inkBlock: inkBlock
         )
-
-        var blocks: [NoteBlock] = [
-            .quote(seed.anchor.quotedText)
-        ]
-
-        if let body = body.nonEmpty {
-            blocks.append(.text(body))
+        if seed.suggestedTags.contains("单词讲解") || seed.suggestedTitle.hasPrefix("单词笔记") {
+            return dependencies.notesFlowCoordinator.createOrUpdateWordNote(request)
         }
-
-        if let inkData, !inkData.isEmpty {
-            if var inkBlock {
-                inkBlock.inkData = inkData
-                blocks.append(inkBlock)
-            } else {
-                blocks.append(.ink(inkData, linkedSourceAnchorID: seed.anchor.id))
-            }
-        }
-
-        let resolvedKnowledgePoints = mergedKnowledgePoints(
-            explicit: knowledgePoints,
-            linkedIDs: blocks.flatMap(\.linkedKnowledgePointIDs)
-        )
-
-        let now = Date()
-
-        do {
-            if var existingNote {
-                existingNote.title = resolvedTitle
-                existingNote.sourceAnchor = seed.anchor
-                existingNote.blocks = blocks
-                existingNote.tags = normalizedTags
-                existingNote.knowledgePoints = resolvedKnowledgePoints
-                existingNote.updatedAt = now
-                try noteRepository.updateNote(existingNote)
-                notes = (try? noteRepository.fetchAllNotes()) ?? notes
-                return existingNote
-            } else {
-                var created = try noteRepository.createNote(from: seed.sentence, anchor: seed.anchor)
-                created.title = resolvedTitle
-                created.blocks = blocks
-                created.tags = normalizedTags
-                created.knowledgePoints = resolvedKnowledgePoints
-                created.updatedAt = now
-                try noteRepository.updateNote(created)
-                notes = (try? noteRepository.fetchAllNotes()) ?? notes
-                return created
-            }
-        } catch {
-            print("[AppViewModel] save note failed: \(error.localizedDescription)")
-            return nil
-        }
+        return dependencies.notesFlowCoordinator.createOrUpdateSentenceNote(request)
     }
 
     @discardableResult
@@ -765,48 +729,16 @@ final class AppViewModel: ObservableObject {
         inkData: Data?,
         inkBlock: NoteBlock? = nil
     ) -> Note? {
-        var updatedNote = notes.first(where: { $0.id == note.id }) ?? note
-        let normalizedTags = normalizedItems(from: updatedNote.tags + tags)
-
-        if let appendedText = body.nonEmpty {
-            updatedNote.blocks.append(.text(appendedText))
-        }
-
-        if let inkData, !inkData.isEmpty {
-            if var inkBlock {
-                inkBlock.inkData = inkData
-                updatedNote.blocks.append(inkBlock)
-            } else {
-                updatedNote.blocks.append(.ink(inkData, linkedSourceAnchorID: updatedNote.sourceAnchor.id))
-            }
-        }
-
-        let mergedBody = updatedNote.textBlocks
-            .compactMap(\.text)
-            .joined(separator: "\n\n")
-        updatedNote.tags = normalizedTags
-        let extractedKnowledgePoints = knowledgePointExtractionService.extract(
-            titles: updatedNote.knowledgePoints.map(\.title) + knowledgePointTitles,
-            suggestedPoints: updatedNote.knowledgePoints,
-            tags: normalizedTags,
-            noteTitle: updatedNote.title,
-            body: mergedBody,
-            quote: updatedNote.sourceAnchor.quotedText
+        dependencies.notesFlowCoordinator.appendBlocks(
+            NoteAppendRequest(
+                note: notes.first(where: { $0.id == note.id }) ?? note,
+                body: body,
+                tags: tags,
+                knowledgePointTitles: knowledgePointTitles,
+                inkData: inkData,
+                inkBlock: inkBlock
+            )
         )
-        updatedNote.knowledgePoints = mergedKnowledgePoints(
-            explicit: extractedKnowledgePoints,
-            linkedIDs: updatedNote.linkedKnowledgePointIDs
-        )
-        updatedNote.updatedAt = Date()
-
-        do {
-            try noteRepository.updateNote(updatedNote)
-            notes = (try? noteRepository.fetchAllNotes()) ?? notes
-            return updatedNote
-        } catch {
-            print("[AppViewModel] append note blocks failed: \(error.localizedDescription)")
-            return nil
-        }
     }
 
     func deleteNote(_ note: Note) {
