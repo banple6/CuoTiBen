@@ -14,49 +14,25 @@ struct NotesHomeView: View {
     @State private var selectedTab: NotesHomeTab = .recent
     @State private var searchText = ""
     @State private var activeFilter: NotesFilterMode = .all
-    @State private var selectedNoteID: UUID?
-    @State private var workspaceNote: Note?
     @State private var screenModel = NotesHomeViewModel.empty
 
     private var isPad: Bool {
         UIDevice.current.userInterfaceIdiom == .pad
     }
 
-    private var isWorkspacePresented: Binding<Bool> {
-        Binding(
-            get: { workspaceNote != nil },
-            set: { isPresented in
-                if !isPresented {
-                    workspaceNote = nil
-                }
-            }
-        )
-    }
-
     var body: some View {
         Group {
             if isPad {
-                NavigationStack {
-                    NotesSplitView(
-                        screenModel: screenModel,
-                        selectedTab: $selectedTab,
-                        searchText: $searchText,
-                        activeFilter: $activeFilter,
-                        selectedNoteID: $selectedNoteID,
-                        onOpenSource: onOpenSource,
-                        onOpenWorkspace: { note in
-                            workspaceNote = note
-                        },
-                        showsCloseButton: showsCloseButton,
-                        onClose: showsCloseButton ? { dismiss() } : nil
-                    )
-                    .navigationDestination(isPresented: isWorkspacePresented) {
-                        if let workspaceNote {
-                            NoteWorkspaceView(note: workspaceNote, onOpenSource: onOpenSource)
-                                .environmentObject(viewModel)
-                        }
-                    }
-                }
+                // Single persistent workspace — no NavigationStack, no push layers
+                NotebookWorkspaceView(
+                    screenModel: screenModel,
+                    selectedTab: $selectedTab,
+                    searchText: $searchText,
+                    activeFilter: $activeFilter,
+                    showsCloseButton: showsCloseButton,
+                    onClose: showsCloseButton ? { dismiss() } : nil,
+                    onOpenSource: onOpenSource
+                )
             } else {
                 phoneBody
             }

@@ -11,18 +11,16 @@ struct NoteDetailView: View {
     }
 
     var body: some View {
-        ZStack {
-            AppBackground(style: .light)
-
-            NoteDetailPane(
-                note: currentNote,
-                onOpenSource: onOpenSource
-            )
-            .padding(.horizontal, 16)
-            .padding(.vertical, 18)
-        }
-        .navigationTitle("笔记详情")
+        NoteDetailPane(
+            note: currentNote,
+            onOpenSource: onOpenSource
+        )
+        .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(
+            Color(red: 251 / 255, green: 249 / 255, blue: 244 / 255), // surface
+            for: .navigationBar
+        )
     }
 }
 

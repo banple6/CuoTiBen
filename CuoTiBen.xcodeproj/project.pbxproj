@@ -67,6 +67,9 @@
 		B0000000000000000000003A /* InkAssistSuggestionBubble.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000003A /* InkAssistSuggestionBubble.swift */; };
 		B0000000000000000000003B /* NoteWorkspaceViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000003B /* NoteWorkspaceViewModel.swift */; };
 		B0000000000000000000003C /* NoteWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000003C /* NoteWorkspaceView.swift */; };
+		B0000000000000000000005E /* NotebookWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000005E /* NotebookWorkspaceView.swift */; };
+		B0000000000000000000005F /* NotebookPageCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000005F /* NotebookPageCanvasView.swift */; };
+		B00000000000000000000060 /* ReferencePanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000060 /* ReferencePanel.swift */; };
 		B0000000000000000000003D /* WorkspaceTopBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000003D /* WorkspaceTopBar.swift */; };
 		B0000000000000000000003E /* NoteCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000003E /* NoteCanvasView.swift */; };
 		B0000000000000000000003F /* QuoteBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000003F /* QuoteBlockView.swift */; };
@@ -164,6 +167,9 @@
 		C0000000000000000000003A /* InkAssistSuggestionBubble.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InkAssistSuggestionBubble.swift; sourceTree = "<group>"; };
 		C0000000000000000000003B /* NoteWorkspaceViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteWorkspaceViewModel.swift; sourceTree = "<group>"; };
 		C0000000000000000000003C /* NoteWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteWorkspaceView.swift; sourceTree = "<group>"; };
+		C0000000000000000000005E /* NotebookWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotebookWorkspaceView.swift; sourceTree = "<group>"; };
+		C0000000000000000000005F /* NotebookPageCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotebookPageCanvasView.swift; sourceTree = "<group>"; };
+		C00000000000000000000060 /* ReferencePanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferencePanel.swift; sourceTree = "<group>"; };
 		C0000000000000000000003D /* WorkspaceTopBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceTopBar.swift; sourceTree = "<group>"; };
 		C0000000000000000000003E /* NoteCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteCanvasView.swift; sourceTree = "<group>"; };
 		C0000000000000000000003F /* QuoteBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuoteBlockView.swift; sourceTree = "<group>"; };
@@ -471,8 +477,9 @@
 				C00000000000000000000051 /* NoteListRow.swift */,
 				C00000000000000000000042 /* NoteOutlineFloatingPanel.swift */,
 				C0000000000000000000004D /* NoteNotebookView.swift */,
-				C0000000000000000000003C /* NoteWorkspaceView.swift */,
-				C0000000000000000000004B /* RelatedCardsSection.swift */,
+				C0000000000000000000003C /* NoteWorkspaceView.swift */,					C0000000000000000000005E /* NotebookWorkspaceView.swift */,
+				C0000000000000000000005F /* NotebookPageCanvasView.swift */,
+				C00000000000000000000060 /* ReferencePanel.swift */,				C0000000000000000000004B /* RelatedCardsSection.swift */,
 				C00000000000000000000047 /* RelatedContextPanel.swift */,
 				C00000000000000000000049 /* RelatedKnowledgePointsSection.swift */,
 				C00000000000000000000048 /* RelatedNotesSection.swift */,
@@ -624,8 +631,9 @@
 				B00000000000000000000051 /* NoteListRow.swift in Sources */,
 				B00000000000000000000042 /* NoteOutlineFloatingPanel.swift in Sources */,
 				B0000000000000000000004D /* NoteNotebookView.swift in Sources */,
-				B0000000000000000000003C /* NoteWorkspaceView.swift in Sources */,
-				B0000000000000000000004B /* RelatedCardsSection.swift in Sources */,
+				B0000000000000000000003C /* NoteWorkspaceView.swift in Sources */,						B0000000000000000000005E /* NotebookWorkspaceView.swift in Sources */,
+				B0000000000000000000005F /* NotebookPageCanvasView.swift in Sources */,
+				B00000000000000000000060 /* ReferencePanel.swift in Sources */,				B0000000000000000000004B /* RelatedCardsSection.swift in Sources */,
 				B00000000000000000000047 /* RelatedContextPanel.swift in Sources */,
 				B00000000000000000000049 /* RelatedKnowledgePointsSection.swift in Sources */,
 				B00000000000000000000048 /* RelatedNotesSection.swift in Sources */,

@@ -176,6 +176,21 @@ final class NoteWorkspaceViewModel: ObservableObject {
         markDirty()
     }
 
+    /// Insert an arbitrary quote excerpt into the note
+    func insertQuote(text: String, anchorID: String? = nil) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        blocks.append(
+            NoteBlock(
+                kind: .quote,
+                text: trimmed,
+                linkedSourceAnchorID: anchorID ?? note.sourceAnchor.id
+            )
+        )
+        highlightedBlockID = blocks.last?.id
+        markDirty()
+    }
+
     func linkKnowledgePoint(_ pointID: String, using appViewModel: AppViewModel, to blockID: UUID) {
         guard let blockIndex = blocks.firstIndex(where: { $0.id == blockID }) else { return }
 

@@ -38,6 +38,16 @@ struct ContentView: View {
     @StateObject private var viewModel = AppViewModel()
     @State private var selectedTab: MainTab = .home
 
+    private var isPad: Bool {
+        UIDevice.current.userInterfaceIdiom == .pad
+    }
+
+    // Hide the floating tab bar when notes tab is active on iPad
+    // (NotesSplitView has its own integrated chrome)
+    private var hidesTabBar: Bool {
+        isPad && selectedTab == .notes
+    }
+
     var body: some View {
         ZStack(alignment: .bottom) {
             Group {
@@ -54,9 +64,11 @@ struct ContentView: View {
             }
             .environmentObject(viewModel)
 
-            BottomGlassTabBar(selectedTab: $selectedTab)
-                .padding(.horizontal, 18)
-                .padding(.bottom, 4)
+            if !hidesTabBar {
+                BottomGlassTabBar(selectedTab: $selectedTab)
+                    .padding(.horizontal, 18)
+                    .padding(.bottom, 4)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .switchToReviewTab)) { _ in
             withAnimation(.spring(response: 0.36, dampingFraction: 0.86)) {

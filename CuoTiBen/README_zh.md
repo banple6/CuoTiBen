@@ -1,6 +1,6 @@
 # 慧录 / CuoTiBen 开发记录
 
-截至 `2026-04-03`，这个项目已经从最初的 SwiftUI 原型推进到了一个可运行的英语学习工作台，主链路包括：
+截至 `2026-04-05`，这个项目已经从最初的 SwiftUI 原型推进到了一个可运行的英语学习工作台，主链路包括：
 
 - 英语资料导入、OCR、结构化理解与大纲树
 - 原始 PDF / 阅读版 PDF 双模式阅读
@@ -15,7 +15,7 @@
 
 - 首页正从玻璃卡片过渡到桌面 / 便签式 dashboard
 - 知识库正过渡到文件夹 / 练习册式资料柜
-- 笔记工作台已完成一轮 `Digital Archivist` 重构，并在本轮进一步改成 **paper-first academic workspace**
+- 笔记工作台已完成一轮 `Digital Archivist` 重构，并在本轮进一步切到 **single persistent paper-first workspace**
 
 本文档用于记录当前实际开发进度、项目结构、运行方式和最近迭代日志。
 
@@ -46,7 +46,7 @@
 - 当前主界面正在向统一的“纸张隐喻 + 档案工作台 + 学术阅读台”设计语言收敛：
   - 首页正从玻璃卡片过渡到桌面/便签式 dashboard
   - 知识库正过渡到文件夹/练习册式资料柜
-  - 笔记工作台已完成一轮 `Digital Archivist` 风格重构，并已修复相关设计系统编译问题
+  - 笔记工作台已完成一轮 `Digital Archivist` 风格重构，并在最新一轮改成 iPad 单一常驻纸张工作区
 - 中间层架构已经开始成型：
   - `Repository` 负责数据访问抽象
   - `UseCase` 负责笔记相关动作
@@ -247,6 +247,10 @@
   - 顶部工具层和右侧浮窗已切换为 SwiftUI `Material` 悬浮面板
   - 知识点标签已改成纸胶带 `Washi` 风格
   - 完整笔记页的分析区已改为层叠便利贴式分析卡片
+  - 最新一轮已将 `NotesHomeView` 的 iPad 路由切到 `NotebookWorkspaceView`，不再先展示列表详情再 push 到工作台
+  - 新增 `NotebookPageCanvasView`，改成整页稿纸滚动画布，支持手写与正文共处
+  - 新增 `ReferencePanel`，可在右侧面板查看结构树 / 原文 / 导图，并直接把原文摘录插入当前笔记
+  - iPad 笔记态会自动隐藏底部 `BottomGlassTabBar`，让中央纸页成为绝对主视觉
 
 ### 🎨 Digital Archivist 学术工作区 (v1.0.0 - 2026-04-01)
 
@@ -725,6 +729,21 @@ rm -rf /tmp/CuoTiBen*
 
 ## 最近开发日志
 
+### 2026-04-05
+
+- 完成 iPad 笔记区的新一轮工作流切换：
+  - `NotesHomeView` 在 iPad 上不再使用 `NavigationStack + NoteDetailPane + workspace push` 的旧路径
+  - 改为直接进入单一常驻工作区 `NotebookWorkspaceView`
+  - 左侧保留资料/笔记索引，中间固定为整页纸张画布，右侧为可开合参考面板
+- 完成新工作区核心组件接入：
+  - 新增 `NotebookPageCanvasView`，采用 `UIScrollView + PKCanvasView` 组合，让 Pencil 手写与稿纸滚动共存
+  - 新增 `ReferencePanel`，支持结构树、原文、思维导图三种上下文视图
+  - `NoteWorkspaceViewModel` 新增 `insertQuote(text:anchorID:)`，用于从参考面板直接摘录原文或结构摘要
+- 完成 iPad 笔记模式界面收口：
+  - `ContentView` 在 iPad 的 notes tab 下隐藏全局底部 tab bar
+  - `NoteDetailPane` 和 `NotesSplitView` 继续向更克制的 editorial paper 视觉收敛
+  - GitHub 首页新增根目录 `README.md`，补齐仓库级项目说明
+
 ### 2026-04-03
 
 - 完成笔记中间层架构第一轮解耦：
@@ -935,4 +954,4 @@ rm -rf /tmp/CuoTiBen*
 
 ---
 
-文档更新时间：`2026-04-03`
+文档更新时间：`2026-04-05`
