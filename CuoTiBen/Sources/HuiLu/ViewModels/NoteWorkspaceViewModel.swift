@@ -45,12 +45,14 @@ final class NoteWorkspaceViewModel: ObservableObject {
     @Published private(set) var outlineContext: WorkspaceOutlineContext
     @Published var title: String
     @Published var blocks: [NoteBlock]
+    @Published var textObjects: [CanvasTextObject]
     @Published var selectedOutlineNodeID: String? {
         didSet {
             rebuildOutlineContext()
         }
     }
     @Published var highlightedBlockID: UUID?
+    @Published var editingTextBlockID: UUID?
     @Published var panelState: NoteOutlineFloatingPanelState = .hidden
     @Published var panelMode: NoteOutlineFloatingPanelMode = .structure
     @Published var isDirty = false
@@ -61,6 +63,7 @@ final class NoteWorkspaceViewModel: ObservableObject {
         self.note = note
         self.title = note.title
         self.blocks = note.blocks
+        self.textObjects = note.textObjects
         self.selectedOutlineNodeID = note.sourceAnchor.outlineNodeID
         self.outlineContext = WorkspaceOutlineContext(
             currentNode: nil,
@@ -99,6 +102,7 @@ final class NoteWorkspaceViewModel: ObservableObject {
             note = refreshed
             title = refreshed.title
             blocks = refreshed.blocks
+            textObjects = refreshed.textObjects
             lastSavedAt = refreshed.updatedAt
         }
 
@@ -136,9 +140,120 @@ final class NoteWorkspaceViewModel: ObservableObject {
         markDirty()
     }
 
+    /// Sync ink data from the live PKCanvasView into the blocks array.
+    /// Call this before saving — the PKCanvasView is the source of truth for ink while open.
+    func syncInkFromBridge(_ bridge: InkActionBridge) {
+        guard let data = bridge.currentDrawingData(), !data.isEmpty else { return }
+        let bounds = bridge.currentDrawingBounds()
+
+        if let idx = blocks.firstIndex(where: { $0.kind == .ink }) {
+            blocks[idx].inkData = data
+            blocks[idx].inkGeometry = InkGeometry(normalizedBounds: bounds, pageCount: blocks[idx].inkGeometry?.pageCount)
+            blocks[idx].updatedAt = Date()
+        } else {
+            var newBlock = NoteBlock(kind: .ink, inkData: data, linkedSourceAnchorID: sourceAnchor.id)
+            newBlock.inkGeometry = InkGeometry(normalizedBounds: bounds)
+            blocks.append(newBlock)
+        }
+    }
+
+    /// Mark as dirty without triggering redundant body re-renders.
+    func markInkDirty() {
+        if !isDirty { isDirty = true }
+    }
+
     func addTextBlock() {
         blocks.append(NoteBlock(kind: .text, text: ""))
-        highlightedBlockID = blocks.last?.id
+        let newID = blocks.last?.id
+        highlightedBlockID = newID
+        editingTextBlockID = newID
+        markDirty()
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // MARK: - Canvas Text Object CRUD
+    // ═══════════════════════════════════════════════════════════
+
+    /// Create a new text object at the given paper-space position. Returns the new object's ID.
+    @discardableResult
+    func createTextObject(at point: CGPoint, width: CGFloat = 260) -> UUID {
+        let nextZ = (textObjects.map(\.zIndex).max() ?? -1) + 1
+        let obj = CanvasTextObject(
+            text: "",
+            x: point.x,
+            y: point.y,
+            width: width,
+            zIndex: nextZ
+        )
+        textObjects.append(obj)
+        markDirty()
+        return obj.id
+    }
+
+    func updateTextObject(id: UUID, text: String) {
+        guard let idx = textObjects.firstIndex(where: { $0.id == id }) else { return }
+        textObjects[idx].text = text
+        textObjects[idx].updatedAt = Date()
+        markDirty()
+    }
+
+    func moveTextObject(id: UUID, to point: CGPoint) {
+        guard let idx = textObjects.firstIndex(where: { $0.id == id }) else { return }
+        textObjects[idx].x = point.x
+        textObjects[idx].y = point.y
+        textObjects[idx].updatedAt = Date()
+        markDirty()
+    }
+
+    func resizeTextObject(id: UUID, x: CGFloat? = nil, y: CGFloat? = nil, width: CGFloat, height: CGFloat) {
+        guard let idx = textObjects.firstIndex(where: { $0.id == id }) else { return }
+        if let x = x { textObjects[idx].x = x }
+        if let y = y { textObjects[idx].y = y }
+        textObjects[idx].width = max(width, 80)
+        textObjects[idx].height = max(height, 32)
+        textObjects[idx].updatedAt = Date()
+        markDirty()
+    }
+
+    func updateTextObjectStyle(
+        id: UUID,
+        textStyle: BlockTextStyle? = nil,
+        textColor: BlockTextColor? = nil,
+        highlightStyle: BlockHighlight? = nil,
+        fontSizePreset: BlockFontSize? = nil,
+        textAlignment: CanvasTextAlignment? = nil
+    ) {
+        guard let idx = textObjects.firstIndex(where: { $0.id == id }) else { return }
+        if let v = textStyle { textObjects[idx].textStyle = v }
+        if let v = textColor { textObjects[idx].textColor = v }
+        if let v = highlightStyle { textObjects[idx].highlightStyle = v }
+        if let v = fontSizePreset { textObjects[idx].fontSizePreset = v }
+        if let v = textAlignment { textObjects[idx].textAlignment = v }
+        textObjects[idx].updatedAt = Date()
+        markDirty()
+    }
+
+    func deleteTextObject(id: UUID) {
+        textObjects.removeAll { $0.id == id }
+        markDirty()
+    }
+
+    func textObject(with id: UUID) -> CanvasTextObject? {
+        textObjects.first { $0.id == id }
+    }
+
+    var editingBlock: NoteBlock? {
+        guard let id = editingTextBlockID else { return nil }
+        return blocks.first(where: { $0.id == id })
+    }
+
+    func updateBlockStyle(id: UUID, textStyle: BlockTextStyle?, textColor: BlockTextColor?, highlightStyle: BlockHighlight?, fontSizePreset: BlockFontSize?) {
+        guard let index = blocks.firstIndex(where: { $0.id == id }) else { return }
+        blocks[index].textStyle = textStyle
+        blocks[index].textColor = textColor
+        blocks[index].highlightStyle = highlightStyle
+        blocks[index].fontSizePreset = fontSizePreset
+        blocks[index].updatedAt = Date()
         markDirty()
     }
 
@@ -236,12 +351,14 @@ final class NoteWorkspaceViewModel: ObservableObject {
 
         note.title = normalizedTitle
         note.blocks = normalizedBlocks
+        note.textObjects = normalizedTextObjects
         note.updatedAt = Date()
 
         if let saved = appViewModel.persistWorkspaceNote(note) {
             note = saved
             title = saved.title
             blocks = saved.blocks
+            textObjects = saved.textObjects
             lastSavedAt = saved.updatedAt
             linkedKnowledgePoints = appViewModel.linkedKnowledgePoints(for: saved.linkedKnowledgePointIDs)
             isDirty = false
@@ -270,6 +387,11 @@ final class NoteWorkspaceViewModel: ObservableObject {
         }
     }
 
+    /// Filters out text objects that the user left completely empty.
+    private var normalizedTextObjects: [CanvasTextObject] {
+        textObjects.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
     private func relatedBlockID(for nodeID: String?) -> UUID? {
         guard let nodeID else {
             return blocks.first?.id
@@ -289,7 +411,7 @@ final class NoteWorkspaceViewModel: ObservableObject {
     }
 
     private func markDirty() {
-        isDirty = true
+        if !isDirty { isDirty = true }
     }
 
     private func linkedSourceAnchor(with id: String) -> SourceAnchor? {

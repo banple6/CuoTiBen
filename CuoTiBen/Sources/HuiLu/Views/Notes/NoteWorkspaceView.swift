@@ -339,7 +339,7 @@ struct NoteWorkspaceView: View {
             .split(separator: ",")
             .map(String.init)
         if !tokens.isEmpty {
-            inkToolState.recentColorTokens = Array(tokens.prefix(6))
+            inkToolState.penColorTokens = Array(tokens.prefix(6))
         }
     }
 }

@@ -142,7 +142,7 @@ struct HomeView: View {
                 DashboardRailItem(icon: "note.text", title: "笔记", isSelected: false) {
                     showsNotesHome = true
                 }
-                DashboardRailItem(icon: "arrow.trianglehead.2.clockwise.rotate.90", title: "复习", isSelected: false) {
+                DashboardRailItem(icon: "arrow.triangle.2.circlepath", title: "复习", isSelected: false) {
                     if let primaryWorkbenchDocument {
                         selectedWorkbenchDocument = primaryWorkbenchDocument
                     } else {

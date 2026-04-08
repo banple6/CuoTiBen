@@ -1,6 +1,6 @@
 # 慧录 / CuoTiBen 开发记录
 
-截至 `2026-04-05`，这个项目已经从最初的 SwiftUI 原型推进到了一个可运行的英语学习工作台，主链路包括：
+截至 `2026-04-08`，这个项目已经从最初的 SwiftUI 原型推进到了一个可运行的英语学习工作台，主链路包括：
 
 - 英语资料导入、OCR、结构化理解与大纲树
 - 原始 PDF / 阅读版 PDF 双模式阅读
@@ -16,6 +16,8 @@
 - 首页正从玻璃卡片过渡到桌面 / 便签式 dashboard
 - 知识库正过渡到文件夹 / 练习册式资料柜
 - 笔记工作台已完成一轮 `Digital Archivist` 重构，并在本轮进一步切到 **single persistent paper-first workspace**
+- 最新一轮完成了 **PencilKit 手写墨迹底层稳定化 + 自由画布文本对象系统 + 完整手写工具面板**
+- 文本对象系统已进一步收口到 **Canvas object shell + UITextView input core + transient frame / commit on end** 的稳定交互架构
 
 本文档用于记录当前实际开发进度、项目结构、运行方式和最近迭代日志。
 
@@ -251,6 +253,95 @@
   - 新增 `NotebookPageCanvasView`，改成整页稿纸滚动画布，支持手写与正文共处
   - 新增 `ReferencePanel`，可在右侧面板查看结构树 / 原文 / 导图，并直接把原文摘录插入当前笔记
   - iPad 笔记态会自动隐藏底部 `BottomGlassTabBar`，让中央纸页成为绝对主视觉
+
+### 11. 手写工具系统与墨迹稳定化 (2026-04-06)
+
+**核心改进**: 将 PencilKit 手写底层从「SwiftUI 状态驱动」改为「单一持久 PKCanvasView + 原生 PKDrawing 持久化」的稳定架构。
+
+#### 手写墨迹稳定化
+- 移除了 `@State fullPageDrawing: Data` 绑定 — 不再因每笔画触发 SwiftUI body 重新渲染
+- `NotebookScrollHost` 改为 `initialInkData: Data`（一次性加载），PKCanvasView 是唯一数据源
+- `canvasViewDrawingDidChange` 不再同步写回 SwiftUI 状态 — 仅通过 1 秒 debounce 标记 `isDirty`
+- `updateUIViewController` 完全移除了 drawing sync 逻辑，避免正在书写时画布被覆盖
+- 页面尺寸变化采用阈值比较（>2pt），避免书写时微抖动导致 canvas frame 重设
+- 持久化通过 `InkActionBridge.currentDrawingData()` 在页面退出时一次性同步回 ViewModel
+
+#### 手写工具系统 (6 种工具)
+- **钢笔** (pen) — `PKInkingTool(.pen)`
+- **铅笔** (pencil) — `PKInkingTool(.pencil)`
+- **圆珠笔** (ballpoint) — `PKInkingTool(.pen)` 细字
+- **荧光笔** (highlighter) — `PKInkingTool(.marker)` 半透明
+- **橡皮** (eraser) — `PKEraserTool(.vector / .bitmap)`
+- **套索** (lasso) — `PKLassoTool()`
+
+#### 颜色面板
+- 普通笔 10 色：黑、深蓝、亮蓝、绿、深绿、红、酒红、紫、灰、棕
+- 荧光笔 6 色：黄、绿、蓝、粉、橙、紫
+- 每种工具独立记忆颜色和粗细（切换工具不丢失当前设置）
+
+#### 粗细面板
+- 普通笔 4 档：细 (1pt)、中 (3pt)、粗 (5pt)、特粗 (8pt)
+- 荧光笔 4 档：窄 (8pt)、中 (12pt)、宽 (18pt)、超宽 (24pt)
+
+#### 顶部双层工具栏
+- **Layer 1**: 工具按钮 (钢笔/铅笔/圆珠/荧光/橡皮/文本/套索) + 颜色粗细面板 + 参考面板按钮
+- **Layer 2**: 上下文 Inspector 条 — 根据选中状态自动切换：
+  - `EditorSelection.textBlock` → 文本 Inspector（字体/字号/颜色/高亮）
+  - `EditorSelection.textObject` → 文本对象 Inspector（字号/颜色/高亮/对齐/删除）
+  - `EditorSelection.inkSelection` → 墨迹 Inspector（颜色/粗细/删除/复制/复制粘贴）
+
+#### InkActionBridge (UIKit 桥接)
+- `deleteSelection()` / `copySelection()` / `duplicateSelection()` — 通过 `UIResponder` 链操作 PKCanvasView
+- `recolorSelection(to:)` — 重建选区内笔画的 `PKInk` 颜色
+- `rewidthSelection(to:)` — 重建选区内笔画的控制点尺寸
+- `currentDrawingData()` / `currentDrawingBounds()` — 用于离开页面时持久化
+
+### 12. 自由画布文本对象系统 (2026-04-06)
+
+**核心能力**: 在纸面任意位置创建、拖动、缩放文本对象，类似 GoodNotes 的自由文本框。
+
+#### 数据模型
+- `CanvasTextObject` — Codable 结构体，包含 `id, text, x, y, width, height, rotation, zIndex, textStyle, textColor, highlightStyle, fontSizePreset, textAlignment`
+- `CanvasTextAlignment` — `leading / center / trailing`，映射到 SwiftUI `TextAlignment`
+- `Note.textObjects: [CanvasTextObject]` — 向后兼容（旧 JSON 解码为空数组）
+
+#### ViewModel CRUD
+- `createTextObject(at:width:)` — 在指定纸面位置创建，自动递增 `zIndex`
+- `updateTextObject(id:text:)` / `moveTextObject(id:to:)` / `resizeTextObject(id:width:height:)` — 最小 80×32
+- `updateTextObjectStyle(id:textStyle:textColor:highlightStyle:fontSizePreset:textAlignment:)` — 只写入非 nil 参数
+- `deleteTextObject(id:)` / `textObject(with:)` — 查删单个对象
+- `normalizedTextObjects` — 保存前过滤空文本对象
+
+#### 视图层
+- `CanvasTextObjectsLayer` — TEXT 模式下全页点击创建 + 渲染所有文本对象
+- `CanvasTextObjectView` — 单个文本对象：
+  - **非编辑态**: 显示 Text，点击选中，再点进入编辑
+  - **编辑态**: TextEditor + `@FocusState` + 自动弹键盘
+  - **选中态**: 蓝色边框 + 右下角 ResizeHandle
+  - **拖动**: 内部 `DragGesture(minimumDistance: 4)`，编辑态禁用（`minimumDistance: .infinity`）
+  - **缩放**: ResizeHandle 上的独立 `DragGesture`，内层手势优先
+- `ResizeHandle` — 右下角圆形拖拽控制点
+
+#### 交互稳定化 (2026-04-08)
+- 文本对象视图已拆成更清晰的真实运行组件：
+  - `CanvasTextObjectsLayer`
+  - `CanvasTextObjectContainer`
+  - `CanvasTextViewBridge`
+  - `TextObjectSelectionOverlay`
+  - `TextObjectResizeHandleView`
+- 交互协议改成成熟笔记软件式三态：
+  - `idle`：仅显示文字，背景透明
+  - `selected`：显示轻边框与四角控制点，可拖动/缩放
+  - `editing`：`UITextView` first responder，可输入，不允许拖动/缩放
+- 几何状态改成 transient frame：
+  - `draftX / draftY / draftWidth / draftHeight`
+  - 拖动和缩放 `onChanged` 只改 draft
+  - `onEnded` 才一次性 commit 到持久层模型
+- 文本对象默认保持透明，不再像表单白底输入框遮住纸张
+- 顶部 Inspector 继续绑定真实 `CanvasTextObject`，支持字号 / 颜色 / 高亮 / 对齐 / 删除
+- TEXT / SELECT 两种工具都已接入对象态仲裁：
+  - TEXT 模式下点击纸面空白可创建对象
+  - SELECT 模式下保留对象选中与操作，不再因工具切换丢失文本对象上下文
 
 ### 🎨 Digital Archivist 学术工作区 (v1.0.0 - 2026-04-01)
 
@@ -572,8 +663,17 @@ CuoTiBen/
 │       ├── DesignSystem/
 │       │   ├── ModernComponents.swift
 │       │   ├── ModernDesignTokens.swift
+│       │   ├── BlockStyleTokens.swift
+│       │   ├── ArchivistTokens.swift
 │       │   ├── WorkspaceComponents.swift
 │       │   └── WorkspaceDesignTokens.swift
+│       └── Views/
+│           ├── ...
+│           ├── Notes/
+│           │   ├── ...
+│           │   ├── NotebookPageCanvasView.swift    # 整页纸张画布 (PKCanvasView + CanvasTextObjectsLayer)
+│           │   ├── NotebookWorkspaceView.swift      # 主工作区 (工具栏 + Inspector + Canvas Host)
+│           │   ├── WorkspaceTopBar.swift             # 手写工具系统 (NoteInkToolKind/State/Presets)
 ```
 
 ## 运行方式
@@ -728,6 +828,72 @@ rm -rf /tmp/CuoTiBen*
 - 后端当前没有数据库和登录系统，属于最小可用原型。
 
 ## 最近开发日志
+
+### 2026-04-08
+
+- 完成自由文本对象系统第二轮收口，重点只做交互稳定化，不再继续补新 UI：
+  - 文本对象从“输入框思维”重构为“画布对象思维”
+  - 视觉上默认透明，退出编辑后更像自然落在纸上的文字，而不是一块白底控件
+- 完成对象外壳与输入内核彻底分离：
+  - `CanvasTextObjectContainer` 负责选中态、拖动、缩放、命中和 transient frame
+  - `CanvasTextViewBridge` 只负责输入、光标和内容高度测量
+  - `TextObjectSelectionOverlay` 只负责边框与四角控制点
+  - `TextObjectResizeHandleView` 只负责控制点热区与缩放几何
+- 完成文本对象三态状态机稳定化：
+  - 新建对象自动进入 `editing`
+  - 点击空白可稳定退出 `editing` 并切回 `selected`
+  - `selected` 与 `editing` 不再混用
+- 完成拖动/缩放抖动修复：
+  - 位置和尺寸在手势过程中只写 transient frame
+  - 手势结束才 commit 到 `CanvasTextObject`
+  - dragging / resizing 期间禁止内容高度回写反向覆盖 frame
+  - 禁用对象层隐式动画，避免拖动闪烁和回弹
+- 完成对象命中与画布仲裁修复：
+  - 拖动手势绑定到外层 TransformShell，而不是 `UITextView`
+  - 四角控制点升级为真正可交互的 36pt 透明热区
+  - `NotebookScrollHost` 在文本对象交互模式下切到双指平移，保留 editing 态输入能力
+  - TEXT / SELECT 工具都接入文本对象交互模式，不再切工具就清空文本对象上下文
+- 完成顶部 Text Inspector 命中稳定化：
+  - toolbar 保持根级 `safeAreaInset`
+  - 文本对象 Inspector 继续绑定当前 `CanvasTextObject`
+  - 字号 / 颜色 / 高亮 / 对齐 / 删除按钮都使用更大的命中区
+- 完成真实工程构建验证：
+  - `xcodebuild ... build` 结果为 `BUILD SUCCEEDED`
+
+### 2026-04-06
+
+- 完成手写墨迹底层稳定化（**核心修复**）：
+  - 移除 `@State fullPageDrawing: Data`，不再因每笔画触发 SwiftUI body 重新渲染
+  - `NotebookScrollHost` 改为 `initialInkData` 单次加载，PKCanvasView 成为唯一数据源
+  - `canvasViewDrawingDidChange` 不再同步写回 SwiftUI 状态，仅 debounce 标记 dirty
+  - `updateUIViewController` 完全移除 drawing sync，避免写字过程中画布被覆盖
+  - 页面尺寸变化改用阈值比较（>2pt），避免书写时的微抖动导致 canvas frame 重设
+  - 持久化改为离开页面时通过 `InkActionBridge.currentDrawingData()` 一次性同步
+  - `NoteWorkspaceViewModel` 新增 `syncInkFromBridge()` / `markInkDirty()`
+  - `handleNotePageDisappear` 退出页面时先同步墨迹再保存
+- 完成完整手写工具系统正式化：
+  - 6 种工具：钢笔 / 铅笔 / 圆珠笔 / 荧光笔 / 橡皮 / 套索
+  - 普通笔 10 色 + 荧光笔 6 色
+  - 普通笔 4 档粗细 + 荧光笔 4 档粗细
+  - 每种工具独立记忆颜色和粗细（`NoteInkToolState.switchTo()`）
+  - 顶部双层工具栏：Layer1 工具按钮 + 颜色粗细面板，Layer2 上下文 Inspector
+- 完成自由画布文本对象系统：
+  - 新增 `CanvasTextObject` Codable 数据模型（position / size / style / zIndex）
+  - 新增 `CanvasTextAlignment` 枚举（leading / center / trailing）
+  - `Note.textObjects` 向后兼容解码
+  - TEXT 模式下点击纸面任意位置创建文本对象，自动进入编辑并弹出键盘
+  - 文本对象可拖动：内部 `DragGesture` + `minimumDistance` 条件防止编辑态误拖
+  - 文本对象可缩放：右下角 `ResizeHandle` 独立 DragGesture
+  - `CanvasTextObjectsLayer` 渲染所有文本对象，按 zIndex 排序
+  - `CanvasTextObjectView` 支持选中态边框、编辑态 TextEditor、显示态 Text
+  - 手势系统修复：编辑态 `DragGesture` 设为 `.infinity` 最小距离，保证 TextEditor 正常接收触摸
+- 完成 Inspector 系统与选中对象绑定：
+  - `EditorSelection` 新增 `.textObject(UUID)` case
+  - `textObjectInspectorStrip`：字号 / 文字颜色 / 高亮 / 对齐 / 删除
+  - `inkInspectorStrip`：颜色 / 粗细 / 删除 / 复制 / 复制粘贴
+  - `InkActionBridge` 新增 `currentDrawingData()` / `currentDrawingBounds()` / `recolorSelection()` / `rewidthSelection()`
+- 完成整包命令行验证：
+  - `xcodebuild ... build` 结果为 `BUILD SUCCEEDED`
 
 ### 2026-04-05
 
@@ -951,7 +1117,9 @@ rm -rf /tmp/CuoTiBen*
 2. 将节点、句子、单词、卡片、笔记进一步串成完整学习记录，并补更多知识点联动。
 3. 补更稳定的后端部署与 HTTPS 接入。
 4. 继续清理 `._*` 副文件和外置盘 Xcode 环境带来的潜在问题。
+5. 文本对象进阶：旋转、多选、对齐参考线、富文本按字符编辑。
+6. 墨迹选区进阶：选区框可视化、选区移动、选区缩放 handles。
 
 ---
 
-文档更新时间：`2026-04-05`
+文档更新时间：`2026-04-08`

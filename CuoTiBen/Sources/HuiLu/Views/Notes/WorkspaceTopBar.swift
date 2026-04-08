@@ -37,6 +37,8 @@ enum NoteWorkspaceAppearance: String, CaseIterable, Identifiable {
 
 enum NoteInkToolKind: String, CaseIterable, Identifiable {
     case pen
+    case pencil
+    case ballpoint
     case highlighter
     case eraser
     case lasso
@@ -45,73 +47,144 @@ enum NoteInkToolKind: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .pen:
-            return "笔刷"
-        case .highlighter:
-            return "荧光笔"
-        case .eraser:
-            return "橡皮"
-        case .lasso:
-            return "套索"
+        case .pen:         return "钢笔"
+        case .pencil:      return "铅笔"
+        case .ballpoint:   return "圆珠笔"
+        case .highlighter: return "荧光笔"
+        case .eraser:      return "橡皮"
+        case .lasso:       return "套索"
         }
     }
 
     var icon: String {
         switch self {
-        case .pen:
-            return "pencil.tip"
-        case .highlighter:
-            return "highlighter"
-        case .eraser:
-            return "eraser"
-        case .lasso:
-            return "lasso"
+        case .pen:         return "pencil.tip"
+        case .pencil:      return "pencil"
+        case .ballpoint:   return "pencil.line"
+        case .highlighter: return "highlighter"
+        case .eraser:      return "eraser"
+        case .lasso:       return "lasso"
         }
     }
+
+    /// Whether this tool draws ink (used to decide color/width display).
+    var isDrawingTool: Bool {
+        switch self {
+        case .pen, .pencil, .ballpoint, .highlighter: return true
+        case .eraser, .lasso: return false
+        }
+    }
+
+    /// Whether this is the highlighter (has separate palette).
+    var isHighlighter: Bool { self == .highlighter }
 }
 
-enum NoteInkColorPreset: String, CaseIterable, Identifiable {
-    case blue
-    case black
-    case red
-    case green
-    case yellow
-    case purple
+// MARK: - Ink Color Palettes
+
+/// Standard pen colors (10 colors)
+enum PenColorPreset: String, CaseIterable, Identifiable {
+    case black, darkBlue, brightBlue, green, darkGreen, red, wine, purple, gray, brown
 
     var id: String { rawValue }
 
     var color: Color {
         switch self {
-        case .blue:
-            return Color(red: 48 / 255, green: 126 / 255, blue: 255 / 255)
-        case .black:
-            return Color(red: 34 / 255, green: 37 / 255, blue: 43 / 255)
-        case .red:
-            return Color(red: 218 / 255, green: 72 / 255, blue: 63 / 255)
-        case .green:
-            return Color(red: 70 / 255, green: 155 / 255, blue: 86 / 255)
-        case .yellow:
-            return Color(red: 247 / 255, green: 204 / 255, blue: 70 / 255)
-        case .purple:
-            return Color(red: 147 / 255, green: 103 / 255, blue: 255 / 255)
+        case .black:      return Color(red: 34/255,  green: 37/255,  blue: 43/255)
+        case .darkBlue:   return Color(red: 25/255,  green: 60/255,  blue: 130/255)
+        case .brightBlue: return Color(red: 48/255,  green: 126/255, blue: 255/255)
+        case .green:      return Color(red: 70/255,  green: 155/255, blue: 86/255)
+        case .darkGreen:  return Color(red: 32/255,  green: 96/255,  blue: 60/255)
+        case .red:        return Color(red: 218/255, green: 72/255,  blue: 63/255)
+        case .wine:       return Color(red: 140/255, green: 40/255,  blue: 52/255)
+        case .purple:     return Color(red: 147/255, green: 103/255, blue: 255/255)
+        case .gray:       return Color(red: 130/255, green: 130/255, blue: 130/255)
+        case .brown:      return Color(red: 140/255, green: 100/255, blue: 60/255)
         }
     }
 
     var title: String {
         switch self {
-        case .blue:
-            return "蓝"
-        case .black:
-            return "黑"
-        case .red:
-            return "红"
-        case .green:
-            return "绿"
-        case .yellow:
-            return "黄"
-        case .purple:
-            return "紫"
+        case .black: return "黑"
+        case .darkBlue: return "深蓝"
+        case .brightBlue: return "亮蓝"
+        case .green: return "绿"
+        case .darkGreen: return "深绿"
+        case .red: return "红"
+        case .wine: return "酒红"
+        case .purple: return "紫"
+        case .gray: return "灰"
+        case .brown: return "棕"
         }
+    }
+
+    var token: String { rawValue }
+}
+
+/// Legacy alias — WorkspaceTopBar still references this. Maps to PenColorPreset.
+typealias NoteInkColorPreset = PenColorPreset
+
+/// Highlighter colors (6 colors)
+enum HighlighterColorPreset: String, CaseIterable, Identifiable {
+    case yellow, green, blue, pink, orange, purple
+
+    var id: String { rawValue }
+
+    var color: Color {
+        switch self {
+        case .yellow: return Color(red: 255/255, green: 230/255, blue: 50/255)
+        case .green:  return Color(red: 100/255, green: 220/255, blue: 100/255)
+        case .blue:   return Color(red: 80/255,  green: 180/255, blue: 255/255)
+        case .pink:   return Color(red: 255/255, green: 120/255, blue: 170/255)
+        case .orange: return Color(red: 255/255, green: 175/255, blue: 50/255)
+        case .purple: return Color(red: 180/255, green: 130/255, blue: 255/255)
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .yellow: return "黄"
+        case .green: return "绿"
+        case .blue: return "蓝"
+        case .pink: return "粉"
+        case .orange: return "橙"
+        case .purple: return "紫"
+        }
+    }
+
+    var token: String { "hl_\(rawValue)" }
+}
+
+/// Pen width presets (4 levels)
+enum PenWidthPreset: CGFloat, CaseIterable, Identifiable {
+    case fine = 1
+    case medium = 3
+    case bold = 5
+    case extraBold = 8
+
+    var id: CGFloat { rawValue }
+    var width: CGFloat { rawValue }
+    var dotSize: CGFloat {
+        switch self { case .fine: return 3; case .medium: return 5; case .bold: return 7; case .extraBold: return 10 }
+    }
+    var label: String {
+        switch self { case .fine: return "细"; case .medium: return "中"; case .bold: return "粗"; case .extraBold: return "特粗" }
+    }
+}
+
+/// Highlighter width presets (4 levels)
+enum HighlighterWidthPreset: CGFloat, CaseIterable, Identifiable {
+    case narrow = 8
+    case medium = 12
+    case wide = 18
+    case extraWide = 24
+
+    var id: CGFloat { rawValue }
+    var width: CGFloat { rawValue }
+    var dotSize: CGFloat {
+        switch self { case .narrow: return 4; case .medium: return 6; case .wide: return 9; case .extraWide: return 12 }
+    }
+    var label: String {
+        switch self { case .narrow: return "窄"; case .medium: return "中"; case .wide: return "宽"; case .extraWide: return "超宽" }
     }
 }
 
@@ -120,42 +193,41 @@ struct NoteInkColorChoice: Hashable, Identifiable {
 
     var id: String { token }
 
-    static func preset(_ preset: NoteInkColorPreset) -> String {
-        preset.rawValue
-    }
+    static func pen(_ preset: PenColorPreset) -> String { preset.token }
+    static func highlighter(_ preset: HighlighterColorPreset) -> String { preset.token }
+    static func custom(_ hex: String) -> String { "custom:\(hex.uppercased())" }
 
-    static func custom(_ hex: String) -> String {
-        "custom:\(hex.uppercased())"
-    }
+    // Legacy compatibility
+    static func preset(_ preset: NoteInkColorPreset) -> String { preset.rawValue }
 
-    var preset: NoteInkColorPreset? {
-        NoteInkColorPreset(rawValue: token)
+    var penPreset: PenColorPreset? { PenColorPreset(rawValue: token) }
+    var highlighterPreset: HighlighterColorPreset? {
+        guard token.hasPrefix("hl_") else { return nil }
+        return HighlighterColorPreset(rawValue: String(token.dropFirst(3)))
     }
-
     var customHex: String? {
         token.hasPrefix("custom:") ? String(token.dropFirst("custom:".count)) : nil
     }
+    // Legacy
+    var preset: NoteInkColorPreset? { NoteInkColorPreset(rawValue: token) }
 
     var color: Color {
-        if let preset {
-            return preset.color
-        }
-        if let customHex, let color = Color(hex: customHex) {
-            return color
-        }
-        return NoteInkColorPreset.blue.color
+        if let p = penPreset { return p.color }
+        if let h = highlighterPreset { return h.color }
+        if let customHex, let c = Color(hex: customHex) { return c }
+        // Legacy fallback
+        if let p = preset { return p.color }
+        return PenColorPreset.brightBlue.color
     }
 
     var title: String {
-        if let preset {
-            return preset.title
-        }
+        if let p = penPreset { return p.title }
+        if let h = highlighterPreset { return h.title }
+        if let p = preset { return p.title }
         return "自定义"
     }
 
-    var isCustom: Bool {
-        customHex != nil
-    }
+    var isCustom: Bool { customHex != nil }
 }
 
 enum NoteEraserPreset: String, CaseIterable, Identifiable {
@@ -208,21 +280,65 @@ enum NotePencilDoubleTapBehavior: String, CaseIterable, Identifiable {
 
 struct NoteInkToolState: Equatable {
     var kind: NoteInkToolKind = .pen
-    var colorToken = NoteInkColorChoice.preset(.blue)
-    var width: CGFloat = 4
+    var colorToken = PenColorPreset.brightBlue.token
+    var width: CGFloat = 3
     var eraserPreset: NoteEraserPreset = .precise
     var eraserWidth: CGFloat = 18
-    var recentColorTokens: [String] = [
-        NoteInkColorChoice.preset(.blue),
-        NoteInkColorChoice.preset(.black),
-        NoteInkColorChoice.preset(.red),
-        NoteInkColorChoice.preset(.green),
-        NoteInkColorChoice.preset(.yellow),
-        NoteInkColorChoice.preset(.purple)
-    ]
+
+    // ── Per-tool color & width memory ──
+    var penColor = PenColorPreset.brightBlue.token
+    var penWidth: CGFloat = 3
+    var pencilColor = PenColorPreset.gray.token
+    var pencilWidth: CGFloat = 2
+    var ballpointColor = PenColorPreset.black.token
+    var ballpointWidth: CGFloat = 1.5
+    var highlighterColor = HighlighterColorPreset.yellow.token
+    var highlighterWidth: CGFloat = 12
+
+    /// All pen color tokens (displayed when pen/pencil/ballpoint is active)
+    var penColorTokens: [String] = PenColorPreset.allCases.map(\.token)
+
+    /// All highlighter color tokens
+    var highlighterColorTokens: [String] = HighlighterColorPreset.allCases.map(\.token)
+
+    /// Legacy compatibility
+    var recentColorTokens: [String] {
+        penColorTokens
+    }
 
     var colorChoice: NoteInkColorChoice {
         NoteInkColorChoice(token: colorToken)
+    }
+
+    /// Call when switching tool kind — restores that tool's remembered color/width.
+    mutating func switchTo(_ newKind: NoteInkToolKind) {
+        // Save current tool's state
+        saveCurrentToolState()
+        kind = newKind
+        // Restore new tool's state
+        switch newKind {
+        case .pen:         colorToken = penColor; width = penWidth
+        case .pencil:      colorToken = pencilColor; width = pencilWidth
+        case .ballpoint:   colorToken = ballpointColor; width = ballpointWidth
+        case .highlighter: colorToken = highlighterColor; width = highlighterWidth
+        case .eraser, .lasso: break
+        }
+    }
+
+    /// Saves current tool color/width before switching away.
+    private mutating func saveCurrentToolState() {
+        switch kind {
+        case .pen:         penColor = colorToken; penWidth = width
+        case .pencil:      pencilColor = colorToken; pencilWidth = width
+        case .ballpoint:   ballpointColor = colorToken; ballpointWidth = width
+        case .highlighter: highlighterColor = colorToken; highlighterWidth = width
+        case .eraser, .lasso: break
+        }
+    }
+
+    /// Color tokens appropriate for the current tool.
+    var activeColorTokens: [String] {
+        kind.isHighlighter ? highlighterColorTokens : penColorTokens
     }
 }
 
@@ -855,8 +971,8 @@ struct WorkspaceTopBar: View {
         if inkToolState.kind == .eraser || inkToolState.kind == .lasso {
             inkToolState.kind = .pen
         }
-        inkToolState.recentColorTokens = [token] + inkToolState.recentColorTokens.filter { $0 != token }
-        inkToolState.recentColorTokens = Array(inkToolState.recentColorTokens.prefix(6))
+        inkToolState.penColorTokens = [token] + inkToolState.penColorTokens.filter { $0 != token }
+        inkToolState.penColorTokens = Array(inkToolState.penColorTokens.prefix(6))
     }
 
     private var editableTab: some View {

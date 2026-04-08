@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 #if canImport(PencilKit)
 import PencilKit
@@ -7,23 +8,23 @@ import PencilKit
 // ╔══════════════════════════════════════════════════════════════╗
 // ║  NotebookPageCanvasView — Blank Notebook Page                ║
 // ║                                                              ║
-// ║  Architecture (UIKit-based):                                 ║
-// ║    UIScrollView (finger-only pan)                            ║
-// ║      contentWrapper UIView                                   ║
-// ║        paper SwiftUI host                                    ║
-// ║        PencilOnlyCanvasView (PKCanvasView subclass)          ║
+// ║  UIKit-hosted architecture:                                  ║
+// ║    UIScrollView (finger scrolls via allowedTouchTypes)       ║
+// ║      └─ contentView (UIView)                                 ║
+// ║           ├─ paperHost (UIHostingController: bg + text)      ║
+// ║           └─ PKCanvasView (drawingPolicy = .pencilOnly)      ║
 // ║                                                              ║
-// ║  Pencil draws. Finger scrolls/taps. No gesture conflict.    ║
+// ║  Pencil → PKCanvasView draws (natively, no hitTest hack)    ║
+// ║  Finger → UIScrollView scrolls; taps reach paper host       ║
 // ╚══════════════════════════════════════════════════════════════╝
 
 // MARK: - Design Tokens
 
-private enum PageTokens {
+private enum PT {
     static let paperFill    = Color(red: 0.995, green: 0.992, blue: 0.978)
     static let ruleColor    = Color(red: 0.82, green: 0.82, blue: 0.78).opacity(0.35)
     static let marginColor  = Color(red: 0.85, green: 0.25, blue: 0.25).opacity(0.18)
     static let ink          = Color(red: 0.08, green: 0.08, blue: 0.06)
-    static let inkSecondary = Color(red: 0.08, green: 0.08, blue: 0.06).opacity(0.55)
     static let accent       = Color(red: 0, green: 0.365, blue: 0.655)
     static let quoteBar     = Color(red: 0, green: 0.365, blue: 0.655).opacity(0.5)
     static let tagFill      = Color(red: 0.89, green: 0.93, blue: 0.97)
@@ -38,7 +39,7 @@ private enum PageTokens {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// MARK: - NotebookPageCanvasView (main SwiftUI entry)
+// MARK: - NotebookPageCanvasView (SwiftUI entry)
 // ═══════════════════════════════════════════════════════════════
 
 struct NotebookPageCanvasView: View {
@@ -46,290 +47,317 @@ struct NotebookPageCanvasView: View {
     let appViewModel: AppViewModel
     @Binding var inkToolState: NoteInkToolState
     let isTextMode: Bool
+    let isSelectMode: Bool
+    let isTextObjectInteractionMode: Bool
     let doubleTapBehavior: NotePencilDoubleTapBehavior
+    @Binding var editorSelection: EditorSelection
+    let inkActionBridge: InkActionBridge
     let onOpenSource: (SourceAnchor) -> Void
 
-    @State private var fullPageDrawing: Data = Data()
     @State private var pageCount: Int = 1
     @State private var contentHeight: CGFloat = 800
+
+    /// Maximum canvas page height — Metal texture limit is 16384 px;
+    /// divide by screen scale so the backing store never exceeds that.
+    /// On 2× Retina → 8192 pt, on 3× → 5461 pt.
+    private static let maxPageHeight: CGFloat = floor(16384 / UIScreen.main.scale)
 
     var body: some View {
         GeometryReader { geo in
             let pageWidth = min(max(geo.size.width - 40, 820), 1280)
-            let pageH = max(PageTokens.lineSpacing * CGFloat(max(pageCount, 1)) * 30,
-                            contentHeight + 600,
+            let baseH = max(PT.lineSpacing * CGFloat(max(pageCount, 1)) * 30,
                             geo.size.height - 20)
+            let pageH = min(max(baseH, contentHeight + 300), Self.maxPageHeight)
 
-            #if canImport(PencilKit)
-            CanvasPageScrollContainer(
-                drawingData: $fullPageDrawing,
+            NotebookScrollHost(
+                initialInkData: initialInkData,
                 inkToolState: $inkToolState,
                 pageWidth: pageWidth,
                 pageHeight: pageH,
                 isTextMode: isTextMode,
+                isSelectMode: isSelectMode,
+                isTextObjectInteractionMode: isTextObjectInteractionMode,
                 doubleTapBehavior: doubleTapBehavior,
-                onDrawingChanged: { data, bounds, size in
-                    persistInkToBlock(data: data, bounds: bounds, size: size)
-                },
-                paperContent: {
-                    ZStack(alignment: .topLeading) {
-                        PaperBackgroundLayer(pageWidth: pageWidth, pageHeight: pageH)
+                editorSelection: $editorSelection,
+                inkActionBridge: inkActionBridge,
+                onInkChanged: {
+                    vm.markInkDirty()
+                }
+            ) {
+                ZStack(alignment: .topLeading) {
+                    PaperBackground(pageWidth: pageWidth, pageHeight: pageH)
 
-                        EditableTextLayer(
-                            vm: vm,
-                            isTextMode: isTextMode,
-                            onContentHeightChange: { h in contentHeight = max(h, contentHeight) }
-                        )
-                        .frame(width: pageWidth - PageTokens.leading - PageTokens.trailing)
-                        .padding(.leading, PageTokens.leading)
-                        .padding(.trailing, PageTokens.trailing)
-                        .padding(.top, PageTokens.topInset)
-                        .allowsHitTesting(true)
-                    }
-                    .frame(width: pageWidth, height: pageH)
-                    .background(
-                        RoundedRectangle(cornerRadius: 4, style: .continuous)
-                            .fill(PageTokens.paperFill)
-                            .shadow(color: Color.black.opacity(0.06), radius: 24, y: 12)
+                    UserContentLayer(
+                        vm: vm,
+                        isTextObjectInteractionMode: isTextObjectInteractionMode,
+                        editorSelection: $editorSelection,
+                        onHeightChange: { h in
+                            DispatchQueue.main.async { contentHeight = h }
+                        }
+                    )
+                    .frame(width: pageWidth - PT.leading - PT.trailing)
+                    .padding(.leading, PT.leading)
+                    .padding(.trailing, PT.trailing)
+                    .padding(.top, PT.topInset)
+
+                    // Free-form text objects layer — sits above legacy content, below ink
+                    CanvasTextObjectsLayer(
+                        vm: vm,
+                        isTextToolActive: isTextMode,
+                        canManipulateTextObjects: isTextObjectInteractionMode,
+                        editorSelection: $editorSelection,
+                        pageWidth: pageWidth,
+                        pageHeight: pageH
                     )
                 }
-            )
-            .padding(.horizontal, max((geo.size.width - pageWidth) / 2, 12))
-            .padding(.vertical, 12)
-            #else
-            Text("PencilKit not available")
-            #endif
+                .frame(width: pageWidth, height: pageH)
+                .background(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(PT.paperFill)
+                        .shadow(color: .black.opacity(0.06), radius: 24, y: 12)
+                )
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .onAppear(perform: loadInkFromBlock)
-        .onChange(of: vm.note.id) { _ in loadInkFromBlock() }
-    }
-
-    // MARK: - Ink <-> Block Bridge
-
-    private func loadInkFromBlock() {
-        if let inkBlock = vm.blocks.first(where: { $0.kind == .ink }) {
-            fullPageDrawing = inkBlock.inkData ?? Data()
-            pageCount = inkBlock.inkGeometry?.pageCount ?? 1
-        } else {
-            fullPageDrawing = Data()
-            pageCount = 1
+        .onAppear {
+            pageCount = vm.blocks.first(where: { $0.kind == .ink })?.inkGeometry?.pageCount ?? 1
         }
     }
 
-    private func persistInkToBlock(data: Data, bounds: CGRect, size: CGSize) {
-        let existingInk = vm.blocks.first(where: { $0.kind == .ink })
-        if var block = existingInk {
-            block.inkData = data
-            block.inkGeometry = InkGeometry(normalizedBounds: bounds, pageCount: pageCount)
-            block.updatedAt = Date()
-            vm.updateInkBlock(block)
-        } else {
-            var newBlock = NoteBlock(kind: .ink, inkData: data, linkedSourceAnchorID: vm.sourceAnchor.id)
-            newBlock.inkGeometry = InkGeometry(normalizedBounds: bounds, pageCount: pageCount)
-            vm.blocks.append(newBlock)
-            vm.isDirty = true
-        }
+    /// Initial ink data from the ink block — passed to the canvas once at creation.
+    private var initialInkData: Data {
+        vm.blocks.first(where: { $0.kind == .ink })?.inkData ?? Data()
     }
+
 }
 
+
 // ═══════════════════════════════════════════════════════════════
-// MARK: - CanvasPageScrollContainer (UIKit-based scroll + ink)
+// MARK: - NotebookScrollHost (UIViewControllerRepresentable)
 // ═══════════════════════════════════════════════════════════════
 //
-// Architecture:
-//   UIScrollView  [panGesture.allowedTouchTypes = finger only]
-//     ┣─ paperHostView  (UIHostingController → SwiftUI paper + text)
-//     ┗─ canvasView     (PKCanvasView, drawingPolicy = .pencilOnly)
+//  Why UIViewControllerRepresentable instead of UIViewRepresentable?
+//  Because we host a UIHostingController for the SwiftUI paper content
+//  as a child VC, which requires proper VC containment.
 //
-//  • Finger drag  → UIScrollView scrolls (pan only responds to finger)
-//  • Pencil       → PKCanvasView draws (only pencil activates drawing)
-//  • Finger tap   → passes through canvas hitTest → reaches paper/text
+//  Layout:
+//    UIScrollView
+//      └─ contentView (UIView, sized to page)
+//           ├─ paperHostVC.view  (SwiftUI paper + text, bottom)
+//           └─ canvasView        (PKCanvasView, top, pencil-only)
+//
+//  Key design decisions:
+//    1. PKCanvasView.drawingPolicy = .pencilOnly
+//       → PencilKit natively ignores finger input. No hitTest override needed.
+//    2. UIScrollView.panGestureRecognizer.allowedTouchTypes = [.direct]
+//       → Only finger drags scroll the page; pencil drags don't scroll.
+//    3. canvasView.isScrollEnabled = false
+//       → PKCanvasView won't try to scroll internally.
+//    4. Finger taps on canvasView fall through because:
+//       - PKCanvasView with .pencilOnly ignores finger touches
+//       - The tap reaches the paper host below via responder chain
 
 #if canImport(PencilKit)
 
-struct CanvasPageScrollContainer<PaperContent: View>: UIViewRepresentable {
-    @Binding var drawingData: Data
+struct NotebookScrollHost<Paper: View>: UIViewControllerRepresentable {
+    let initialInkData: Data
     @Binding var inkToolState: NoteInkToolState
     let pageWidth: CGFloat
     let pageHeight: CGFloat
     let isTextMode: Bool
+    let isSelectMode: Bool
+    let isTextObjectInteractionMode: Bool
     let doubleTapBehavior: NotePencilDoubleTapBehavior
-    var onDrawingChanged: ((Data, CGRect, CGSize) -> Void)?
-    @ViewBuilder let paperContent: () -> PaperContent
+    @Binding var editorSelection: EditorSelection
+    let inkActionBridge: InkActionBridge
+    var onInkChanged: (() -> Void)?
+    @ViewBuilder let paperContent: () -> Paper
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(parent: self)
-    }
+    func makeCoordinator() -> Coordinator { Coordinator() }
 
-    func makeUIView(context: Context) -> UIScrollView {
-        let scrollView = UIScrollView()
-        scrollView.backgroundColor = .clear
-        scrollView.showsVerticalScrollIndicator = true
-        scrollView.showsHorizontalScrollIndicator = true
-        scrollView.delaysContentTouches = true
-        scrollView.canCancelContentTouches = true
+    func makeUIViewController(context: Context) -> NotebookScrollVC {
+        let vc = NotebookScrollVC()
+        let c = context.coordinator
+        c.parent = self
 
-        // ── CRITICAL: Only finger touches trigger scrolling ──
-        scrollView.panGestureRecognizer.allowedTouchTypes = [
-            NSNumber(value: UITouch.TouchType.direct.rawValue)
-        ]
-        if let pinch = scrollView.pinchGestureRecognizer {
-            pinch.allowedTouchTypes = [
-                NSNumber(value: UITouch.TouchType.direct.rawValue)
-            ]
-        }
+        c.vc = vc
 
-        // ── Content wrapper ──
-        let contentWrapper = UIView()
-        contentWrapper.backgroundColor = .clear
-        scrollView.addSubview(contentWrapper)
+        // Paper host
+        let paperHost = UIHostingController(rootView: AnyView(paperContent()))
+        paperHost.view.backgroundColor = .clear
+        vc.addChild(paperHost)
+        vc.contentView.addSubview(paperHost.view)
+        paperHost.didMove(toParent: vc)
+        c.paperHost = paperHost
 
-        // ── Paper + text (SwiftUI hosted) ──
-        let host = UIHostingController(rootView: AnyView(paperContent()))
-        host.view.backgroundColor = .clear
-        host.view.isUserInteractionEnabled = true
-        contentWrapper.addSubview(host.view)
-
-        // ── PKCanvasView (on top, pencil-only) ──
-        let canvas = PencilOnlyCanvasView()
+        // Canvas
+        let canvas = PKCanvasView()
         canvas.backgroundColor = .clear
         canvas.isOpaque = false
         canvas.drawingPolicy = .pencilOnly
         canvas.isScrollEnabled = false
         canvas.isUserInteractionEnabled = true
+        // Ensure crisp Retina rendering — use the main screen's native scale.
+        canvas.contentScaleFactor = UIScreen.main.scale
         canvas.tool = inkToolState.pkTool
-        canvas.delegate = context.coordinator
+        canvas.delegate = c
+        vc.contentView.addSubview(canvas)
+        c.canvas = canvas
 
+        // Wire InkActionBridge to the canvas
+        inkActionBridge.canvas = canvas
+
+        // Load initial drawing (one-time; PKCanvasView is source of truth after this)
+        if !initialInkData.isEmpty, let d = try? PKDrawing(data: initialInkData) {
+            canvas.drawing = d
+        }
+
+        // Pencil double-tap
         let pencilInteraction = UIPencilInteraction()
-        pencilInteraction.delegate = context.coordinator
+        pencilInteraction.delegate = c
         canvas.addInteraction(pencilInteraction)
 
-        if !drawingData.isEmpty,
-           let drawing = try? PKDrawing(data: drawingData) {
-            canvas.drawing = drawing
-        }
+        // Sizing
+        let sz = CGSize(width: pageWidth, height: pageHeight)
+        vc.scrollView.contentSize = sz
+        vc.contentView.frame = CGRect(origin: .zero, size: sz)
+        paperHost.view.frame = CGRect(origin: .zero, size: sz)
+        canvas.frame = CGRect(origin: .zero, size: sz)
 
-        contentWrapper.addSubview(canvas)
+        // Debug
+        // print("[INK] makeUIVC: canvas.frame=\\(canvas.frame), policy=\\(canvas.drawingPolicy.rawValue), interaction=\\(canvas.isUserInteractionEnabled)")
 
-        // ── Store references ──
-        context.coordinator.scrollView = scrollView
-        context.coordinator.contentWrapper = contentWrapper
-        context.coordinator.hostingController = host
-        context.coordinator.canvasView = canvas
-
-        // ── Apply initial layout ──
-        let contentSize = CGSize(width: pageWidth, height: pageHeight)
-        scrollView.contentSize = contentSize
-        contentWrapper.frame = CGRect(origin: .zero, size: contentSize)
-        host.view.frame = CGRect(origin: .zero, size: contentSize)
-        canvas.frame = CGRect(origin: .zero, size: contentSize)
-
-        // ── Debug ──
-        print("[INK-DEBUG] makeUIView: canvas=\(canvas.frame), scrollContentSize=\(contentSize), drawingPolicy=\(canvas.drawingPolicy.rawValue), isUserInteraction=\(canvas.isUserInteractionEnabled)")
-
-        return scrollView
+        return vc
     }
 
-    func updateUIView(_ scrollView: UIScrollView, context: Context) {
+    func updateUIViewController(_ vc: NotebookScrollVC, context: Context) {
         let c = context.coordinator
+        c.parent = self
 
-        // ── Update content size ──
-        let contentSize = CGSize(width: pageWidth, height: pageHeight)
-        if scrollView.contentSize != contentSize {
-            scrollView.contentSize = contentSize
-            c.contentWrapper?.frame = CGRect(origin: .zero, size: contentSize)
-            c.hostingController?.view.frame = CGRect(origin: .zero, size: contentSize)
-            c.canvasView?.frame = CGRect(origin: .zero, size: contentSize)
-            print("[INK-DEBUG] updateUIView: resized to \(contentSize)")
+        // Keep ink action bridge pointed at the canvas
+        inkActionBridge.canvas = c.canvas
+
+        // Resize (threshold to prevent frame jitter during writing)
+        let sz = CGSize(width: pageWidth, height: pageHeight)
+        let cur = vc.scrollView.contentSize
+        if abs(cur.width - sz.width) > 2 || abs(cur.height - sz.height) > 2 {
+            vc.scrollView.contentSize = sz
+            vc.contentView.frame = CGRect(origin: .zero, size: sz)
+            c.paperHost?.view.frame = CGRect(origin: .zero, size: sz)
+            c.canvas?.frame = CGRect(origin: .zero, size: sz)
         }
 
-        // ── Update hosted SwiftUI ──
-        c.hostingController?.rootView = AnyView(paperContent())
-
-        // ── Update canvas tool ──
-        c.canvasView?.tool = inkToolState.pkTool
-        c.canvasView?.isUserInteractionEnabled = !isTextMode
-
-        // ── Update drawing (skip if user is actively drawing) ──
-        guard !c.isUpdatingFromDraw else { return }
-        guard let canvas = c.canvasView else { return }
-
-        if drawingData.isEmpty && !canvas.drawing.bounds.isEmpty {
-            canvas.drawing = PKDrawing()
-        } else if !drawingData.isEmpty {
-            if let drawing = try? PKDrawing(data: drawingData),
-               drawing.dataRepresentation() != canvas.drawing.dataRepresentation() {
-                canvas.drawing = drawing
-            }
+        // Ensure canvas always renders at native Retina scale
+        if c.canvas?.contentScaleFactor != UIScreen.main.scale {
+            c.canvas?.contentScaleFactor = UIScreen.main.scale
         }
+
+        // Update paper content
+        c.paperHost?.rootView = AnyView(paperContent())
+
+        // Only update tool when it actually changed to avoid redundant delegate callbacks
+        let newTool = inkToolState.pkTool
+        if c.lastAppliedTool == nil || type(of: c.lastAppliedTool!) != type(of: newTool)
+            || c.lastAppliedToolState != inkToolState {
+            c.canvas?.tool = newTool
+            c.lastAppliedTool = newTool
+            c.lastAppliedToolState = inkToolState
+        }
+
+        // In text mode: disable canvas so finger taps 100% go to text fields
+        // In ink mode: canvas is enabled, pencil draws, finger is ignored by .pencilOnly
+        c.canvas?.isUserInteractionEnabled = !isTextMode
+
+        // In text mode: require 2-finger pan for scrolling, so single finger
+        // can drag / resize text objects without the scroll view stealing the gesture.
+        vc.scrollView.panGestureRecognizer.minimumNumberOfTouches = isTextObjectInteractionMode ? 2 : 1
+        // canCancelContentTouches stays true (default) so 2-finger scroll works.
+        // Single-finger drags are safe because minimumNumberOfTouches = 2 prevents
+        // the scroll view from recognizing single-finger pan.
+        vc.scrollView.isTextMode = isTextObjectInteractionMode
+        vc.isTextMode = isTextObjectInteractionMode
+
+        // NOTE: No drawing data sync here.
+        // PKCanvasView is the sole source of truth for ink while the page is open.
+        // Ink is synced to the data model only on save via syncInkFromBridge().
     }
 
-    // MARK: - Coordinator
+    // MARK: Coordinator
 
     final class Coordinator: NSObject, PKCanvasViewDelegate, UIPencilInteractionDelegate {
-        let parent: CanvasPageScrollContainer
-        weak var scrollView: UIScrollView?
-        weak var contentWrapper: UIView?
-        var hostingController: UIHostingController<AnyView>?
-        weak var canvasView: PKCanvasView?
-        var isUpdatingFromDraw = false
-        private var debounceWorkItem: DispatchWorkItem?
-        private var lastDrawingToolState: NoteInkToolState
-
-        init(parent: CanvasPageScrollContainer) {
-            self.parent = parent
-            self.lastDrawingToolState = parent.inkToolState
-        }
+        var parent: NotebookScrollHost!
+        weak var vc: NotebookScrollVC?
+        var paperHost: UIHostingController<AnyView>?
+        weak var canvas: PKCanvasView?
+        var lastAppliedTool: PKTool?
+        var lastAppliedToolState: NoteInkToolState?
+        private var debounce: DispatchWorkItem?
+        private var lastToolState: NoteInkToolState?
+        /// Tracks whether the current tool is a lasso and user has completed a stroke.
+        private var lassoStrokeCompleted = false
 
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
-            isUpdatingFromDraw = true
-            parent.drawingData = canvasView.drawing.dataRepresentation()
-
-            debounceWorkItem?.cancel()
-            let data = canvasView.drawing.dataRepresentation()
-            let bounds = canvasView.drawing.bounds
-            let size = canvasView.bounds.size
-            let callback = parent.onDrawingChanged
-            let item = DispatchWorkItem { [weak self] in
-                callback?(data, bounds, size)
-                self?.isUpdatingFromDraw = false
+            // Mark dirty after a brief debounce. No SwiftUI state is written here —
+            // the PKCanvasView holds the drawing as source of truth.
+            debounce?.cancel()
+            let cb = parent.onInkChanged
+            let item = DispatchWorkItem {
+                cb?()
             }
-            debounceWorkItem = item
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: item)
+            debounce = item
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: item)
         }
 
-        func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
-            print("[INK-DEBUG] canvasViewDidBeginUsingTool: tool=\(canvasView.tool)")
+        func canvasViewDidBeginUsingTool(_ cv: PKCanvasView) {
+            // If user starts using any non-lasso tool, clear ink selection
+            if !(cv.tool is PKLassoTool) {
+                lassoStrokeCompleted = false
+                if case .inkSelection = parent.editorSelection {
+                    DispatchQueue.main.async { [weak self] in
+                        self?.parent.editorSelection = .none
+                    }
+                }
+            }
+        }
+
+        func canvasViewDidEndUsingTool(_ cv: PKCanvasView) {
+            // When lasso tool finishes a stroke, assume user created a selection
+            if cv.tool is PKLassoTool {
+                lassoStrokeCompleted = true
+                // Estimate selection bounds from recent drawing changes
+                let bounds = cv.drawing.bounds
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, let parent = self.parent else { return }
+                    parent.inkActionBridge.selectionBounds = bounds
+                    if case .inkSelection = parent.editorSelection { return }
+                    parent.editorSelection = .inkSelection
+                }
+            }
         }
 
         func pencilInteractionDidTap(_ interaction: UIPencilInteraction) {
-            let behavior = parent.doubleTapBehavior
-            switch behavior {
+            guard let parent = self.parent else { return }
+            let saved = lastToolState ?? parent.inkToolState
+            switch parent.doubleTapBehavior {
             case .switchToEraser:
                 if parent.inkToolState.kind == .eraser {
-                    parent.inkToolState = lastDrawingToolState
+                    parent.inkToolState = saved
                 } else {
-                    if parent.inkToolState.kind == .pen || parent.inkToolState.kind == .highlighter {
-                        lastDrawingToolState = parent.inkToolState
-                    }
+                    lastToolState = parent.inkToolState
                     parent.inkToolState.kind = .eraser
                 }
             case .switchToLasso:
                 if parent.inkToolState.kind == .lasso {
-                    parent.inkToolState = lastDrawingToolState
+                    parent.inkToolState = saved
                 } else {
-                    if parent.inkToolState.kind == .pen || parent.inkToolState.kind == .highlighter {
-                        lastDrawingToolState = parent.inkToolState
-                    }
+                    lastToolState = parent.inkToolState
                     parent.inkToolState.kind = .lasso
                 }
             case .togglePenHighlighter:
                 if parent.inkToolState.kind == .highlighter {
-                    parent.inkToolState = lastDrawingToolState
+                    parent.inkToolState = saved
                 } else {
-                    if parent.inkToolState.kind == .pen {
-                        lastDrawingToolState = parent.inkToolState
-                    }
+                    lastToolState = parent.inkToolState
                     parent.inkToolState.kind = .highlighter
                 }
             case .ignore:
@@ -340,60 +368,117 @@ struct CanvasPageScrollContainer<PaperContent: View>: UIViewRepresentable {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// MARK: - PencilOnlyCanvasView (PKCanvasView subclass)
+// MARK: - NotebookScrollVC
 // ═══════════════════════════════════════════════════════════════
-//
-// Sits on top of the paper content. Pencil always draws.
-// Finger taps pass through to the paper/text host below.
-// Finger drags are ignored here; the parent UIScrollView handles scrolling.
 
-final class PencilOnlyCanvasView: PKCanvasView {
+/// Custom UIScrollView that suppresses touch cancellation in text mode,
+/// allowing SwiftUI DragGesture on text objects to work without being
+/// killed by the scroll view's internal touch-forwarding machinery.
+final class CanvasScrollView: UIScrollView {
+    var isTextMode = false
 
-    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        // ── Check for Apple Pencil ──
-        if let touches = event?.allTouches {
-            for touch in touches {
-                if touch.type == .pencil {
-                    print("[INK-DEBUG] hitTest: PENCIL detected at \(point), returning self (frame=\(frame))")
-                    return self
-                }
-            }
+    /// In text mode, allow touch cancellation ONLY for 2-finger scroll.
+    /// Single-finger content touches (text object drag) are protected by
+    /// `minimumNumberOfTouches = 2` on the pan gesture — the scroll view
+    /// won't try to recognize single-finger pan, so it won't cancel them.
+    /// Returning `super` (true) here is essential so that 2-finger pan CAN
+    /// cancel content touches and start scrolling.
+}
+
+final class NotebookScrollVC: UIViewController, UIGestureRecognizerDelegate {
+    let scrollView = CanvasScrollView()
+    let contentView = UIView()
+    var isTextMode = false
+    private var dismissTap: UITapGestureRecognizer?
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .clear
+
+        scrollView.backgroundColor = .clear
+        scrollView.showsVerticalScrollIndicator = true
+        scrollView.showsHorizontalScrollIndicator = false
+        scrollView.alwaysBounceVertical = true
+        scrollView.delaysContentTouches = false
+
+        // CRITICAL: Only finger (direct touch) can pan the scroll view.
+        // Pencil (stylus) pan gestures are NOT claimed by the scroll view,
+        // so PKCanvasView gets them for drawing.
+        scrollView.panGestureRecognizer.allowedTouchTypes = [
+            NSNumber(value: UITouch.TouchType.direct.rawValue)
+        ]
+        if let pinch = scrollView.pinchGestureRecognizer {
+            pinch.allowedTouchTypes = [
+                NSNumber(value: UITouch.TouchType.direct.rawValue)
+            ]
         }
 
-        // ── Not a pencil touch → pass through to paper/text below ──
-        print("[INK-DEBUG] hitTest: FINGER at \(point), returning nil (pass-through)")
-        return nil
+        view.addSubview(scrollView)
+        scrollView.addSubview(contentView)
+        contentView.backgroundColor = .clear
+
+        // UIKit tap-to-dismiss: reliably resigns any UITextView first responder
+        // when user taps blank space on the canvas (outside a UITextView).
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleDismissTap))
+        tap.cancelsTouchesInView = false
+        tap.delegate = self
+        scrollView.addGestureRecognizer(tap)
+        dismissTap = tap
     }
 
-    override var canBecomeFirstResponder: Bool { true }
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        scrollView.frame = view.bounds
+    }
+
+    // MARK: - Dismiss keyboard on blank-area tap
+
+    @objc private func handleDismissTap() {
+        guard isTextMode else { return }
+        view.endEditing(true)
+    }
+
+    // Only fire when tapping outside a UITextView
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard gestureRecognizer === dismissTap, isTextMode else { return true }
+        let location = gestureRecognizer.location(in: contentView)
+        let hitView = contentView.hitTest(location, with: nil)
+        return !(hitView is UITextView)
+    }
+
+    // Allow simultaneous recognition with SwiftUI gestures
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+    ) -> Bool {
+        return gestureRecognizer === dismissTap
+    }
 }
 
 #endif
 
 // ═══════════════════════════════════════════════════════════════
-// MARK: - Layer 0: Paper Background
+// MARK: - Paper Background
 // ═══════════════════════════════════════════════════════════════
 
-private struct PaperBackgroundLayer: View {
+private struct PaperBackground: View {
     let pageWidth: CGFloat
     let pageHeight: CGFloat
 
     var body: some View {
-        Canvas { context, size in
-            var y = PageTokens.topInset
+        Canvas { ctx, size in
+            var y = PT.topInset
             while y < size.height - 28 {
-                let path = Path { p in
-                    p.move(to: CGPoint(x: 0, y: y))
-                    p.addLine(to: CGPoint(x: size.width, y: y))
-                }
-                context.stroke(path, with: .color(PageTokens.ruleColor), lineWidth: 0.5)
-                y += PageTokens.lineSpacing
+                ctx.stroke(
+                    Path { p in p.move(to: .init(x: 0, y: y)); p.addLine(to: .init(x: size.width, y: y)) },
+                    with: .color(PT.ruleColor), lineWidth: 0.5
+                )
+                y += PT.lineSpacing
             }
-            let margin = Path { p in
-                p.move(to: CGPoint(x: PageTokens.marginX, y: 18))
-                p.addLine(to: CGPoint(x: PageTokens.marginX, y: size.height - 18))
-            }
-            context.stroke(margin, with: .color(PageTokens.marginColor), lineWidth: 1.2)
+            ctx.stroke(
+                Path { p in p.move(to: .init(x: PT.marginX, y: 18)); p.addLine(to: .init(x: PT.marginX, y: size.height - 18)) },
+                with: .color(PT.marginColor), lineWidth: 1.2
+            )
         }
         .frame(width: pageWidth, height: pageHeight)
         .allowsHitTesting(false)
@@ -401,84 +486,175 @@ private struct PaperBackgroundLayer: View {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// MARK: - Layer 1: Editable Text Layer (user's OWN content only)
+// MARK: - User Content Layer
 // ═══════════════════════════════════════════════════════════════
 //
-// Shows ONLY:
-//   - Tiny source hint (metadata, not source text)
-//   - Editable title
-//   - User-created text paragraphs
-//   - User-inserted quotes (via ReferencePanel → "插入引用")
-//   - "Add content" affordances
-//   - Knowledge point tags
+// This renders ONLY user-authored content on the paper:
+//   • Title (editable)
+//   • Tiny metadata hint (one line, source reference)
+//   • User-CREATED text blocks (from "添加文本" or TEXT tool tap)
+//   • User-INSERTED quotes (from ReferencePanel "插入引用" action)
+//   • "Add content" buttons
 //
-// Does NOT show:
-//   - Source document text
-//   - Auto-generated source previews
-//   - Imported material
+// It does NOT render:
+//   • Source document text
+//   • Auto-generated source excerpts
+//   • Imported material previews
+//
+// To distinguish user-inserted quotes from auto-generated ones:
+//   Blocks with kind == .quote that were created at note-creation time
+//   (same text as sourceAnchor.quotedText) are HIDDEN on canvas.
+//   They still exist in the data model but are only visible in ReferencePanel.
 
-private struct EditableTextLayer: View {
+private struct UserContentLayer: View {
     @ObservedObject var vm: NoteWorkspaceViewModel
-    let isTextMode: Bool
-    var onContentHeightChange: ((CGFloat) -> Void)?
+    let isTextObjectInteractionMode: Bool
+    @Binding var editorSelection: EditorSelection
+    var onHeightChange: ((CGFloat) -> Void)?
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            sourceHintLine
-                .padding(.bottom, 16)
+    /// Focus sentinel — nil means title, non-nil means a block's TextEditor.
+    /// Prevents keyboard input from leaking between title and body blocks.
+    @FocusState private var focusedBlockID: UUID?
 
-            titleField
-                .padding(.bottom, 16)
+    /// Only show user-inserted quotes on the canvas.
+    /// Auto-generated source excerpts are hidden:
+    ///  - Any .quote whose text matches sourceAnchor.quotedText (fuzzy: ignoring whitespace)
+    ///  - Any .quote whose linkedSourceAnchorID matches note's anchor AND was created at note-creation time
+    /// These still exist in the data model and ReferencePanel can access them.
+    private var userQuoteBlocks: [NoteBlock] {
+        let sourceQuoteNorm = vm.sourceAnchor.quotedText
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        let noteCreatedAt = vm.note.createdAt
 
-            thinDivider
-                .padding(.bottom, 20)
+        return vm.blocks.filter { block in
+            guard block.kind == .quote else { return false }
+            guard let text = block.text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
 
-            // ── User-inserted quote blocks ──
-            ForEach(vm.blocks.filter { $0.kind == .quote }) { block in
-                if let text = block.text?.nonEmpty {
-                    quoteBlockView(text)
-                        .padding(.bottom, 16)
+            // Hide quotes created at the same time as the note (auto-injected at creation)
+            if abs(block.createdAt.timeIntervalSince(noteCreatedAt)) < 2 {
+                return false
+            }
+
+            let blockTextNorm = text
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+
+            // Hide if this matches the source anchor's quoted text
+            if !sourceQuoteNorm.isEmpty && blockTextNorm == sourceQuoteNorm {
+                return false
+            }
+
+            // Hide if it's a substantial prefix match
+            if !sourceQuoteNorm.isEmpty && sourceQuoteNorm.count > 10 {
+                let prefixLen = sourceQuoteNorm.count * 7 / 10
+                if blockTextNorm.hasPrefix(String(sourceQuoteNorm.prefix(prefixLen))) {
+                    return false
                 }
             }
 
-            // ── User text paragraphs ──
-            ForEach(vm.blocks.filter { $0.kind == .text }) { block in
-                editableTextParagraph(block: block)
-                    .padding(.bottom, 12)
+            // Hide if block text appears as a substring of the source full text
+            if let doc = vm.sourceDocument {
+                let extractedNorm = doc.extractedText
+                    .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+                if extractedNorm.contains(blockTextNorm) && blockTextNorm.count > 20 {
+                    return false
+                }
             }
 
-            // ── Add content actions ──
-            addContentBar
-                .padding(.top, 12)
-                .padding(.bottom, 20)
+            return true
+        }
+    }
 
-            // ── Knowledge point tags ──
-            if !vm.linkedKnowledgePoints.isEmpty {
-                knowledgeTagStrip
+    private var userTextBlocks: [NoteBlock] {
+        vm.blocks.filter { $0.kind == .text }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Editable title
+            titleField.padding(.bottom, 16)
+
+            Rectangle().fill(PT.divider).frame(height: 0.5).padding(.bottom, 20)
+
+            // User-inserted quotes only (auto-generated source quotes hidden)
+            ForEach(userQuoteBlocks) { block in
+                quoteView(block: block)
                     .padding(.bottom, 16)
             }
 
-            Spacer(minLength: 600)
+            // User text blocks
+            ForEach(userTextBlocks) { block in
+                textParagraph(block: block)
+                    .padding(.bottom, 12)
+            }
+
+            // Add content bar
+            actionBar.padding(.top, 12).padding(.bottom, 20)
+
+            // Knowledge tags
+            if !vm.linkedKnowledgePoints.isEmpty {
+                tagStrip.padding(.bottom, 16)
+            }
+
+            // Blank area — tapping here clears selection.
+            // (Text creation is now handled by CanvasTextObjectsLayer tap-to-create.)
+            Color.clear
+                .frame(minHeight: 600)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    DispatchQueue.main.async {
+                        focusedBlockID = nil
+                        if case .textBlock = editorSelection {
+                            editorSelection = .none
+                            vm.editingTextBlockID = nil
+                        }
+                    }
+                }
+                .allowsHitTesting(!isTextObjectInteractionMode)
         }
-        .background(sizeReader)
-        .onPreferenceChange(ContentHeightKey.self) { onContentHeightChange?($0) }
+        .background(heightReader)
+        .onPreferenceChange(HeightKey.self) { h in
+            DispatchQueue.main.async { onHeightChange?(h) }
+        }
+        .onChange(of: focusedBlockID) { newID in
+            DispatchQueue.main.async {
+                if let newID, newID != Self.titleFocusID {
+                    // Text block gained focus → update selection
+                    vm.editingTextBlockID = newID
+                    editorSelection = .textBlock(newID)
+                } else {
+                    // Focus lost or moved to title → clear text selection
+                    vm.editingTextBlockID = nil
+                    if case .textBlock = editorSelection {
+                        editorSelection = .none
+                    }
+                }
+            }
+        }
+        // Auto-focus new text blocks created by vm.addTextBlock()
+        .onChange(of: vm.editingTextBlockID) { newID in
+            if let newID, focusedBlockID != newID {
+                DispatchQueue.main.async {
+                    focusedBlockID = newID
+                }
+            }
+        }
     }
 
-    // MARK: - Source Hint (single line metadata, NOT source content)
+    // MARK: Sub-views
 
-    private var sourceHintLine: some View {
+    private var sourceHint: some View {
         HStack(spacing: 8) {
-            Image(systemName: "link")
-                .font(.system(size: 8, weight: .bold))
-            Text(vm.sourceHint)
-                .font(.system(size: 10, weight: .semibold))
-                .lineLimit(1)
+            Image(systemName: "link").font(.system(size: 8, weight: .bold))
+            Text(vm.sourceHint).font(.system(size: 10, weight: .semibold)).lineLimit(1)
             Spacer()
         }
-        .foregroundStyle(PageTokens.muted.opacity(0.55))
+        .foregroundStyle(PT.muted.opacity(0.55))
     }
 
-    // MARK: - Title
+    /// Sentinel UUID used exclusively for the title field focus.
+    private static let titleFocusID = UUID(uuidString: "00000000-0000-0000-FFFF-000000000001")!
 
     private var titleField: some View {
         TextField("笔记标题", text: Binding(
@@ -486,203 +662,289 @@ private struct EditableTextLayer: View {
             set: { vm.updateTitle($0) }
         ))
         .font(.system(size: 32, weight: .medium, design: .serif))
-        .foregroundStyle(PageTokens.ink)
+        .foregroundStyle(PT.ink)
         .textFieldStyle(.plain)
+        .focused($focusedBlockID, equals: Self.titleFocusID)
     }
 
-    // MARK: - Divider
+    private func quoteView(block: NoteBlock) -> some View {
+        let font = BlockStyleMapping.font(for: block.resolvedTextStyle, kind: .quote, size: block.resolvedFontSize)
+        let color = BlockStyleMapping.color(for: block.resolvedTextColor)
+        let hlColor = BlockStyleMapping.highlightBackground(for: block.resolvedHighlight)
 
-    private var thinDivider: some View {
-        Rectangle()
-            .fill(PageTokens.divider)
-            .frame(height: 0.5)
-    }
-
-    // MARK: - Quote Block
-
-    private func quoteBlockView(_ text: String) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            RoundedRectangle(cornerRadius: 1.5)
-                .fill(PageTokens.quoteBar)
-                .frame(width: 3)
-                .padding(.vertical, 2)
-
-            Text(text)
-                .font(.system(size: 16, weight: .regular, design: .serif))
+        return HStack(alignment: .top, spacing: 12) {
+            RoundedRectangle(cornerRadius: 1.5).fill(PT.quoteBar).frame(width: 3).padding(.vertical, 2)
+            Text(block.text ?? "")
+                .font(font)
                 .italic()
-                .foregroundStyle(PageTokens.ink.opacity(0.7))
+                .foregroundStyle(color.opacity(0.85))
                 .lineSpacing(6)
                 .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, hlColor != nil ? 4 : 0)
+                .padding(.vertical, hlColor != nil ? 2 : 0)
+                .background(
+                    hlColor.map {
+                        RoundedRectangle(cornerRadius: 3, style: .continuous).fill($0)
+                    }
+                )
         }
     }
 
-    // MARK: - Text Paragraph
+    private func textParagraph(block: NoteBlock) -> some View {
+        let font = BlockStyleMapping.font(for: block.resolvedTextStyle, kind: .text, size: block.resolvedFontSize)
+        let color = BlockStyleMapping.color(for: block.resolvedTextColor)
+        let hlColor = BlockStyleMapping.highlightBackground(for: block.resolvedHighlight)
 
-    private func editableTextParagraph(block: NoteBlock) -> some View {
-        TextEditor(text: Binding(
-            get: { block.text ?? "" },
+        // Build a style fingerprint so that `.id()` changes when ANY style changes,
+        // forcing SwiftUI to destroy & recreate the TextEditor (it caches text attributes).
+        let styleFP = "\(block.id)-\(block.textStyle?.rawValue ?? "d")-\(block.textColor?.rawValue ?? "d")-\(block.fontSizePreset?.rawValue ?? "d")-\(block.highlightStyle?.rawValue ?? "d")"
+
+        return TextEditor(text: Binding(
+            get: { vm.blocks.first(where: { $0.id == block.id })?.text ?? "" },
             set: { vm.updateTextBlock(id: block.id, text: $0) }
         ))
-        .font(.system(size: 16, weight: .regular, design: .serif))
-        .foregroundStyle(PageTokens.ink.opacity(0.85))
+        .font(font)
+        .foregroundColor(color.opacity(0.9))
         .lineSpacing(6)
         .scrollContentBackground(.hidden)
-        .background(Color.clear)
+        .background(
+            hlColor.map {
+                RoundedRectangle(cornerRadius: 3, style: .continuous).fill($0)
+            }
+        )
         .frame(minHeight: 44)
         .fixedSize(horizontal: false, vertical: true)
+        .focused($focusedBlockID, equals: block.id)
+        .id(styleFP)
     }
 
-    // MARK: - Add Content Bar
-
-    private var addContentBar: some View {
-        HStack(spacing: 14) {
-            addContentButton(icon: "text.alignleft", label: "添加文本") {
-                vm.addTextBlock()
-            }
-            addContentButton(icon: "quote.bubble", label: "插入引用") {
-                // User adds quotes via ReferencePanel; this adds a text block
-                vm.addTextBlock()
-            }
-            Spacer()
-        }
+    private var actionBar: some View {
+        EmptyView()
+        // Legacy "添加文本" button removed.
+        // New text is created by tapping the canvas in TEXT mode.
     }
 
-    private func addContentButton(icon: String, label: String, action: @escaping () -> Void) -> some View {
+    private func actionButton(icon: String, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 5) {
-                Image(systemName: icon)
-                    .font(.system(size: 11, weight: .semibold))
-                Text(label)
-                    .font(.system(size: 11, weight: .semibold))
+                Image(systemName: icon).font(.system(size: 11, weight: .semibold))
+                Text(label).font(.system(size: 11, weight: .semibold))
             }
-            .foregroundStyle(PageTokens.accent.opacity(0.65))
+            .foregroundStyle(PT.accent.opacity(0.65))
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(PageTokens.divider, lineWidth: 1)
-            )
+            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(PT.divider, lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
 
-    // MARK: - Knowledge Tags
-
-    private var knowledgeTagStrip: some View {
+    private var tagStrip: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("关联概念")
                 .font(.system(size: 9, weight: .bold))
                 .tracking(1.5)
-                .foregroundStyle(PageTokens.muted.opacity(0.45))
-
+                .foregroundStyle(PT.muted.opacity(0.45))
             FlowLayout(spacing: 6) {
-                ForEach(vm.linkedKnowledgePoints) { point in
-                    Text(point.title)
+                ForEach(vm.linkedKnowledgePoints) { pt in
+                    Text(pt.title)
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(PageTokens.tagText)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(Capsule(style: .continuous).fill(PageTokens.tagFill))
+                        .foregroundStyle(PT.tagText)
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(Capsule(style: .continuous).fill(PT.tagFill))
                 }
             }
         }
     }
 
-    // MARK: - Size Reader
-
-    private var sizeReader: some View {
-        GeometryReader { geo in
-            Color.clear.preference(key: ContentHeightKey.self, value: geo.size.height)
-        }
+    private var heightReader: some View {
+        GeometryReader { g in Color.clear.preference(key: HeightKey.self, value: g.size.height) }
     }
 }
 
-// ═══════════════════════════════════════════════════════════════
 // MARK: - FlowLayout
-// ═══════════════════════════════════════════════════════════════
 
 private struct FlowLayout: Layout {
     var spacing: CGFloat = 6
-
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let rows = computeRows(proposal: proposal, subviews: subviews)
-        let height = rows.reduce(CGFloat(0)) { r, row in
-            r + row.height + (r > 0 ? spacing : 0)
-        }
-        return CGSize(width: proposal.width ?? 0, height: height)
+        let rows = compute(proposal: proposal, subviews: subviews)
+        return CGSize(width: proposal.width ?? 0, height: rows.reduce(0) { $0 + $1.h + ($0 > 0 ? spacing : 0) })
     }
-
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let rows = computeRows(proposal: proposal, subviews: subviews)
         var y = bounds.minY
-        for row in rows {
+        for row in compute(proposal: proposal, subviews: subviews) {
             var x = bounds.minX
-            for item in row.items {
-                item.subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(item.size))
-                x += item.size.width + spacing
-            }
-            y += row.height + spacing
+            for item in row.items { item.sv.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(item.sz)); x += item.sz.width + spacing }
+            y += row.h + spacing
         }
     }
-
-    private struct RowItem { let subview: LayoutSubviews.Element; let size: CGSize }
-    private struct Row { var items: [RowItem] = []; var height: CGFloat = 0 }
-
-    private func computeRows(proposal: ProposedViewSize, subviews: Subviews) -> [Row] {
+    private struct Item { let sv: LayoutSubviews.Element; let sz: CGSize }
+    private struct Row { var items: [Item] = []; var h: CGFloat = 0 }
+    private func compute(proposal: ProposedViewSize, subviews: Subviews) -> [Row] {
         let maxW = proposal.width ?? .infinity
-        var rows: [Row] = [Row()]
-        var curW: CGFloat = 0
+        var rows: [Row] = [Row()]; var w: CGFloat = 0
         for sv in subviews {
-            let size = sv.sizeThatFits(.unspecified)
-            if curW + size.width > maxW, !rows[rows.count - 1].items.isEmpty {
-                rows.append(Row())
-                curW = 0
-            }
-            rows[rows.count - 1].items.append(RowItem(subview: sv, size: size))
-            rows[rows.count - 1].height = max(rows[rows.count - 1].height, size.height)
-            curW += size.width + spacing
+            let sz = sv.sizeThatFits(.unspecified)
+            if w + sz.width > maxW, !rows[rows.count-1].items.isEmpty { rows.append(Row()); w = 0 }
+            rows[rows.count-1].items.append(Item(sv: sv, sz: sz))
+            rows[rows.count-1].h = max(rows[rows.count-1].h, sz.height)
+            w += sz.width + spacing
         }
         return rows
     }
 }
 
-// MARK: - Preference Key
-
-private struct ContentHeightKey: PreferenceKey {
+private struct HeightKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
 // ═══════════════════════════════════════════════════════════════
-// MARK: - pkTool mapping
+// ═══════════════════════════════════════════════════════════════
+// MARK: - InkActionBridge
 // ═══════════════════════════════════════════════════════════════
 
-#if canImport(PencilKit)
+/// Bridges SwiftUI → PKCanvasView for ink selection actions (delete, copy, recolor).
+final class InkActionBridge {
+    weak var canvas: PKCanvasView?
 
-private extension NoteInkToolState {
-    var pkTool: PKTool {
-        switch kind {
-        case .pen:
-            return PKInkingTool(.pen, color: UIColor(colorChoice.color), width: width)
-        case .highlighter:
-            return PKInkingTool(.marker, color: UIColor(colorChoice.color.opacity(0.45)), width: width * 1.45)
-        case .eraser:
-            return PKEraserTool(eraserPreset == .precise ? .vector : .bitmap, width: eraserWidth)
-        case .lasso:
-            return PKLassoTool()
+    /// Cached bounds of the current lasso selection (set from coordinator).
+    var selectionBounds: CGRect = .zero
+
+    /// Returns the current drawing data for persistence.
+    func currentDrawingData() -> Data? {
+        canvas?.drawing.dataRepresentation()
+    }
+
+    /// Returns the current drawing bounds.
+    func currentDrawingBounds() -> CGRect {
+        canvas?.drawing.bounds ?? .zero
+    }
+
+    func deleteSelection() {
+        guard let canvas = canvas else { return }
+        canvas.becomeFirstResponder()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            UIApplication.shared.sendAction(
+                #selector(UIResponderStandardEditActions.delete(_:)),
+                to: nil, from: canvas, for: nil
+            )
+        }
+    }
+
+    func copySelection() {
+        guard let canvas = canvas else { return }
+        canvas.becomeFirstResponder()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            UIApplication.shared.sendAction(
+                #selector(UIResponderStandardEditActions.copy(_:)),
+                to: nil, from: canvas, for: nil
+            )
+        }
+    }
+
+    func duplicateSelection() {
+        guard let canvas = canvas else { return }
+        canvas.becomeFirstResponder()
+        // Copy + Paste at offset
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            UIApplication.shared.sendAction(#selector(UIResponderStandardEditActions.copy(_:)), to: nil, from: canvas, for: nil)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                UIApplication.shared.sendAction(#selector(UIResponderStandardEditActions.paste(_:)), to: nil, from: canvas, for: nil)
+            }
+        }
+    }
+
+    /// Recolors all strokes that intersect the current selection bounds.
+    /// Because PencilKit doesn't expose which strokes are "selected" by the lasso,
+    /// we find strokes whose bounds overlap the selection bounds and rebuild them.
+    func recolorSelection(to newColor: UIColor) {
+        guard let canvas = canvas, !selectionBounds.isEmpty else { return }
+        let drawing = canvas.drawing
+        let expandedBounds = selectionBounds.insetBy(dx: -5, dy: -5)
+        var newStrokes: [PKStroke] = []
+        var changed = false
+
+        for stroke in drawing.strokes {
+            if stroke.renderBounds.intersects(expandedBounds) {
+                let newInk = PKInk(stroke.ink.inkType, color: newColor)
+                let rebuilt = PKStroke(ink: newInk, path: stroke.path, transform: stroke.transform, mask: stroke.mask)
+                newStrokes.append(rebuilt)
+                changed = true
+            } else {
+                newStrokes.append(stroke)
+            }
+        }
+
+        if changed {
+            var newDrawing = PKDrawing()
+            newDrawing.strokes = newStrokes
+            canvas.drawing = newDrawing
+        }
+    }
+
+    /// Changes the width of strokes that intersect the selection bounds.
+    /// Note: PKStroke doesn't directly support width change, so we rebuild with new ink width
+    /// by scaling the path control points.
+    func rewidthSelection(to newWidth: CGFloat) {
+        guard let canvas = canvas, !selectionBounds.isEmpty else { return }
+        let drawing = canvas.drawing
+        let expandedBounds = selectionBounds.insetBy(dx: -5, dy: -5)
+        var newStrokes: [PKStroke] = []
+        var changed = false
+
+        for stroke in drawing.strokes {
+            if stroke.renderBounds.intersects(expandedBounds) {
+                // Rebuild stroke with adjusted path (scale control point sizes)
+                let originalPath = stroke.path
+                var newPoints: [PKStrokePoint] = []
+                for i in 0..<originalPath.count {
+                    let pt = originalPath[i]
+                    let newPt = PKStrokePoint(
+                        location: pt.location,
+                        timeOffset: pt.timeOffset,
+                        size: CGSize(width: newWidth, height: newWidth),
+                        opacity: pt.opacity,
+                        force: pt.force,
+                        azimuth: pt.azimuth,
+                        altitude: pt.altitude
+                    )
+                    newPoints.append(newPt)
+                }
+                let newPath = PKStrokePath(controlPoints: newPoints, creationDate: originalPath.creationDate)
+                let rebuilt = PKStroke(ink: stroke.ink, path: newPath, transform: stroke.transform, mask: stroke.mask)
+                newStrokes.append(rebuilt)
+                changed = true
+            } else {
+                newStrokes.append(stroke)
+            }
+        }
+
+        if changed {
+            var newDrawing = PKDrawing()
+            newDrawing.strokes = newStrokes
+            canvas.drawing = newDrawing
         }
     }
 }
 
+// MARK: - pkTool mapping
+// ═══════════════════════════════════════════════════════════════
+
+#if canImport(PencilKit)
+private extension NoteInkToolState {
+    var pkTool: PKTool {
+        switch kind {
+        case .pen:         return PKInkingTool(.pen, color: UIColor(colorChoice.color), width: width)
+        case .pencil:      return PKInkingTool(.pencil, color: UIColor(colorChoice.color), width: width)
+        case .ballpoint:   return PKInkingTool(.pen, color: UIColor(colorChoice.color), width: width)
+        case .highlighter: return PKInkingTool(.marker, color: UIColor(colorChoice.color.opacity(0.45)), width: width)
+        case .eraser:      return PKEraserTool(eraserPreset == .precise ? .vector : .bitmap, width: eraserWidth)
+        case .lasso:       return PKLassoTool()
+        }
+    }
+}
 #endif
 
-// MARK: - String helper
-
 private extension String {
-    var nonEmpty: String? {
-        let t = trimmingCharacters(in: .whitespacesAndNewlines)
-        return t.isEmpty ? nil : t
-    }
+    var nonEmpty: String? { trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : self }
 }

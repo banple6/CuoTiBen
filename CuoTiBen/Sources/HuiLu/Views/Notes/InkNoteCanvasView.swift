@@ -198,7 +198,8 @@ private struct InkCanvasRepresentable: UIViewRepresentable {
         }
 
         private func updatePageCountIfNeeded(_ candidate: Int) {
-            let clamped = min(max(candidate, 1), 48)
+            // Cap at 11 pages to stay within Metal texture height limit (≈12000px)
+            let clamped = min(max(candidate, 1), 11)
             guard clamped > pageCount else { return }
             DispatchQueue.main.async {
                 self.pageCount = clamped
@@ -260,7 +261,9 @@ private final class NotebookCanvasHostView: UIView {
         let previousOffset = scrollView.contentOffset
         let pageWidth = min(max(bounds.width - 44, 820), 1280)
         let resolvedPageHeight = max(pageWidth * 1.28, bounds.height - 20)
-        let contentHeight = resolvedPageHeight * CGFloat(resolvedPageCount)
+        // Cap total content height to avoid Metal texture allocation failures (limit ≈ 16384).
+        let maxContentHeight: CGFloat = 12000
+        let contentHeight = min(resolvedPageHeight * CGFloat(resolvedPageCount), maxContentHeight)
         let horizontalPadding = max((bounds.width - pageWidth) * 0.5, minimumHorizontalPadding)
 
         pageHeight = resolvedPageHeight
@@ -460,8 +463,12 @@ private extension NoteInkToolState {
         switch kind {
         case .pen:
             return PKInkingTool(.pen, color: UIColor(colorChoice.color), width: width)
+        case .pencil:
+            return PKInkingTool(.pencil, color: UIColor(colorChoice.color), width: width)
+        case .ballpoint:
+            return PKInkingTool(.pen, color: UIColor(colorChoice.color), width: width)
         case .highlighter:
-            return PKInkingTool(.marker, color: UIColor(colorChoice.color.opacity(0.45)), width: width * 1.45)
+            return PKInkingTool(.marker, color: UIColor(colorChoice.color.opacity(0.45)), width: width)
         case .eraser:
             return PKEraserTool(
                 eraserPreset == .precise ? .vector : .bitmap,

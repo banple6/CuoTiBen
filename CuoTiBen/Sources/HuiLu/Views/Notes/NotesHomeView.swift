@@ -103,8 +103,9 @@ struct NotesHomeView: View {
         }
     }
     private func syncScreenModel() {
+        let committedNotes = viewModel.notes.filter { $0.hasMeaningfulContent }
         screenModel = NotesHomeViewModel(
-            notes: viewModel.notes,
+            notes: committedNotes,
             sourceDocuments: viewModel.sourceDocuments,
             searchText: searchText,
             activeFilter: activeFilter

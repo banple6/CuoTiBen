@@ -15,22 +15,25 @@ enum ReferencePanelTab: String, CaseIterable, Identifiable {
     case structure  // 结构树
     case source     // 原文来源
     case mindmap    // 思维导图
+    case materials  // 资料合集
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
-        case .structure: return "结构树"
-        case .source:    return "原文"
-        case .mindmap:   return "导图"
+        case .structure:  return "结构树"
+        case .source:     return "原文"
+        case .mindmap:    return "导图"
+        case .materials:  return "资料"
         }
     }
 
     var icon: String {
         switch self {
-        case .structure: return "list.bullet.indent"
-        case .source:    return "doc.text"
-        case .mindmap:   return "brain.head.profile"
+        case .structure:  return "list.bullet.indent"
+        case .source:     return "doc.text"
+        case .mindmap:    return "brain.head.profile"
+        case .materials:  return "folder"
         }
     }
 }
@@ -56,8 +59,8 @@ struct ReferencePanel: View {
     @ObservedObject var vm: NoteWorkspaceViewModel
     let appViewModel: AppViewModel
     let onOpenSource: (SourceAnchor) -> Void
+    @Binding var activeTab: ReferencePanelTab
 
-    @State private var activeTab: ReferencePanelTab = .structure
     @State private var highlightedSentenceID: String?
 
     var body: some View {
@@ -122,6 +125,8 @@ struct ReferencePanel: View {
             sourceTabContent
         case .mindmap:
             mindmapTabContent
+        case .materials:
+            materialsTabContent
         }
     }
 
@@ -216,7 +221,7 @@ struct ReferencePanel: View {
                 Rectangle().fill(RefTokens.divider).frame(height: 0.5)
                     .padding(.vertical, 4)
 
-                // "返回原文" action
+                // "查看原文" action — opens source IN the panel, never a blocking modal
                 Button {
                     onOpenSource(vm.sourceAnchor)
                 } label: {
@@ -236,6 +241,21 @@ struct ReferencePanel: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.bottom, 8)
+            } else {
+                // Source not available — light inline status, never blocking
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.circle")
+                        .font(.system(size: 12, weight: .medium))
+                    Text("来源暂不可用")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .foregroundStyle(RefTokens.muted.opacity(0.6))
+                .padding(.vertical, 8)
+
+                Text("该笔记关联的原文资料尚未导入或已被移除。\n不影响笔记编辑。")
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(RefTokens.muted.opacity(0.45))
+                    .lineSpacing(4)
             }
 
             Rectangle().fill(RefTokens.divider).frame(height: 0.5)
@@ -446,6 +466,48 @@ struct ReferencePanel: View {
             .font(.system(size: 12, weight: .medium))
             .foregroundStyle(RefTokens.muted.opacity(0.5))
             .padding(.top, 8)
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // MARK: - Tab: 资料合集
+    // ═══════════════════════════════════════════════════════════
+
+    private var materialsTabContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionHeader("已导入资料")
+                .padding(.top, 8)
+
+            if appViewModel.sourceDocuments.isEmpty {
+                emptyLabel("暂无导入资料")
+            } else {
+                ForEach(appViewModel.sourceDocuments) { doc in
+                    materialDocRow(doc)
+                }
+            }
+        }
+    }
+
+    private func materialDocRow(_ doc: SourceDocument) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(doc.title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(RefTokens.ink.opacity(0.8))
+                .lineLimit(2)
+
+            HStack(spacing: 8) {
+                Text("\(doc.pageCount) 页")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(RefTokens.muted.opacity(0.6))
+                Text(doc.importDate.formatted(.dateTime.month().day()))
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(RefTokens.muted.opacity(0.5))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 6)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(RefTokens.divider).frame(height: 0.5)
+        }
     }
 }
 

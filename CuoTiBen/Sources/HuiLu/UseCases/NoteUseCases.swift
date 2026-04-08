@@ -231,7 +231,9 @@ private func builtBlocks(
     inkData: Data?,
     inkBlock: NoteBlock?
 ) -> [NoteBlock] {
-    var blocks: [NoteBlock] = [.quote(quoteText)]
+    // Note starts empty — source text is NOT auto-injected.
+    // Users can manually insert quotes from ReferencePanel.
+    var blocks: [NoteBlock] = []
 
     if let body = body.nonEmpty {
         blocks.append(.text(body))

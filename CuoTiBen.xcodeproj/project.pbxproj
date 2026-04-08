@@ -103,6 +103,13 @@
 		B0000000000000000000005B /* WorkspaceFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000005B /* WorkspaceFlow.swift */; };
 		B0000000000000000000005C /* FlowCoordinators.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000005C /* FlowCoordinators.swift */; };
 		B0000000000000000000005D /* DependencyContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000005D /* DependencyContainer.swift */; };
+		B00000000000000000000061 /* BlockStyleTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000061 /* BlockStyleTokens.swift */; };
+		B00000000000000000000062 /* BlockStylePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000062 /* BlockStylePicker.swift */; };
+		B00000000000000000000063 /* CanvasTextObjectsLayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000063 /* CanvasTextObjectsLayer.swift */; };
+		B00000000000000000000064 /* CanvasTextObjectContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000064 /* CanvasTextObjectContainer.swift */; };
+		B00000000000000000000065 /* CanvasTextViewBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000065 /* CanvasTextViewBridge.swift */; };
+		B00000000000000000000066 /* TextObjectSelectionOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000066 /* TextObjectSelectionOverlay.swift */; };
+		B00000000000000000000067 /* TextObjectResizeHandleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000067 /* TextObjectResizeHandleView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -203,6 +210,13 @@
 		C0000000000000000000005B /* WorkspaceFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceFlow.swift; sourceTree = "<group>"; };
 		C0000000000000000000005C /* FlowCoordinators.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlowCoordinators.swift; sourceTree = "<group>"; };
 		C0000000000000000000005D /* DependencyContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DependencyContainer.swift; sourceTree = "<group>"; };
+		C00000000000000000000061 /* BlockStyleTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockStyleTokens.swift; sourceTree = "<group>"; };
+		C00000000000000000000062 /* BlockStylePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockStylePicker.swift; sourceTree = "<group>"; };
+		C00000000000000000000063 /* CanvasTextObjectsLayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasTextObjectsLayer.swift; sourceTree = "<group>"; };
+		C00000000000000000000064 /* CanvasTextObjectContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasTextObjectContainer.swift; sourceTree = "<group>"; };
+		C00000000000000000000065 /* CanvasTextViewBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasTextViewBridge.swift; sourceTree = "<group>"; };
+		C00000000000000000000066 /* TextObjectSelectionOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextObjectSelectionOverlay.swift; sourceTree = "<group>"; };
+		C00000000000000000000067 /* TextObjectResizeHandleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextObjectResizeHandleView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -405,6 +419,7 @@
 			children = (
 				C00000000000000000000054 /* ArchivistTokens.swift */,
 				C00000000000000000000053 /* WorkspaceDesignTokens.swift */,
+				C00000000000000000000061 /* BlockStyleTokens.swift */,
 			);
 			path = DesignSystem;
 			sourceTree = "<group>";
@@ -479,6 +494,11 @@
 				C0000000000000000000004D /* NoteNotebookView.swift */,
 				C0000000000000000000003C /* NoteWorkspaceView.swift */,					C0000000000000000000005E /* NotebookWorkspaceView.swift */,
 				C0000000000000000000005F /* NotebookPageCanvasView.swift */,
+				C00000000000000000000063 /* CanvasTextObjectsLayer.swift */,
+				C00000000000000000000064 /* CanvasTextObjectContainer.swift */,
+				C00000000000000000000065 /* CanvasTextViewBridge.swift */,
+				C00000000000000000000066 /* TextObjectSelectionOverlay.swift */,
+				C00000000000000000000067 /* TextObjectResizeHandleView.swift */,
 				C00000000000000000000060 /* ReferencePanel.swift */,				C0000000000000000000004B /* RelatedCardsSection.swift */,
 				C00000000000000000000047 /* RelatedContextPanel.swift */,
 				C00000000000000000000049 /* RelatedKnowledgePointsSection.swift */,
@@ -497,6 +517,7 @@
 				C0000000000000000000003F /* QuoteBlockView.swift */,
 				C00000000000000000000040 /* TextBlockEditorView.swift */,
 				C0000000000000000000003D /* WorkspaceTopBar.swift */,
+				C00000000000000000000062 /* BlockStylePicker.swift */,
 			);
 			path = Notes;
 			sourceTree = "<group>";
@@ -633,6 +654,11 @@
 				B0000000000000000000004D /* NoteNotebookView.swift in Sources */,
 				B0000000000000000000003C /* NoteWorkspaceView.swift in Sources */,						B0000000000000000000005E /* NotebookWorkspaceView.swift in Sources */,
 				B0000000000000000000005F /* NotebookPageCanvasView.swift in Sources */,
+				B00000000000000000000063 /* CanvasTextObjectsLayer.swift in Sources */,
+				B00000000000000000000064 /* CanvasTextObjectContainer.swift in Sources */,
+				B00000000000000000000065 /* CanvasTextViewBridge.swift in Sources */,
+				B00000000000000000000066 /* TextObjectSelectionOverlay.swift in Sources */,
+				B00000000000000000000067 /* TextObjectResizeHandleView.swift in Sources */,
 				B00000000000000000000060 /* ReferencePanel.swift in Sources */,				B0000000000000000000004B /* RelatedCardsSection.swift in Sources */,
 				B00000000000000000000047 /* RelatedContextPanel.swift in Sources */,
 				B00000000000000000000049 /* RelatedKnowledgePointsSection.swift in Sources */,
@@ -666,6 +692,8 @@
 				B0000000000000000000005B /* WorkspaceFlow.swift in Sources */,
 				B0000000000000000000005C /* FlowCoordinators.swift in Sources */,
 				B0000000000000000000005D /* DependencyContainer.swift in Sources */,
+				B00000000000000000000061 /* BlockStyleTokens.swift in Sources */,
+				B00000000000000000000062 /* BlockStylePicker.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
