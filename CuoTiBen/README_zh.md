@@ -1,6 +1,6 @@
 # 慧录 / CuoTiBen 开发记录
 
-截至 `2026-04-08`，这个项目已经从最初的 SwiftUI 原型推进到了一个可运行的英语学习工作台，主链路包括：
+截至 `2026-04-09`，这个项目已经从最初的 SwiftUI 原型推进到了一个可运行的英语学习工作台，主链路包括：
 
 - 英语资料导入、OCR、结构化理解与大纲树
 - 原始 PDF / 阅读版 PDF 双模式阅读
@@ -18,6 +18,7 @@
 - 笔记工作台已完成一轮 `Digital Archivist` 重构，并在本轮进一步切到 **single persistent paper-first workspace**
 - 最新一轮完成了 **PencilKit 手写墨迹底层稳定化 + 自由画布文本对象系统 + 完整手写工具面板**
 - 文本对象系统已进一步收口到 **Canvas object shell + UITextView input core + transient frame / commit on end** 的稳定交互架构
+- 文本解析链路已新增 **质量诊断日志 + OCR 方向校正 + 反转英文自动修复**
 
 本文档用于记录当前实际开发进度、项目结构、运行方式和最近迭代日志。
 
@@ -59,6 +60,10 @@
   - ranked 中间结果缓存
   - PDF 高亮增量 diff 刷新
   - 笔记详情 / 工作台 / 索引页减少重复重算
+- 文本管线新增一层质量守卫：
+  - `Chunking -> Parse -> Explain` 各阶段可记录诊断日志
+  - 可检测并自动修复字符级反转英文文本
+  - OCR 阶段会按 PDF 页面旋转角度校正 Vision 识别方向
 
 ## 已完成能力
 
@@ -342,6 +347,40 @@
 - TEXT / SELECT 两种工具都已接入对象态仲裁：
   - TEXT 模式下点击纸面空白可创建对象
   - SELECT 模式下保留对象选中与操作，不再因工具切换丢失文本对象上下文
+
+### 13. 文本管线诊断与反转修复 (2026-04-09)
+
+**核心目标**: 避免 OCR / 解析 / 句子讲解链路中出现整句英文反转、页面方向识别错误、问题难以定位的情况。
+
+#### 新增质量守卫
+- 新增 `TextPipelineValidator`：
+  - 基于高频英文词命中率 + `NLLanguageRecognizer` 判断文本是否疑似反转
+  - 提供 `validateAndRepairIfReversed` 与 `assessQuality` 两层能力
+  - 可检查英文占比、常见词命中、语言置信度、异常模式与疑似乱码
+- 新增 `TextPipelineDiagnostics`：
+  - 记录 `Draft构建 / PDF提取 / OCR提取 / 解析入口 / 后端响应 / 合并完成 / 句子分析` 等阶段事件
+  - 支持 `info / warning / error / repaired` 四种严重级别
+  - Debug 环境下可直接打印最近日志，便于快速定位文本问题
+
+#### OCR 与解析链路修复
+- `ChunkingService` 现在会：
+  - 按 PDF 页面 `rotation` 推断 Vision `CGImagePropertyOrientation`
+  - 在 OCR 输出和最终 `SourceTextDraft` 出口处检测并修复反转文本
+  - 记录源文本页数、OCR 页数、每页识别字符数等关键诊断信息
+- `AISourceParsingService` 现在会：
+  - 在请求前评估输入 `rawText` 质量
+  - 记录本地回退构建、HTTP 响应、解码失败、网络异常等关键节点
+  - 在远端句子与本地 fallback 合并时自动修复疑似反转句子
+- `AIExplainSentenceService` 现在会：
+  - 在发送句子讲解请求前再次校验 `sentence` 与 `context`
+  - 如果检测到反转文本，会先修复再发请求，减少讲解结果异常
+
+#### 调试视图
+- 新增 `TextPipelineDiagnosticsView`：
+  - 用于查看最近的文本管线事件列表
+  - 支持刷新与清空日志
+- 新增 `TextQualityBadge`：
+  - 可对任意文本做快速健康状态提示
 
 ### 🎨 Digital Archivist 学术工作区 (v1.0.0 - 2026-04-01)
 

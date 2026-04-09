@@ -103,15 +103,33 @@ enum AIExplainSentenceService {
             throw AIExplainSentenceServiceError.invalidBaseURL
         }
 
+        // 发送前检测句子文本是否反转，如有则自动修复
+        let (validatedSentence, sentenceRepaired) = TextPipelineValidator.validateAndRepairIfReversed(context.sentence)
+        let (validatedContext, _) = TextPipelineValidator.validateAndRepairIfReversed(context.context)
+
+        if sentenceRepaired {
+            TextPipelineDiagnostics.log(
+                "句子分析",
+                "发送前检测到反转句子，已修复: \"\(String(context.sentence.prefix(40)))…\"",
+                severity: .repaired
+            )
+        }
+
+        let validatedExplainContext = ExplainSentenceContext(
+            title: context.title,
+            sentence: validatedSentence,
+            context: validatedContext
+        )
+
         var request = URLRequest(url: endpointURL)
         request.httpMethod = "POST"
         request.timeoutInterval = 25
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(
             ExplainSentenceRequest(
-                title: context.title,
-                sentence: context.sentence,
-                context: context.context
+                title: validatedExplainContext.title,
+                sentence: validatedExplainContext.sentence,
+                context: validatedExplainContext.context
             )
         )
 

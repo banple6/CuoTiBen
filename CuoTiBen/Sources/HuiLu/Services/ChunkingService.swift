@@ -143,6 +143,37 @@ public final class ChunkingService: ChunkingServiceProtocol {
             let rawText = anchors.map(\.text).joined(separator: "\n\n").normalizedWhitespace()
             let language = self.dominantLanguage(for: rawText)
 
+            TextPipelineDiagnostics.log(
+                "Draft构建",
+                "rawText=\(rawText.count)字符 anchors=\(anchors.count) lang=\(language) sentenceDrafts=\(segments.flatMap(\.sentenceDrafts).count)"
+            )
+
+            // 出口质量校验
+            let report = TextPipelineValidator.assessQuality(of: rawText)
+            if report.isReversed {
+                TextPipelineDiagnostics.log(
+                    "Draft构建",
+                    "rawText 检测到反转，自动修复中",
+                    severity: .repaired
+                )
+                let repairedRawText = TextPipelineValidator.repairReversedText(rawText)
+                let repairedAnchors = anchors.map { anchor in
+                    let (repairedText, _) = TextPipelineValidator.validateAndRepairIfReversed(anchor.text)
+                    return SourceTextAnchorDraft(
+                        anchorID: anchor.anchorID,
+                        label: anchor.label,
+                        page: anchor.page,
+                        text: repairedText
+                    )
+                }
+                return SourceTextDraft(
+                    rawText: repairedRawText,
+                    anchors: repairedAnchors,
+                    isLikelyEnglish: language == .english || language == .mixed,
+                    sentenceDrafts: segments.flatMap(\.sentenceDrafts)
+                )
+            }
+
             return SourceTextDraft(
                 rawText: rawText,
                 anchors: anchors,
@@ -211,12 +242,17 @@ public final class ChunkingService: ChunkingServiceProtocol {
             throw ChunkingError.extractionFailed("PDF 无法读取")
         }
 
+        TextPipelineDiagnostics.log("PDF提取", "开始处理PDF: \(document.pageCount)页 path=\(url.lastPathComponent)")
+
         var segments: [ParsedSegment] = []
+        var sourceTextPages = 0
+        var ocrPages = 0
 
         for index in 0..<document.pageCount {
             guard let page = document.page(at: index) else { continue }
             let text = page.string?.normalizedWhitespace() ?? ""
             if !text.isEmpty {
+                sourceTextPages += 1
                 segments.append(
                     ParsedSegment(
                         locator: "第\(index + 1)页",
@@ -228,6 +264,7 @@ public final class ChunkingService: ChunkingServiceProtocol {
                 continue
             }
 
+            ocrPages += 1
             let ocrDraft = try recognizePDFPageText(page, pageNumber: index + 1)
             let recognizedText = ocrDraft.text.normalizedWhitespace()
             guard !recognizedText.isEmpty else { continue }
@@ -242,7 +279,13 @@ public final class ChunkingService: ChunkingServiceProtocol {
             )
         }
 
+        TextPipelineDiagnostics.log(
+            "PDF提取",
+            "提取完成: \(segments.count)段 源文本页=\(sourceTextPages) OCR页=\(ocrPages)"
+        )
+
         if segments.isEmpty {
+            TextPipelineDiagnostics.log("PDF提取", "PDF正文为空", severity: .error)
             throw ChunkingError.extractionFailed("PDF 正文为空")
         }
 
@@ -337,19 +380,63 @@ public final class ChunkingService: ChunkingServiceProtocol {
             throw ChunkingError.extractionFailed("PDF 页面无法转换为 OCR 图像")
         }
 
+        // 根据 PDF 页面旋转角度推断图像方向
+        let orientation = Self.visionOrientation(fromPDFPageRotation: page.rotation)
+
         let request = makeOCRRequest()
         do {
-            let handler = VNImageRequestHandler(cgImage: cgImage)
+            let handler = VNImageRequestHandler(cgImage: cgImage, orientation: orientation)
             try handler.perform([request])
         } catch {
             throw ChunkingError.extractionFailed(error.localizedDescription)
         }
 
-        return makeOCRPageDraft(
+        let draft = makeOCRPageDraft(
             from: request.results ?? [],
             pageNumber: pageNumber,
             locator: "第\(pageNumber)页"
         )
+
+        TextPipelineDiagnostics.log(
+            "OCR提取",
+            "第\(pageNumber)页 OCR完成: \(request.results?.count ?? 0)行 \(draft.text.count)字符 rotation=\(page.rotation)° orientation=\(orientation.rawValue)"
+        )
+
+        // OCR 输出质量检查
+        if !draft.text.isEmpty {
+            let (repairedText, wasRepaired) = TextPipelineValidator.validateAndRepairIfReversed(draft.text)
+            if wasRepaired {
+                TextPipelineDiagnostics.log(
+                    "OCR提取",
+                    "第\(pageNumber)页 OCR文本疑似反转，已修复",
+                    severity: .repaired
+                )
+                return OCRPageDraft(
+                    text: repairedText,
+                    sentenceDrafts: draft.sentenceDrafts.map { sentenceDraft in
+                        let (repairedSentence, _) = TextPipelineValidator.validateAndRepairIfReversed(sentenceDraft.text)
+                        return SourceSentenceDraft(
+                            id: sentenceDraft.id,
+                            text: repairedSentence,
+                            anchorLabel: sentenceDraft.anchorLabel,
+                            geometry: sentenceDraft.geometry
+                        )
+                    }
+                )
+            }
+        }
+
+        return draft
+    }
+
+    /// 将 PDF 页面旋转角度转换为 Vision 识别方向
+    nonisolated private static func visionOrientation(fromPDFPageRotation rotation: Int) -> CGImagePropertyOrientation {
+        switch rotation {
+        case 90: return .right
+        case 180: return .down
+        case 270: return .left
+        default: return .up
+        }
     }
 
     private func makeOCRPageDraft(

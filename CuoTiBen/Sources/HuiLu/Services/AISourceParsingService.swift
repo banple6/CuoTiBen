@@ -127,6 +127,21 @@ enum AISourceParsingService {
         pageCount: Int,
         draft: SourceTextDraft
     ) async throws -> StructuredSourceParsePayload {
+        TextPipelineDiagnostics.log(
+            "解析入口",
+            "开始解析 \"\(title)\" rawText=\(draft.rawText.count)字符 anchors=\(draft.anchors.count) pages=\(pageCount) type=\(documentType.rawValue)"
+        )
+
+        // 入口处验证 rawText 质量
+        let inputReport = TextPipelineValidator.assessQuality(of: draft.rawText)
+        if !inputReport.isHealthy {
+            TextPipelineDiagnostics.log(
+                "解析入口",
+                "输入文本质量异常: \(inputReport)",
+                severity: .warning
+            )
+        }
+
         let localFallback = buildLocalFallbackPayload(
             documentID: documentID,
             title: title,
@@ -134,6 +149,12 @@ enum AISourceParsingService {
             pageCount: pageCount,
             draft: draft
         )
+
+        TextPipelineDiagnostics.log(
+            "本地回退",
+            "本地回退已构建: \(localFallback.bundle.sentences.count)句 \(localFallback.bundle.segments.count)段"
+        )
+
         let baseURLString = AIExplainSentenceService.storedBaseURL
         guard let endpointURL = URL(string: "\(baseURLString)/ai/parse-source") else {
             throw AISourceParsingServiceError.invalidBaseURL
@@ -167,9 +188,31 @@ enum AISourceParsingService {
                 throw AISourceParsingServiceError.invalidServerResponse
             }
 
+            TextPipelineDiagnostics.log(
+                "后端响应",
+                "HTTP \(httpResponse.statusCode) 数据量=\(data.count)字节"
+            )
+
             let decoded = try JSONDecoder().decode(ParseSourceResponseEnvelope.self, from: data)
 
             if httpResponse.statusCode == 200, decoded.success, let payload = decoded.data {
+                TextPipelineDiagnostics.log(
+                    "后端响应",
+                    "解析成功: \(payload.sentences.count)句 \(payload.segments.count)段 \(payload.outline.count)大纲节点"
+                )
+
+                // 检测后端返回的句子是否存在反转
+                let reversedSentences = payload.sentences.filter {
+                    TextPipelineValidator.isLikelyReversedEnglish($0.text)
+                }
+                if !reversedSentences.isEmpty {
+                    TextPipelineDiagnostics.log(
+                        "后端响应",
+                        "⚠️ 检测到 \(reversedSentences.count)/\(payload.sentences.count) 条后端句子疑似反转，将在合并时自动修复",
+                        severity: .warning
+                    )
+                }
+
                 let remotePayload = StructuredSourceParsePayload(
                     bundle: StructuredSourceBundle(
                         source: payload.source,
@@ -181,24 +224,35 @@ enum AISourceParsingService {
                     topicTags: payload.topicTags,
                     candidateKnowledgePoints: payload.candidateKnowledgePoints
                 )
-                return mergeRemotePayload(
+                let result = mergeRemotePayload(
                     remotePayload,
                     withLocalFallback: localFallback,
                     draft: draft
                 )
+
+                TextPipelineDiagnostics.log(
+                    "合并完成",
+                    "最终输出: \(result.bundle.sentences.count)句 \(result.bundle.segments.count)段"
+                )
+
+                return result
             }
 
             if let message = decoded.error, !message.isEmpty {
+                TextPipelineDiagnostics.log("后端响应", "服务端错误: \(message)", severity: .error)
                 throw AISourceParsingServiceError.requestFailed(message)
             }
 
             throw AISourceParsingServiceError.invalidServerResponse
         } catch let error as AISourceParsingServiceError {
+            TextPipelineDiagnostics.log("解析异常", "服务异常: \(error.localizedDescription)", severity: .error)
             throw error
         } catch let error as DecodingError {
+            TextPipelineDiagnostics.log("解析异常", "JSON解码失败: \(error)", severity: .error)
             print("[AISourceParsingService] decode failed: \(error)")
             throw AISourceParsingServiceError.invalidServerResponse
         } catch {
+            TextPipelineDiagnostics.log("解析异常", "网络错误: \(error.localizedDescription)", severity: .error)
             throw AISourceParsingServiceError.transport(error.localizedDescription)
         }
     }
@@ -428,9 +482,22 @@ private extension AISourceParsingService {
         fallback: [Sentence]
     ) -> [Sentence] {
         let fallbackByID = Dictionary(uniqueKeysWithValues: fallback.map { ($0.id, $0) })
+        var repairedCount = 0
 
-        return remote.map { sentence in
+        let merged = remote.map { sentence -> Sentence in
             let matchedFallback = fallbackByID[sentence.id] ?? bestFallbackSentence(for: sentence, in: fallback)
+            let mergedText = preferredText(primary: sentence.text, fallback: matchedFallback?.text)
+
+            // 反转文本检测与自动修复
+            let (validatedText, wasRepaired) = TextPipelineValidator.validateAndRepairIfReversed(mergedText)
+            if wasRepaired {
+                repairedCount += 1
+                TextPipelineDiagnostics.log(
+                    "合并句子",
+                    "检测到反转文本并已修复 [\(sentence.id)]: \"\(String(mergedText.prefix(40)))…\" → \"\(String(validatedText.prefix(40)))…\"",
+                    severity: .repaired
+                )
+            }
 
             return Sentence(
                 id: sentence.id,
@@ -438,12 +505,22 @@ private extension AISourceParsingService {
                 segmentID: sentence.segmentID,
                 index: sentence.index,
                 localIndex: sentence.localIndex,
-                text: preferredText(primary: sentence.text, fallback: matchedFallback?.text),
+                text: validatedText,
                 anchorLabel: preferredLabel(primary: sentence.anchorLabel, fallback: matchedFallback?.anchorLabel, defaultValue: "原文定位"),
                 page: sentence.page ?? matchedFallback?.page,
                 geometry: sentence.geometry ?? matchedFallback?.geometry
             )
         }
+
+        if repairedCount > 0 {
+            TextPipelineDiagnostics.log(
+                "合并句子",
+                "共修复 \(repairedCount)/\(merged.count) 条反转句子",
+                severity: .warning
+            )
+        }
+
+        return merged
     }
 
     static func mergeRemoteSegments(

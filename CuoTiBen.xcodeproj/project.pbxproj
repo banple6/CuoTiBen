@@ -110,6 +110,8 @@
 		B00000000000000000000065 /* CanvasTextViewBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000065 /* CanvasTextViewBridge.swift */; };
 		B00000000000000000000066 /* TextObjectSelectionOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000066 /* TextObjectSelectionOverlay.swift */; };
 		B00000000000000000000067 /* TextObjectResizeHandleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000067 /* TextObjectResizeHandleView.swift */; };
+		B00000000000000000000068 /* TextPipelineValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000068 /* TextPipelineValidator.swift */; };
+		B00000000000000000000069 /* TextPipelineDiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000069 /* TextPipelineDiagnosticsView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -217,6 +219,8 @@
 		C00000000000000000000065 /* CanvasTextViewBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasTextViewBridge.swift; sourceTree = "<group>"; };
 		C00000000000000000000066 /* TextObjectSelectionOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextObjectSelectionOverlay.swift; sourceTree = "<group>"; };
 		C00000000000000000000067 /* TextObjectResizeHandleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextObjectResizeHandleView.swift; sourceTree = "<group>"; };
+		C00000000000000000000068 /* TextPipelineValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextPipelineValidator.swift; sourceTree = "<group>"; };
+		C00000000000000000000069 /* TextPipelineDiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextPipelineDiagnosticsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -326,6 +330,7 @@
 				C00000000000000000000024 /* NoteRepository.swift */,
 				C0000000000000000000000F /* ReviewScheduler.swift */,
 				C0000000000000000000004C /* SourceJumpCoordinator.swift */,
+				C00000000000000000000068 /* TextPipelineValidator.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -389,6 +394,7 @@
 				C0000000000000000000001F /* SourceDetailSheets.swift */,
 				C00000000000000000000020 /* ReviewWorkbenchView.swift */,
 				C00000000000000000000021 /* StructuredSourcePDFReader.swift */,
+				C00000000000000000000069 /* TextPipelineDiagnosticsView.swift */,
 				D0000000000000000000000A /* Cards */,
 				D0000000000000000000000B /* Home */,
 				D0000000000000000000000C /* Materials */,
@@ -694,6 +700,8 @@
 				B0000000000000000000005D /* DependencyContainer.swift in Sources */,
 				B00000000000000000000061 /* BlockStyleTokens.swift in Sources */,
 				B00000000000000000000062 /* BlockStylePicker.swift in Sources */,
+				B00000000000000000000068 /* TextPipelineValidator.swift in Sources */,
+				B00000000000000000000069 /* TextPipelineDiagnosticsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
