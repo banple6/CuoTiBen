@@ -30,23 +30,54 @@ enum NormalizedDocumentConverter {
     ) -> StructuredSourceParsePayload {
         let sourceID = documentID.uuidString
 
+        // ── 0. 入口诊断日志 ──
+        TextPipelineDiagnostics.log(
+            "PP",
+            "[PP][Converter] 入口: blocks=\(document.blocks.count) paragraphs=\(document.paragraphs.count) candidates=\(document.structureCandidates.count) doc=\(documentID)",
+            severity: .info
+        )
+
         // ── 1. 过滤块：移除噪声和低置信度块 ──
+        var filterStats = (noise: 0, headerFooter: 0, lowConf: 0, emptyText: 0)
         let cleanedBlocks = document.blocks.filter { block in
             // 直接删除噪声类型
             guard block.blockType != .noise else {
+                filterStats.noise += 1
                 TextPipelineDiagnostics.log("PP", "[PP] 过滤噪声块 id=\(block.id) text=\"\(block.text.prefix(30))\"", severity: .info)
                 return false
             }
             // 页眉页脚直接删除
-            guard block.blockType != .pageHeader && block.blockType != .pageFooter else { return false }
+            guard block.blockType != .pageHeader && block.blockType != .pageFooter else {
+                filterStats.headerFooter += 1
+                return false
+            }
             // 低置信度抑制
             guard block.confidence >= minBlockConfidence else {
+                filterStats.lowConf += 1
                 TextPipelineDiagnostics.log("PP", "[PP] 过滤低置信度块 id=\(block.id) conf=\(String(format: "%.2f", block.confidence)) type=\(block.blockType.rawValue)", severity: .warning)
                 return false
             }
             // 空文本排除
-            guard !block.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+            guard !block.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                filterStats.emptyText += 1
+                return false
+            }
             return true
+        }
+
+        // ── 过滤统计 ──
+        if cleanedBlocks.isEmpty && !document.blocks.isEmpty {
+            TextPipelineDiagnostics.log(
+                "PP",
+                "[PP][Converter] ⚠️ 所有块被过滤! 原始=\(document.blocks.count) 噪声=\(filterStats.noise) 页眉页脚=\(filterStats.headerFooter) 低置信度=\(filterStats.lowConf) 空文本=\(filterStats.emptyText) doc=\(documentID)",
+                severity: .error
+            )
+        } else {
+            TextPipelineDiagnostics.log(
+                "PP",
+                "[PP][Converter] 过滤统计: 原始=\(document.blocks.count) 保留=\(cleanedBlocks.count) 噪声=\(filterStats.noise) 页眉页脚=\(filterStats.headerFooter) 低置信度=\(filterStats.lowConf) 空文本=\(filterStats.emptyText)",
+                severity: .info
+            )
         }
 
         let eligibleBlocks = cleanedBlocks.filter { $0.isTreeNodeEligible }

@@ -71,6 +71,27 @@ async def call_pp_structure_v3(
 
     data = resp.json()
 
+    # ── 诊断日志: 原始响应结构 ──
+    top_keys = list(data.keys()) if isinstance(data, dict) else f"type={type(data).__name__}"
+    logger.info(
+        "AI Studio 原始响应 top-level keys=%s  file=%s",
+        top_keys, file_name,
+    )
+    # 尝试记录 layoutParsingResults / parsing_result 的数量
+    _result = data.get("result", {}) if isinstance(data, dict) else {}
+    if isinstance(_result, dict):
+        for _k in ("parsing_result", "layoutParsingResults", "pages", "layouts"):
+            _v = _result.get(_k)
+            if _v is not None:
+                logger.info(
+                    "AI Studio result.%s count=%s  type=%s",
+                    _k,
+                    len(_v) if isinstance(_v, (list, dict)) else "non-collection",
+                    type(_v).__name__,
+                )
+    elif isinstance(_result, list):
+        logger.info("AI Studio result is list, len=%d", len(_result))
+
     # AI Studio 产线 API 通常用 errorCode==0 表示成功
     error_code = data.get("errorCode", data.get("error_code", 0))
     if error_code != 0:

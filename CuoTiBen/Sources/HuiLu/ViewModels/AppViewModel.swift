@@ -331,8 +331,12 @@ final class AppViewModel: ObservableObject {
                 candidateKnowledgePointCount += parseResult.candidateKnowledgePoints.count
                 successfulDocuments.append(readyDocument)
 
-                Task {
-                    await loadStructuredSource(for: readyDocument)
+                // 延迟启动结构化加载，避免在当前 @Published 更新周期内修改状态
+                let docForLoading = readyDocument
+                Task { @MainActor [weak self] in
+                    // 让当前 run loop 周期完成后再开始
+                    try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
+                    await self?.loadStructuredSource(for: docForLoading)
                 }
             } catch {
                 var failedDocument = document
@@ -467,9 +471,11 @@ final class AppViewModel: ObservableObject {
         defer {
             structuredSourceLoadingIDs.remove(document.id)
             let stage = structuredSourceStages[document.id]
-            if stage != .ready && stage != .failed && stage != .timedOut && stage != .fallbackLegacy {
+            if stage != .ready && stage != .failed && stage != .timedOut && stage != .fallbackLegacy && stage != .partialReady {
+                TextPipelineDiagnostics.log("PP", "[PP] ⚠️ defer guard: stage=\(stage?.rawValue ?? "nil") 不是终态，强制设为 .failed doc=\(document.id)", severity: .error)
                 structuredSourceStages[document.id] = .failed
             }
+            TextPipelineDiagnostics.log("PP", "[PP] loadStructuredSource END doc=\(document.id) finalStage=\(structuredSourceStages[document.id]?.rawValue ?? "nil")", severity: .info)
         }
 
         do {
@@ -536,6 +542,7 @@ final class AppViewModel: ObservableObject {
             #endif
 
             let legacyPayload = await fallbackToLegacyPipeline(for: document, draft: draft)
+            TextPipelineDiagnostics.log("PP", "[PP] fallback returned: sentences=\(legacyPayload.bundle.sentences.count) segments=\(legacyPayload.bundle.segments.count) doc=\(document.id)", severity: .info)
             let legacySource: ParseSessionInfo.ParseSource = structuredSourceStages[document.id] == .buildingTree ? .legacyLocal : .legacyRemote
 
             parseSessionInfos[document.id] = ParseSessionInfo(
@@ -632,6 +639,19 @@ final class AppViewModel: ObservableObject {
             structuredSourceStages[document.id] = .normalizing
             TextPipelineDiagnostics.log("PP", "[PP] normalizing doc=\(document.id) blocks=\(normalizedDoc.blocks.count) paragraphs=\(normalizedDoc.paragraphs.count) candidates=\(normalizedDoc.structureCandidates.count)", severity: .info)
 
+            // ── 防护 A: 后端返回 blocks=0 ──
+            if normalizedDoc.blocks.isEmpty {
+                let reason: String
+                if normalizedDoc.metadata.totalBlocks == 0 {
+                    reason = "PP-StructureV3 failed: 后端归一化产生 0 blocks（原始解析结果可能为空或格式不匹配）"
+                } else {
+                    reason = "PP-StructureV3 failed: metadata.totalBlocks=\(normalizedDoc.metadata.totalBlocks) 但实际 blocks 数组为空"
+                }
+                TextPipelineDiagnostics.log("PP", "[PP] \(reason) doc=\(document.id)", severity: .error)
+                structuredSourceErrors[document.id] = reason
+                return nil
+            }
+
             let payload = NormalizedDocumentConverter.convert(
                 normalizedDoc,
                 documentID: document.id,
@@ -640,10 +660,15 @@ final class AppViewModel: ObservableObject {
                 pageCount: document.pageCount
             )
 
-            // 验证结果质量
+            // ── 防护 B: 转换后无句子 ──
             guard payload.bundle.sentences.count >= 1 else {
-                let reason = "PP-StructureV3 解析结果无句子（blocks=\(normalizedDoc.blocks.count)），判定为低质量"
-                TextPipelineDiagnostics.log("PP", "[PP] \(reason)", severity: .warning)
+                let reason: String
+                if payload.bundle.segments.isEmpty {
+                    reason = "PP-StructureV3 failed: converter 过滤后 segments=0（原始 blocks=\(normalizedDoc.blocks.count), 所有块可能被置信度/噪声过滤器移除）"
+                } else {
+                    reason = "PP-StructureV3 failed: segments=\(payload.bundle.segments.count) 但无有效句子（blocks=\(normalizedDoc.blocks.count)），判定为低质量结果"
+                }
+                TextPipelineDiagnostics.log("PP", "[PP] \(reason) doc=\(document.id)", severity: .warning)
                 structuredSourceErrors[document.id] = reason
                 return nil
             }
@@ -660,41 +685,49 @@ final class AppViewModel: ObservableObject {
 
     /// 旧管线回退路径（本地 ChunkingService + AISourceParsingService）
     private func fallbackToLegacyPipeline(for document: SourceDocument, draft: SourceTextDraft) async -> StructuredSourceParsePayload {
-        TextPipelineDiagnostics.log("PP", "[PP] fallback → legacy pipeline doc=\(document.id)", severity: .warning)
+        TextPipelineDiagnostics.log("PP", "[PP] fallback → legacy pipeline START doc=\(document.id)", severity: .warning)
         structuredSourceStages[document.id] = .classifying
 
         if AISourceParsingService.shouldPreferLocalFallback(for: draft) {
             TextPipelineDiagnostics.log("PP", "[PP] fallback → legacy LOCAL (mixed-language) doc=\(document.id)", severity: .warning)
             structuredSourceStages[document.id] = .buildingTree
-            return AISourceParsingService.buildLocalFallbackPayload(
+            let payload = AISourceParsingService.buildLocalFallbackPayload(
                 documentID: document.id,
                 title: document.title,
                 documentType: document.documentType,
                 pageCount: document.pageCount,
                 draft: draft
             )
+            TextPipelineDiagnostics.log("PP", "[PP] fallback → legacy LOCAL DONE sentences=\(payload.bundle.sentences.count) doc=\(document.id)", severity: .warning)
+            return payload
         }
 
         do {
             structuredSourceStages[document.id] = .buildingPreview
             TextPipelineDiagnostics.log("PP", "[PP] fallback → legacy REMOTE doc=\(document.id)", severity: .warning)
-            return try await AISourceParsingService.parseSource(
-                documentID: document.id,
-                title: document.title,
-                documentType: document.documentType,
-                pageCount: document.pageCount,
-                draft: draft
-            )
+            let payload = try await withTimeoutOrThrow(seconds: 60) { [document, draft] in
+                try await AISourceParsingService.parseSource(
+                    documentID: document.id,
+                    title: document.title,
+                    documentType: document.documentType,
+                    pageCount: document.pageCount,
+                    draft: draft
+                )
+            }
+            TextPipelineDiagnostics.log("PP", "[PP] fallback → legacy REMOTE DONE sentences=\(payload.bundle.sentences.count) doc=\(document.id)", severity: .warning)
+            return payload
         } catch {
             TextPipelineDiagnostics.log("PP", "[PP] fallback legacy remote also failed: \(error.localizedDescription), using local fallback doc=\(document.id)", severity: .error)
             structuredSourceStages[document.id] = .buildingTree
-            return AISourceParsingService.buildLocalFallbackPayload(
+            let payload = AISourceParsingService.buildLocalFallbackPayload(
                 documentID: document.id,
                 title: document.title,
                 documentType: document.documentType,
                 pageCount: document.pageCount,
                 draft: draft
             )
+            TextPipelineDiagnostics.log("PP", "[PP] fallback → legacy LOCAL (after remote fail) DONE sentences=\(payload.bundle.sentences.count) doc=\(document.id)", severity: .warning)
+            return payload
         }
     }
 

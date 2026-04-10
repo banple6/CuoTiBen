@@ -41,9 +41,9 @@ private struct ParseSourceResponseEnvelope: Decodable {
 
 private struct StructuredSourceResponse: Decodable {
     let source: Source
-    let sectionTitles: [String]
-    let topicTags: [String]
-    let candidateKnowledgePoints: [String]
+    let sectionTitles: [String]?
+    let topicTags: [String]?
+    let candidateKnowledgePoints: [String]?
     let segments: [Segment]
     let sentences: [Sentence]
     let outline: [OutlineNode]
@@ -220,9 +220,9 @@ enum AISourceParsingService {
                         sentences: payload.sentences,
                         outline: payload.outline
                     ),
-                    sectionTitles: payload.sectionTitles,
-                    topicTags: payload.topicTags,
-                    candidateKnowledgePoints: payload.candidateKnowledgePoints
+                    sectionTitles: payload.sectionTitles ?? [],
+                    topicTags: payload.topicTags ?? [],
+                    candidateKnowledgePoints: payload.candidateKnowledgePoints ?? []
                 )
                 let result = mergeRemotePayload(
                     remotePayload,

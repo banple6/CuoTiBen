@@ -500,24 +500,28 @@
 - ✅ **Serif + Sans 配对**: Noto Serif (标题) + Inter (UI/正文)
 - ✅ **温暖配色**: 奶油色桌面 (#fbf9f4)、纯白纸张 (#ffffff)、木炭黑文字 (#1b1c19)
 
-#### 新增组件库 (20+ 个)
-**Shell 组件** (`ArchivistWorkspaceComponents.swift`):
-- `SegmentedWritingToolbar` - GoodNotes 风格工具托盘
-- `ArchivistTopToolbar` - 顶部工具栏（居中托盘设计）
-- `ArchivistSideRail` - 左侧极简导航栏（72pt）
-- `ArchivistFloatingNavigator` - 浮动结构树（240pt 玻璃面板）
-- `GlassPanel` - 毛玻璃容器（70% 透明度 + 模糊）
-- `ArchivistFooterStrip` - 底部进度条
-- `MasteryProgressBar` - 掌握度指示器
+#### 工作区组件拆分（当前实现）
+**共享工作区组件** (`WorkspaceComponents.swift`):
+- `AppPageHeader` / `SectionHeader` - 通用页面头与分区头
+- `SegmentedSwitch` - 统一分段切换组件
+- `ContextCard` / `QuoteBlockCard` / `TextBlockEditorCard` / `InkBlockCard` - 内容卡片与编辑壳层
+- `KnowledgeChip` / `RelatedContextPanel` / `FloatingNavigatorPanel` - 关系信息与浮层导航组件
 
-**页面组件** (`EditorialPaperComponents.swift`):
-- `EditorialPaperCanvas` - 主画布（纯白 + 可选颗粒/横线）
-- `DocumentHeaderBlock` - 文档头部（和纸标签 + Noto Serif 标题）
-- `WashiChip` - 和纸胶带标签（撕边效果）
-- `ParagraphTextBlock` - 段落文本（支持内联高亮）
-- `ContextAnalysisCard` - 分析卡片（编辑注释风格）
-- `DecorativeNoteBlock` - 手写注释块
-- `FlowLayout` - 自适应流式布局
+**Archivist 容器与布局** (`ArchivistWorkspaceView.swift`):
+- `ArchivistTopToolbar` - 顶部工具托盘
+- `ArchivistSideRail` - 左侧档案导航
+- `ArchivistFloatingNavigator` - 右侧结构树浮层
+- `ArchivistContextAssistant` - 右栏句子 / 节点分析助手
+- `ArchivistFooterStrip` - 底部状态条
+- `ArchivistDeskBackground` - 桌面背景与网格纹理
+
+**纸张内容组件** (`EditorialPaperCanvas.swift`):
+- `EditorialPaperCanvas` - 主纸页画布
+- `DocumentHeaderBlock` - 文档头信息
+- `WashiChip` - 标签 / 和纸胶带
+- `ParagraphTextBlock` - 段落与句子点击区
+- `ContextAnalysisCard` - 分析卡片
+- `DecorativeNoteBlock` - 手写注释式提示块
 
 #### 布局策略
 **iPad (Regular Size Class)**:
@@ -557,6 +561,10 @@ Sources/HuiLu/
 │   ├── ChunkingService.swift
 │   ├── AISourceParsingService.swift
 │   ├── AIExplainSentenceService.swift
+│   ├── DocumentParseService.swift
+│   ├── NormalizedDocumentConverter.swift
+│   ├── LayoutBlockGrouper.swift
+│   ├── BlockContentClassifier.swift
 │   ├── NoteRepository.swift
 │   └── TextPipelineValidator.swift
 ├── ViewModels/
@@ -707,9 +715,9 @@ case .archivistWorkspace(let document):
 ## 当前项目结构
 
 ```text
-CuoTiBen/
+.
 ├── CuoTiBen.xcodeproj
-├── backend/                         # Node.js + Express 最小后端
+├── backend/                         # Node / Express：句子讲解 + Legacy parse-source
 │   ├── package.json
 │   ├── server.js
 │   └── src/
@@ -724,8 +732,29 @@ CuoTiBen/
 │       │   ├── explainSentenceService.js
 │       │   └── parseSourceService.js
 │       └── validators/
+│           ├── explainSentence.js
+│           └── parseSource.js
+├── server/                          # FastAPI：PP-StructureV3 解析网关
+│   ├── requirements.txt
+│   ├── deploy.sh
+│   ├── app/
+│   │   ├── main.py
+│   │   ├── config.py
+│   │   ├── models/normalized_document.py
+│   │   ├── routes/document_parse.py
+│   │   ├── services/
+│   │   │   ├── ai_studio_client.py
+│   │   │   ├── block_classifier.py
+│   │   │   ├── normalizer.py
+│   │   │   ├── paragraph_builder.py
+│   │   │   └── structure_candidate_builder.py
+│   │   └── utils/
+│   │       ├── file_type.py
+│   │       └── language_detector.py
+│   └── deploy/
+│       ├── cuotiben-parser.nginx.conf
+│       └── cuotiben-parser.service
 ├── CuoTiBen/
-│   ├── CuoTiBenApp.swift
 │   ├── Info.plist
 │   ├── README_zh.md
 │   └── Sources/HuiLu/
@@ -741,6 +770,8 @@ CuoTiBen/
 │       │   ├── DailyProgress.swift
 │       │   ├── InkAssistSuggestion.swift
 │       │   ├── KnowledgeChunk.swift
+│       │   ├── LearningRecordContext.swift
+│       │   ├── NormalizedDocumentModels.swift
 │       │   ├── NoteModels.swift
 │       │   ├── ReviewSession.swift
 │       │   ├── SourceDocument.swift
@@ -753,21 +784,28 @@ CuoTiBen/
 │       ├── Services/
 │       │   ├── AIExplainSentenceService.swift
 │       │   ├── AISourceParsingService.swift
+│       │   ├── BlockContentClassifier.swift
 │       │   ├── CardGenerationService.swift
 │       │   ├── ChunkingService.swift
+│       │   ├── DocumentParseService.swift
 │       │   ├── ImportService.swift
 │       │   ├── InkAssistCoordinator.swift
 │       │   ├── InkRecognitionService.swift
 │       │   ├── KnowledgePointExtractionService.swift
 │       │   ├── KnowledgePointMatcher.swift
+│       │   ├── LayoutBlockGrouper.swift
 │       │   ├── LearningRecordContextService.swift
+│       │   ├── NormalizedDocumentConverter.swift
 │       │   ├── NoteRepository.swift
 │       │   ├── ReviewScheduler.swift
-│       │   └── SourceJumpCoordinator.swift
+│       │   ├── SourceJumpCoordinator.swift
+│       │   ├── TextPipelineValidator.swift
+│       │   └── ...
 │       ├── UseCases/
 │       │   └── NoteUseCases.swift
 │       ├── ViewModels/
 │       │   ├── AppViewModel.swift
+│       │   ├── ArchivistWorkspaceViewModel.swift
 │       │   ├── ConceptSummaryItem.swift
 │       │   ├── InkAssistViewModel.swift
 │       │   ├── NoteDetailViewModel.swift
@@ -799,6 +837,7 @@ CuoTiBen/
 │           ├── SourceOriginalTab.swift
 │           ├── SourceOutlineTab.swift
 │           ├── StructuredSourcePDFReader.swift
+│           ├── TextPipelineDiagnosticsView.swift
 │           ├── WorkspaceHomeView.swift
 │           ├── Notes/
 │           │   ├── InkAssistSuggestionBubble.swift
@@ -811,8 +850,11 @@ CuoTiBen/
 │           │   ├── NoteDetailView.swift
 │           │   ├── NoteEditorSheet.swift
 │           │   ├── NoteListRow.swift
+│           │   ├── NoteNotebookView.swift
 │           │   ├── NoteOutlineFloatingPanel.swift
 │           │   ├── NoteWorkspaceView.swift
+│           │   ├── NotebookPageCanvasView.swift
+│           │   ├── NotebookWorkspaceView.swift
 │           │   ├── NotesByConceptSectionView.swift
 │           │   ├── NotesBySourceSectionView.swift
 │           │   ├── NotesHeaderBar.swift
@@ -824,24 +866,24 @@ CuoTiBen/
 │           │   ├── NotesSplitView.swift
 │           │   ├── OutlineNodeRow.swift
 │           │   ├── QuoteBlockView.swift
+│           │   ├── ReferencePanel.swift
+│           │   ├── RelatedCardsSection.swift
+│           │   ├── RelatedContextPanel.swift
+│           │   ├── RelatedKnowledgePointsSection.swift
+│           │   ├── RelatedNotesSection.swift
+│           │   ├── RelatedSourceAnchorsSection.swift
 │           │   ├── TextBlockEditorView.swift
+│           │   ├── CanvasTextObjectsLayer.swift
+│           │   ├── CanvasTextObjectContainer.swift
+│           │   ├── CanvasTextViewBridge.swift
+│           │   ├── TextObjectResizeHandleView.swift
+│           │   ├── TextObjectSelectionOverlay.swift
 │           │   └── WorkspaceTopBar.swift
+│           ├── Workspace/
+│           │   ├── ArchivistWorkspaceView.swift
+│           │   └── EditorialPaperCanvas.swift
 │           └── Settings/
 │               └── AppSettingsSheet.swift
-│       ├── DesignSystem/
-│       │   ├── ModernComponents.swift
-│       │   ├── ModernDesignTokens.swift
-│       │   ├── BlockStyleTokens.swift
-│       │   ├── ArchivistTokens.swift
-│       │   ├── WorkspaceComponents.swift
-│       │   └── WorkspaceDesignTokens.swift
-│       └── Views/
-│           ├── ...
-│           ├── Notes/
-│           │   ├── ...
-│           │   ├── NotebookPageCanvasView.swift    # 整页纸张画布 (PKCanvasView + CanvasTextObjectsLayer)
-│           │   ├── NotebookWorkspaceView.swift      # 主工作区 (工具栏 + Inspector + Canvas Host)
-│           │   ├── WorkspaceTopBar.swift             # 手写工具系统 (NoteInkToolKind/State/Presets)
 ```
 
 ## 运行方式
@@ -864,7 +906,9 @@ open CuoTiBen.xcodeproj
 
 ### 后端服务
 
-后端位于项目根目录的 `backend/`，当前是最小可用版本，仅负责英语资料 AI 解析链路。
+当前仓库保留两套后端，职责不同。
+
+#### Node / Express (`backend/`)
 
 1. 进入目录：
 
@@ -891,6 +935,46 @@ npm install
 npm run dev
 ```
 
+负责：
+
+- `GET /health`
+- `POST /ai/explain-sentence`
+- `POST /ai/parse-source`（Legacy 远程解析链路）
+
+#### FastAPI 解析网关 (`server/`)
+
+1. 进入目录：
+
+```bash
+cd server
+```
+
+2. 准备环境变量：
+
+```bash
+cp .env.example .env
+```
+
+3. 填入：
+
+- `AI_STUDIO_API_URL`
+- `AI_STUDIO_ACCESS_TOKEN`
+
+4. 安装依赖并启动：
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --host 0.0.0.0 --port 8900
+```
+
+负责：
+
+- `GET /health`
+- `POST /api/document/parse`
+- `GET /api/document/parse/{job_id}`
+
 ### 构建排错
 
 如果遇到构建缓存或本机空间问题，可以优先做这几步：
@@ -908,11 +992,15 @@ rm -rf /tmp/CuoTiBen*
 
 ## 当前后端接口
 
-### `GET /health`
+当前有两组接口。
+
+### Node / Express
+
+#### `GET /health`
 
 健康检查接口。
 
-### `POST /ai/explain-sentence`
+#### `POST /ai/explain-sentence`
 
 输入：
 
@@ -949,7 +1037,7 @@ rm -rf /tmp/CuoTiBen*
 }
 ```
 
-### `POST /ai/parse-source`
+#### `POST /ai/parse-source`
 
 输入英文资料原文，返回：
 
@@ -958,7 +1046,36 @@ rm -rf /tmp/CuoTiBen*
 - `sentences`
 - `outline`
 
-用于支撑资料详情页和复盘工作台。
+用于支撑 Legacy 远程解析链路，当前仍保留作为 PP 网关失败后的回退路径。
+
+### FastAPI PP-StructureV3 网关
+
+#### `GET /health`
+
+健康检查接口。
+
+#### `POST /api/document/parse`
+
+以 `multipart/form-data` 上传：
+
+- `file`
+- `document_id`
+- `title`
+- `file_type`
+
+返回：
+
+- `success`
+- `job_id`
+- `status`
+- `document`（`NormalizedDocument`）
+- `error`
+
+这是当前 iOS 端优先调用的结构化解析入口。
+
+#### `GET /api/document/parse/{job_id}`
+
+当前为同步模式预留端点，主要用于兼容未来异步任务查询。
 
 ## 当前设计策略
 
@@ -996,6 +1113,20 @@ rm -rf /tmp/CuoTiBen*
 - 后端当前没有数据库和登录系统，属于最小可用原型。
 
 ## 最近开发日志
+
+### 2026-04-10
+
+- 完成 `PP-StructureV3 -> NormalizedDocument -> StructuredSourceBundle` 链路的空结果防护与诊断增强：
+  - `server/app/services/ai_studio_client.py` 现在会记录 AI Studio 原始响应的顶层 key 和候选结果集合规模
+  - `server/app/services/normalizer.py` 新增 pages 提取来源、每页 layout 统计、空文本跳过统计和 `blocks=0` 诊断日志
+  - `server/app/routes/document_parse.py` 会在归一化后显式拒绝 `blocks=0` 的异常结果，并把原始 key 信息写回错误文本
+- 完成 iOS 端 PP 回退链路硬化：
+  - `AppViewModel` 新增 `blocks=0`、`segments=0`、`sentences=0` 的前置防护
+  - Legacy 回退链路补上开始 / 完成日志，并为远程 legacy 解析增加超时保护
+  - `AISourceParsingService` 兼容 `sectionTitles`、`topicTags`、`candidateKnowledgePoints` 缺失时的空数组兜底
+- 完成 README 中文文档对齐：
+  - 将仓库结构、双后端运行方式、当前接口说明同步到现有实现
+  - 将 `Digital Archivist` 小节中的旧文件名替换为当前真实模块拆分
 
 ### 2026-04-08
 

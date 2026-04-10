@@ -74,7 +74,27 @@ async def parse_document(
         )
 
         elapsed_ms = int((time.monotonic() - t0) * 1000)
-        logger.info("解析完成  doc_id=%s  总耗时=%dms", doc_id, elapsed_ms)
+        logger.info(
+            "解析完成  doc_id=%s  blocks=%d  paragraphs=%d  candidates=%d  总耗时=%dms",
+            doc_id, len(document.blocks), len(document.paragraphs),
+            len(document.structure_candidates), elapsed_ms,
+        )
+
+        # ── 防护: raw 存在但归一化产生 0 blocks ──
+        if len(document.blocks) == 0:
+            logger.warning(
+                "⚠️ 归一化产生 0 blocks — AI Studio 返回可能格式不匹配  "
+                "doc_id=%s  raw_keys=%s",
+                doc_id,
+                list(raw_result.keys()) if isinstance(raw_result, dict) else type(raw_result).__name__,
+            )
+            return DocumentParseResponse(
+                success=False,
+                job_id=doc_id,
+                status="failed",
+                document=document,
+                error=f"归一化结果异常: blocks=0 (AI Studio 原始响应 keys={list(raw_result.keys()) if isinstance(raw_result, dict) else 'N/A'})",
+            )
 
         return DocumentParseResponse(
             success=True,
