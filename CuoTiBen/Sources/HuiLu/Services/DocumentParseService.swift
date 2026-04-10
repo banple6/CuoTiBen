@@ -101,17 +101,18 @@ enum DocumentParseService {
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)
         request.httpBody = body
 
-        TextPipelineDiagnostics.log("文档解析", "开始上传 doc=\(documentID) 文件大小=\(fileData.count)字节", severity: .info)
+        TextPipelineDiagnostics.log("PP", "[PP] parse request start doc=\(documentID) url=\(url.absoluteString) fileSize=\(fileData.count)字节 fileName=\(fileName)", severity: .info)
 
         let (data, response) = try await URLSession.shared.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
+            TextPipelineDiagnostics.log("PP", "[PP] parse request failed: 无效的 HTTP 响应", severity: .error)
             throw DocumentParseServiceError.invalidResponse
         }
 
         guard (200...299).contains(httpResponse.statusCode) else {
             let body = String(data: data, encoding: .utf8) ?? ""
-            TextPipelineDiagnostics.log("文档解析", "上传失败 HTTP \(httpResponse.statusCode): \(body.prefix(200))", severity: .error)
+            TextPipelineDiagnostics.log("PP", "[PP] parse request failed HTTP \(httpResponse.statusCode): \(body.prefix(200))", severity: .error)
             throw DocumentParseServiceError.uploadFailed("HTTP \(httpResponse.statusCode)")
         }
 
@@ -119,14 +120,15 @@ enum DocumentParseService {
         do {
             let result = try decoder.decode(DocumentParseResponse.self, from: data)
             if let error = result.error, !result.success {
+                TextPipelineDiagnostics.log("PP", "[PP] parse request server error: \(error)", severity: .error)
                 throw DocumentParseServiceError.serverError(error)
             }
-            TextPipelineDiagnostics.log("文档解析", "上传完成 doc=\(documentID) status=\(result.status?.rawValue ?? "immediate")", severity: .info)
+            TextPipelineDiagnostics.log("PP", "[PP] parse request success doc=\(documentID) status=\(result.status?.rawValue ?? "immediate") jobID=\(result.jobID ?? "sync")", severity: .info)
             return result
         } catch let e as DocumentParseServiceError {
             throw e
         } catch {
-            TextPipelineDiagnostics.log("文档解析", "响应解码失败: \(error.localizedDescription)", severity: .error)
+            TextPipelineDiagnostics.log("PP", "[PP] parse response decode failed: \(error.localizedDescription)", severity: .error)
             throw DocumentParseServiceError.invalidResponse
         }
     }
@@ -164,17 +166,19 @@ enum DocumentParseService {
                 guard let doc = result.document else {
                     throw DocumentParseServiceError.invalidResponse
                 }
-                TextPipelineDiagnostics.log("文档解析", "轮询完成 job=\(jobID) 第\(attempt)次", severity: .info)
+                TextPipelineDiagnostics.log("PP", "[PP] poll completed job=\(jobID) attempt=\(attempt) blocks=\(doc.blocks.count) paragraphs=\(doc.paragraphs.count) candidates=\(doc.structureCandidates.count)", severity: .info)
                 return doc
 
             case .failed:
+                TextPipelineDiagnostics.log("PP", "[PP] poll failed job=\(jobID): \(result.error ?? "未知错误")", severity: .error)
                 throw DocumentParseServiceError.parseFailed(result.error ?? "未知错误")
 
             case .timedOut:
+                TextPipelineDiagnostics.log("PP", "[PP] poll timed out job=\(jobID)", severity: .error)
                 throw DocumentParseServiceError.pollTimeout
 
             case .pending, .parsing, .normalizing, .none:
-                TextPipelineDiagnostics.log("文档解析", "轮询中 job=\(jobID) 第\(attempt)次 status=\(result.status?.rawValue ?? "nil")", severity: .info)
+                TextPipelineDiagnostics.log("PP", "[PP] poll waiting job=\(jobID) attempt=\(attempt) status=\(result.status?.rawValue ?? "nil")", severity: .info)
                 try await Task.sleep(nanoseconds: pollIntervalSeconds)
             }
         }

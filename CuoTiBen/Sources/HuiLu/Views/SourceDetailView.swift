@@ -85,11 +85,21 @@ struct SourceDetailView: View {
                         AppBackground(style: .light)
                             .ignoresSafeArea()
 
-                        ProgressView("正在整理资料工作台…")
-                            .font(.system(size: 16, weight: .medium, design: .serif))
-                            .padding(.horizontal, 24)
-                            .padding(.vertical, 18)
-                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        VStack(spacing: 12) {
+                            ProgressView("正在整理资料工作台…")
+                                .font(.system(size: 16, weight: .medium, design: .serif))
+                                .padding(.horizontal, 24)
+                                .padding(.vertical, 18)
+                                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+
+                            #if DEBUG
+                            ParseSourceDebugBadge(
+                                info: viewModel.parseSessionInfo(for: liveDocument),
+                                stage: viewModel.structuredSourceStage(for: liveDocument),
+                                error: viewModel.structuredSourceError(for: liveDocument)
+                            )
+                            #endif
+                        }
                     }
                 }
             } else {

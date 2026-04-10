@@ -276,3 +276,117 @@ struct StructuredLoadingStageView: View {
         }
     }
 }
+
+// MARK: - 解析来源 Debug 徽标
+
+/// 在结构化预览工作区角落显示的 debug 信息面板
+/// 显示解析来源（PP-StructureV3 vs Legacy）、块/段落/大纲统计、回退原因等
+struct ParseSourceDebugBadge: View {
+    let info: ParseSessionInfo?
+    let stage: StructuredLoadingStage
+    let error: String?
+
+    @State private var isExpanded = false
+
+    private var sourceLabel: String {
+        guard let info else { return "未知" }
+        return info.source.rawValue
+    }
+
+    private var sourceColor: Color {
+        guard let info else { return .gray }
+        switch info.source {
+        case .ppStructureV3:    return .green
+        case .legacyRemote:     return .orange
+        case .legacyLocal:      return .red
+        }
+    }
+
+    var body: some View {
+        #if DEBUG
+        VStack(alignment: .leading, spacing: 0) {
+            // 折叠状态：紧凑徽标
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
+            } label: {
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(sourceColor)
+                        .frame(width: 7, height: 7)
+                    Text(sourceLabel)
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.primary.opacity(0.8))
+                    if info?.fallbackUsed == true {
+                        Text("⚠️")
+                            .font(.system(size: 9))
+                    }
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 8))
+                        .foregroundColor(.secondary)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(.ultraThinMaterial, in: Capsule())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 4) {
+                    Divider().padding(.vertical, 2)
+
+                    if let info {
+                        debugRow("来源", info.source.rawValue)
+                        debugRow("阶段", stage.displayName)
+                        if info.ppAttempted {
+                            debugRow("PP尝试", info.ppSucceeded ? "✅ 成功" : "❌ 失败")
+                        }
+                        if info.fallbackUsed, let reason = info.fallbackReason {
+                            debugRow("回退原因", reason)
+                        }
+                        if let fc = info.failureClass {
+                            debugRow("失败分类", fc.rawValue)
+                        }
+                        debugRow("块", "\(info.normalizedBlockCount)")
+                        debugRow("段落", "\(info.paragraphCount)")
+                        debugRow("候选", "\(info.structureCandidateCount)")
+                        debugRow("句子", "\(info.sentenceCount)")
+                        debugRow("大纲", "\(info.outlineNodeCount)")
+                        debugRow("分段", "\(info.segmentCount)")
+                        if let d = info.parseDurationMs {
+                            debugRow("耗时", "\(d)ms")
+                        }
+                        if let url = info.requestURL {
+                            debugRow("URL", url)
+                        }
+                    } else {
+                        debugRow("阶段", stage.displayName)
+                        if let err = error {
+                            Text(err)
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundColor(.red.opacity(0.8))
+                                .lineLimit(3)
+                        }
+                    }
+                }
+                .padding(8)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .frame(maxWidth: 260, alignment: .leading)
+        #endif
+    }
+
+    private func debugRow(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text(label)
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .foregroundColor(.secondary)
+                .frame(width: 48, alignment: .trailing)
+            Text(value)
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundColor(.primary.opacity(0.8))
+                .lineLimit(2)
+        }
+    }
+}

@@ -5,6 +5,19 @@ import Foundation
 
 enum NormalizedDocumentConverter {
 
+    // MARK: - 质量阈值
+
+    /// 块置信度低于此值视为噪声
+    private static let minBlockConfidence: Double = 0.25
+    /// 段落最短有效文本长度
+    private static let minParagraphTextLength = 3
+    /// 候选节点最低置信度
+    private static let minCandidateConfidence: Double = 0.35
+    /// 标题最短长度
+    private static let minTitleLength = 2
+    /// 标题最大长度（超出视为段落误分类）
+    private static let maxTitleLength = 120
+
     // MARK: - 主转换入口
 
     /// 将后端返回的归一化文档转换为 app 现有的 StructuredSourceBundle
@@ -17,20 +30,40 @@ enum NormalizedDocumentConverter {
     ) -> StructuredSourceParsePayload {
         let sourceID = documentID.uuidString
 
-        // ── 1. 过滤块：只保留树节点合格的块 ──
-        let eligibleBlocks = document.blocks.filter { $0.isTreeNodeEligible }
-        let englishBlocks = eligibleBlocks.filter { $0.isEnglishPrimary }
+        // ── 1. 过滤块：移除噪声和低置信度块 ──
+        let cleanedBlocks = document.blocks.filter { block in
+            // 直接删除噪声类型
+            guard block.blockType != .noise else {
+                TextPipelineDiagnostics.log("PP", "[PP] 过滤噪声块 id=\(block.id) text=\"\(block.text.prefix(30))\"", severity: .info)
+                return false
+            }
+            // 页眉页脚直接删除
+            guard block.blockType != .pageHeader && block.blockType != .pageFooter else { return false }
+            // 低置信度抑制
+            guard block.confidence >= minBlockConfidence else {
+                TextPipelineDiagnostics.log("PP", "[PP] 过滤低置信度块 id=\(block.id) conf=\(String(format: "%.2f", block.confidence)) type=\(block.blockType.rawValue)", severity: .warning)
+                return false
+            }
+            // 空文本排除
+            guard !block.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+            return true
+        }
+
+        let eligibleBlocks = cleanedBlocks.filter { $0.isTreeNodeEligible }
+        let englishBlocks = cleanedBlocks.filter { $0.isEnglishPrimary }
 
         TextPipelineDiagnostics.log(
-            "归一化转换",
-            "总块数=\(document.blocks.count) 合格=\(eligibleBlocks.count) 英语=\(englishBlocks.count)",
+            "PP",
+            "[PP] normalized blocks=\(document.blocks.count) cleaned=\(cleanedBlocks.count) eligible=\(eligibleBlocks.count) english=\(englishBlocks.count)",
             severity: .info
         )
 
-        // ── 2. 构建段落 → Segment ──
+        // ── 2. 构建段落 → Segment（保守合并） ──
+        let cleanedParagraphs = filterAndRepairParagraphs(document.paragraphs, cleanedBlockIDs: Set(cleanedBlocks.map(\.id)))
+
         let (segments, sentencesBySegment) = buildSegments(
-            from: document.paragraphs,
-            blocks: document.blocks,
+            from: cleanedParagraphs,
+            blocks: cleanedBlocks,
             sourceID: sourceID
         )
 
@@ -38,7 +71,7 @@ enum NormalizedDocumentConverter {
         let allSentences = sentencesBySegment.values.flatMap { $0 }
             .sorted { $0.index < $1.index }
 
-        // ── 4. 构建大纲树 → OutlineNode ──
+        // ── 4. 构建大纲树 → OutlineNode（加强过滤） ──
         let outline = buildOutline(
             from: document.structureCandidates,
             sourceID: sourceID,
@@ -46,8 +79,14 @@ enum NormalizedDocumentConverter {
             sentences: Array(allSentences)
         )
 
+        TextPipelineDiagnostics.log(
+            "PP",
+            "[PP] paragraphs=\(cleanedParagraphs.count) segments=\(segments.count) sentences=\(allSentences.count) structure_candidates=\(document.structureCandidates.count) outline_nodes=\(countNodes(outline))",
+            severity: .info
+        )
+
         // ── 5. 构建 Source 元数据 ──
-        let englishBodyText = document.blocks
+        let englishBodyText = cleanedBlocks
             .filter { $0.blockType == .englishBody }
             .map(\.text)
             .joined(separator: "\n\n")
@@ -58,7 +97,7 @@ enum NormalizedDocumentConverter {
             sourceType: documentType,
             language: document.metadata.dominantLanguage,
             isEnglish: document.metadata.englishRatio > 0.5,
-            cleanedText: englishBodyText.isEmpty ? fullText(from: document.blocks) : englishBodyText,
+            cleanedText: englishBodyText.isEmpty ? fullText(from: cleanedBlocks) : englishBodyText,
             pageCount: pageCount,
             segmentCount: segments.count,
             sentenceCount: allSentences.count,
@@ -66,11 +105,11 @@ enum NormalizedDocumentConverter {
         )
 
         // ── 6. 提取元数据 ──
-        let sectionTitles = document.blocks
-            .filter { $0.blockType == .title || $0.blockType == .heading }
+        let sectionTitles = cleanedBlocks
+            .filter { ($0.blockType == .title || $0.blockType == .heading) && $0.text.count <= maxTitleLength }
             .map(\.text)
 
-        let topicTags = extractTopicTags(from: document.blocks)
+        let topicTags = extractTopicTags(from: cleanedBlocks)
 
         // ── 7. 构建 Bundle ──
         let bundle = StructuredSourceBundle(
@@ -86,6 +125,24 @@ enum NormalizedDocumentConverter {
             topicTags: topicTags,
             candidateKnowledgePoints: []
         )
+    }
+
+    // MARK: - 段落过滤与修复
+
+    /// 过滤掉引用了已删除块的段落，跳过纯噪声段落
+    private static func filterAndRepairParagraphs(
+        _ paragraphs: [NormalizedParagraph],
+        cleanedBlockIDs: Set<String>
+    ) -> [NormalizedParagraph] {
+        paragraphs.compactMap { paragraph in
+            // 只保留仍存在的块引用
+            let validBlockIDs = paragraph.blockIDs.filter { cleanedBlockIDs.contains($0) }
+            guard !validBlockIDs.isEmpty else { return nil }
+            // 短文本段落排除
+            let trimmed = paragraph.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.count >= minParagraphTextLength else { return nil }
+            return paragraph
+        }
     }
 
     // MARK: - 段落 → Segment + Sentence
@@ -165,24 +222,41 @@ enum NormalizedDocumentConverter {
     ) -> [OutlineNode] {
         // 过滤低质量候选
         let validCandidates = candidates.filter { candidate in
-            guard candidate.confidence >= 0.35 else {
+            guard candidate.confidence >= minCandidateConfidence else {
                 TextPipelineDiagnostics.log(
-                    "归一化转换",
-                    "拒绝低置信度候选 title=\"\(candidate.title.prefix(30))\" conf=\(String(format: "%.2f", candidate.confidence))",
+                    "PP",
+                    "[PP] 拒绝低置信度候选 title=\"\(candidate.title.prefix(30))\" conf=\(String(format: "%.2f", candidate.confidence))",
                     severity: .warning
                 )
                 return false
             }
-            guard candidate.title.count >= 2 else { return false }
+            guard candidate.title.count >= minTitleLength else { return false }
+
+            // 过长的标题视为段落误分类
+            guard candidate.title.count <= maxTitleLength else {
+                TextPipelineDiagnostics.log(
+                    "PP",
+                    "[PP] 拒绝过长候选标题 len=\(candidate.title.count) title=\"\(candidate.title.prefix(40))…\"",
+                    severity: .warning
+                )
+                return false
+            }
 
             // 语言污染检测
             let profile = BlockContentClassifier.analyzeLanguage(candidate.title)
             if profile.isContaminated {
                 TextPipelineDiagnostics.log(
-                    "归一化转换",
-                    "拒绝语言污染候选 title=\"\(candidate.title.prefix(30))\" mixed=\(String(format: "%.2f", profile.mixedScore))",
+                    "PP",
+                    "[PP] 拒绝语言污染候选 title=\"\(candidate.title.prefix(30))\" mixed=\(String(format: "%.2f", profile.mixedScore))",
                     severity: .warning
                 )
+                return false
+            }
+
+            // 纯数字/标点的标题排除
+            let letterCount = candidate.title.unicodeScalars.filter { CharacterSet.letters.contains($0) }.count
+            guard letterCount >= 2 else {
+                TextPipelineDiagnostics.log("PP", "[PP] 拒绝无字母候选 title=\"\(candidate.title.prefix(30))\"", severity: .warning)
                 return false
             }
 
@@ -268,9 +342,11 @@ enum NormalizedDocumentConverter {
 
     // MARK: - 句子拆分
 
-    /// 按英文句末标点拆分
+    /// 按英文/中文句末标点拆分，保守策略：宁可少拆不多拆
     private static func splitIntoSentences(_ text: String) -> [String] {
-        let pattern = #"(?<=[.!?])\s+(?=[A-Z])"#
+        // 英文: 句号/感叹号/问号后跟空格和大写字母
+        // 中文: 句号/感叹号/问号后直接分割
+        let pattern = #"(?<=[.!?])\s+(?=[A-Z])|(?<=[。！？])\s*(?=\S)"#
         let parts = text.components(separatedBy: .newlines)
             .joined(separator: " ")
 
@@ -286,12 +362,12 @@ enum NormalizedDocumentConverter {
         for match in matches {
             let range = NSRange(location: lastEnd, length: match.range.location - lastEnd)
             let chunk = nsString.substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !chunk.isEmpty { results.append(chunk) }
+            if !chunk.isEmpty && chunk.count >= 2 { results.append(chunk) }
             lastEnd = match.range.location + match.range.length
         }
 
         let remainder = nsString.substring(from: lastEnd).trimmingCharacters(in: .whitespacesAndNewlines)
-        if !remainder.isEmpty { results.append(remainder) }
+        if !remainder.isEmpty && remainder.count >= 2 { results.append(remainder) }
 
         return results.isEmpty ? [text] : results
     }

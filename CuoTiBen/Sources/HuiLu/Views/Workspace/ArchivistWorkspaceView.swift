@@ -87,6 +87,23 @@ struct ArchivistWorkspaceView: View {
                     .padding(.horizontal, layout.outerPadding)
                     .padding(.bottom, max(proxy.safeAreaInsets.bottom, 14))
                 }
+
+                // Debug 解析来源徽标（左下角）
+                #if DEBUG
+                VStack {
+                    Spacer()
+                    HStack {
+                        ParseSourceDebugBadge(
+                            info: appViewModel.parseSessionInfo(for: document),
+                            stage: appViewModel.structuredSourceStage(for: document),
+                            error: appViewModel.structuredSourceError(for: document)
+                        )
+                        .padding(.leading, layout.outerPadding)
+                        .padding(.bottom, max(proxy.safeAreaInsets.bottom, 14) + 36)
+                        Spacer()
+                    }
+                }
+                #endif
             }
         }
         .background(ArchivistColors.deskBackground)

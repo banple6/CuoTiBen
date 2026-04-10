@@ -20,6 +20,7 @@
 - 最新一轮完成了 **PencilKit 手写墨迹底层稳定化 + 自由画布文本对象系统 + 完整手写工具面板**
 - 文本对象系统已进一步收口到 **Canvas object shell + UITextView input core + transient frame / commit on end** 的稳定交互架构
 - 文本解析链路已新增 **质量诊断日志 + OCR 方向校正 + 反转英文自动修复**
+- `PP-StructureV3` 主链路已新增 **请求级日志 + 失败分类 + 可见回退 Debug 徽标**
 
 本文档用于记录当前实际开发进度、项目结构、运行方式和最近迭代日志。
 
@@ -72,11 +73,13 @@
   - 除原有 `Source / Segment / Sentence / OutlineNode` 外，已新增 `NormalizedDocumentModels.swift` 用于接收后端归一化文档。
 - `ViewModels/`
   - 当前以 `AppViewModel`、`NotesHomeViewModel`、`NoteWorkspaceViewModel`、`ArchivistWorkspaceViewModel` 等为主。
+  - `AppViewModel` 现在还维护解析阶段状态和 `ParseSessionInfo`，用于记录 PP 成功/失败、回退来源、统计指标和失败分类。
 - `Views/`
   - `Notes/` 已经是最大的业务视图子模块，承载笔记首页、详情、工作台、纸页画布、参考面板、文本对象编辑等能力。
   - `Workspace/` 保留更偏 `Archivist` 的实验性工作区视图。
   - `Settings/` 当前主要包含 `AppSettingsSheet.swift`。
-  - `TextPipelineDiagnosticsView.swift` 已发展为解析诊断、阶段筛选和日志复制的调试入口。
+  - `TextPipelineDiagnosticsView.swift` 已发展为解析诊断、阶段筛选、日志复制和块分类统计入口。
+  - `SourceDetailView` 与 `ArchivistWorkspaceView` 在 Debug 环境下会显示解析来源徽标，直接暴露当前资料走的是 PP 主链路还是 Legacy 回退链路。
 
 当前仓库里的后端已经分成两条线：
 
@@ -148,6 +151,10 @@
 - 文档解析入口正在切换到双路径：
   - 优先走 `PP-StructureV3 -> NormalizedDocumentConverter`
   - 不可用时回退到现有 `ChunkingService + AISourceParsingService`
+- Debug 环境下，结构化预览加载态和 Archivist 工作区会直接显示：
+  - 当前解析来源（`PP-StructureV3 / Legacy-Remote / Legacy-Local`）
+  - 回退原因与失败分类
+  - 块 / 段落 / 候选 / 句子 / 大纲统计
 
 ## 已完成能力
 
@@ -462,9 +469,24 @@
 #### 调试视图
 - 新增 `TextPipelineDiagnosticsView`：
   - 用于查看最近的文本管线事件列表
-  - 支持刷新与清空日志
+  - 支持按阶段筛选、复制日志、刷新与清空
 - 新增 `TextQualityBadge`：
   - 可对任意文本做快速健康状态提示
+
+#### 2026-04-10 扩展：PP 解析诊断与回退可见化
+- `DocumentParseService` 现在会记录更细的 PP 请求/轮询事件：
+  - 请求 URL、文件大小、jobID、轮询次数、块/段落/候选统计
+  - 后端错误、响应解码失败、超时等异常原因
+- `NormalizedDocumentConverter` 现在会：
+  - 对低置信度块、噪声块、页眉页脚和异常长标题做更强过滤
+  - 对段落、候选节点和句子拆分采用更保守的质量阈值
+- `AppViewModel` 现在会：
+  - 记录 `ParseSessionInfo`
+  - 把 PP 失败归类到 `backendUnavailable / parseTimeout / normalizedDocumentInvalid / lowQualityResult` 等类型
+  - 在回退到旧链路时把状态显式标记为 `fallbackLegacy`
+- `SourceDetailView` 与 `ArchivistWorkspaceView` 现在会在 Debug 环境下显示 `ParseSourceDebugBadge`
+  - 便于直接判断当前结构化预览来自 PP 还是 Legacy
+  - 也能看到回退原因、耗时和结构统计
 
 ### 🎨 Digital Archivist 学术工作区 (v1.0.0 - 2026-04-01)
 

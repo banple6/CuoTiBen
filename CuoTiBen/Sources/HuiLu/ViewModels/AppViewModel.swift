@@ -18,6 +18,7 @@ enum StructuredLoadingStage: String, Equatable {
     case ready          = "ready"           // 完成
     case failed         = "failed"          // 失败
     case timedOut       = "timedOut"        // 超时
+    case fallbackLegacy = "fallbackLegacy"  // 已回退到旧解析链路
 
     /// 用户可见的中文阶段描述
     var displayName: String {
@@ -35,6 +36,7 @@ enum StructuredLoadingStage: String, Equatable {
         case .ready:            return "加载完成"
         case .failed:           return "加载失败"
         case .timedOut:         return "加载超时"
+        case .fallbackLegacy:   return "已回退到旧解析链路"
         }
     }
 
@@ -45,21 +47,81 @@ enum StructuredLoadingStage: String, Equatable {
 
     /// 是否为终态
     var isTerminal: Bool {
-        self == .ready || self == .failed || self == .timedOut
+        self == .ready || self == .failed || self == .timedOut || self == .fallbackLegacy
     }
 
     /// 是否已有可展示内容
     var hasPreview: Bool {
-        self == .partialReady || self == .ready || self == .buildingTree
+        self == .partialReady || self == .ready || self == .buildingTree || self == .fallbackLegacy
     }
 
     /// 中文失败回退消息
     var failSafeMessage: String? {
         switch self {
-        case .failed:   return "结构化预览生成失败，已展示基础预览"
-        case .timedOut: return "资料解析超时，请稍后重试"
-        default:        return nil
+        case .failed:           return "结构化预览生成失败，已展示基础预览"
+        case .timedOut:         return "资料解析超时，请稍后重试"
+        case .fallbackLegacy:   return "PP-StructureV3 不可用，已回退到旧解析链路"
+        default:                return nil
         }
+    }
+}
+
+// MARK: - 解析会话诊断信息
+
+/// 记录每次解析的详细诊断数据，用于 debug 面板和遥测
+struct ParseSessionInfo: Equatable {
+    /// 解析来源
+    enum ParseSource: String {
+        case ppStructureV3 = "PP-StructureV3"
+        case legacyRemote = "Legacy-Remote"
+        case legacyLocal = "Legacy-Local"
+    }
+
+    /// 失败分类
+    enum FailureClass: String {
+        case backendUnavailable = "后端不可达"
+        case parseTimeout = "解析超时"
+        case normalizedDocumentInvalid = "归一化文档无效"
+        case converterFailed = "转换器失败"
+        case treeGenerationFailed = "结构树生成失败"
+        case noLocalFile = "无本地文件"
+        case fileReadFailed = "文件读取失败"
+        case lowQualityResult = "低质量结果"
+    }
+
+    let source: ParseSource
+    let requestURL: String?
+    let jobID: String?
+    let ppAttempted: Bool
+    let ppSucceeded: Bool
+    let fallbackUsed: Bool
+    let fallbackReason: String?
+    let failureClass: FailureClass?
+    let normalizedBlockCount: Int
+    let paragraphCount: Int
+    let structureCandidateCount: Int
+    let sentenceCount: Int
+    let outlineNodeCount: Int
+    let segmentCount: Int
+    let parseDurationMs: Int?
+    let timestamp: Date
+
+    /// debug 摘要文本
+    var debugSummary: String {
+        var parts: [String] = []
+        parts.append("来源: \(source.rawValue)")
+        if let url = requestURL { parts.append("URL: \(url)") }
+        if let jid = jobID { parts.append("Job: \(jid)") }
+        parts.append("PP尝试: \(ppAttempted ? "是" : "否")")
+        parts.append("PP成功: \(ppSucceeded ? "是" : "否")")
+        if fallbackUsed, let reason = fallbackReason {
+            parts.append("回退原因: \(reason)")
+        }
+        if let fc = failureClass { parts.append("失败类: \(fc.rawValue)") }
+        parts.append("块:\(normalizedBlockCount) 段:\(paragraphCount) 候选:\(structureCandidateCount)")
+        parts.append("句:\(sentenceCount) 大纲:\(outlineNodeCount) 段落:\(segmentCount)")
+        if let d = parseDurationMs { parts.append("耗时: \(d)ms") }
+        return parts.joined(separator: "\n")
     }
 }
 
@@ -120,6 +182,7 @@ final class AppViewModel: ObservableObject {
     @Published var structuredSourceLoadingIDs: Set<UUID>
     @Published var structuredSourceErrors: [UUID: String]
     @Published var structuredSourceStages: [UUID: StructuredLoadingStage]
+    @Published var parseSessionInfos: [UUID: ParseSessionInfo]
     @Published var dailyGoal: Int = 50
     @Published var completedToday: Int = 0
     @Published var totalCardsLearned: Int = 0
@@ -178,6 +241,7 @@ final class AppViewModel: ObservableObject {
         self.structuredSourceLoadingIDs = []
         self.structuredSourceErrors = [:]
         self.structuredSourceStages = [:]
+        self.parseSessionInfos = [:]
         self.dailyProgress = dailyProgress
         self.completedToday = dailyProgress.completedToday
         self.totalCardsLearned = dailyProgress.completedToday + 240
@@ -388,6 +452,10 @@ final class AppViewModel: ObservableObject {
         structuredSourceStages[document.id] ?? .idle
     }
 
+    func parseSessionInfo(for document: SourceDocument) -> ParseSessionInfo? {
+        parseSessionInfos[document.id]
+    }
+
     func loadStructuredSource(for document: SourceDocument, force: Bool = false) async {
         guard document.processingStatus == .ready else { return }
         guard force || structuredSources[document.id] == nil else { return }
@@ -398,7 +466,8 @@ final class AppViewModel: ObservableObject {
         structuredSourceStages[document.id] = .extracting
         defer {
             structuredSourceLoadingIDs.remove(document.id)
-            if structuredSourceStages[document.id] != .ready && structuredSourceStages[document.id] != .failed && structuredSourceStages[document.id] != .timedOut {
+            let stage = structuredSourceStages[document.id]
+            if stage != .ready && stage != .failed && stage != .timedOut && stage != .fallbackLegacy {
                 structuredSourceStages[document.id] = .failed
             }
         }
@@ -406,36 +475,85 @@ final class AppViewModel: ObservableObject {
         do {
             // ── 阶段1: 文本提取 60 秒超时保护 ──
             structuredSourceStages[document.id] = .extracting
+            TextPipelineDiagnostics.log("PP", "[PP] loadStructuredSource start doc=\(document.id) title=\"\(document.title.prefix(40))\"", severity: .info)
+
             let draft: SourceTextDraft = try await withTimeoutOrThrow(seconds: 60) { [chunkingService, document] in
                 try await chunkingService.extractSourceDraft(document: document)
             }
             guard AISourceParsingService.shouldAttemptEnglishParsing(for: draft) || draft.isLikelyEnglish || Self.containsEnglishLetters(draft.rawText) else {
                 structuredSourceErrors[document.id] = "当前资料未识别为英语资料，暂不进入英语结构化理解流程。"
                 structuredSourceStages[document.id] = .failed
+                parseSessionInfos[document.id] = ParseSessionInfo(
+                    source: .ppStructureV3, requestURL: nil, jobID: nil,
+                    ppAttempted: false, ppSucceeded: false, fallbackUsed: false,
+                    fallbackReason: "非英语资料", failureClass: nil,
+                    normalizedBlockCount: 0, paragraphCount: 0, structureCandidateCount: 0,
+                    sentenceCount: 0, outlineNodeCount: 0, segmentCount: 0,
+                    parseDurationMs: nil, timestamp: Date()
+                )
                 return
             }
 
-            // ── 阶段2: 尝试 PP-StructureV3 后端解析 ──
-            let payload: StructuredSourceParsePayload
+            // ── 阶段2: 尝试 PP-StructureV3 后端解析（主路径） ──
+            let ppStartTime = Date()
+            let ppResult = await attemptPPStructureParse(for: document)
 
-            let ppStructureResult = await attemptPPStructureParse(for: document)
+            if let (ppPayload, ppNormDoc) = ppResult {
+                // ── PP-StructureV3 成功 ──
+                let elapsed = Int(Date().timeIntervalSince(ppStartTime) * 1000)
+                TextPipelineDiagnostics.log("PP", "[PP] parse request success — 使用 PP-StructureV3 结构化解析 doc=\(document.id) elapsed=\(elapsed)ms", severity: .info)
 
-            if let ppPayload = ppStructureResult {
-                // PP-StructureV3 成功
-                payload = ppPayload
-                TextPipelineDiagnostics.log("加载", "PP-StructureV3 解析成功 doc=\(document.id)", severity: .info)
-            } else {
-                // ── 阶段2b: PP-StructureV3 失败/不可用，回退到旧管线 ──
-                TextPipelineDiagnostics.log("加载", "PP-StructureV3 不可用，使用旧管线 doc=\(document.id)", severity: .warning)
-                payload = await fallbackToLegacyPipeline(for: document, draft: draft)
+                parseSessionInfos[document.id] = ParseSessionInfo(
+                    source: .ppStructureV3,
+                    requestURL: "\(DocumentParseService.backendBaseURL)/api/document/parse",
+                    jobID: document.id.uuidString,
+                    ppAttempted: true, ppSucceeded: true, fallbackUsed: false,
+                    fallbackReason: nil, failureClass: nil,
+                    normalizedBlockCount: ppNormDoc.blocks.count,
+                    paragraphCount: ppNormDoc.paragraphs.count,
+                    structureCandidateCount: ppNormDoc.structureCandidates.count,
+                    sentenceCount: ppPayload.bundle.sentences.count,
+                    outlineNodeCount: ppPayload.bundle.source.outlineNodeCount,
+                    segmentCount: ppPayload.bundle.segments.count,
+                    parseDurationMs: elapsed, timestamp: Date()
+                )
+
+                structuredSources[document.id] = ppPayload.bundle
+                mergeStructuredSourcePayload(ppPayload, into: document)
+                seedWorkbenchProgressIfNeeded(for: document, with: ppPayload.bundle)
+                structuredSourceErrors[document.id] = nil
+                structuredSourceStages[document.id] = .ready
+                return
             }
 
-            // ── 阶段3: 完成 ──
-            structuredSources[document.id] = payload.bundle
-            mergeStructuredSourcePayload(payload, into: document)
-            seedWorkbenchProgressIfNeeded(for: document, with: payload.bundle)
-            structuredSourceErrors[document.id] = nil
-            structuredSourceStages[document.id] = .ready
+            // ── 阶段2b: PP-StructureV3 失败，显式回退到旧管线 ──
+            let ppFailReason = structuredSourceErrors[document.id] ?? "PP-StructureV3 解析失败"
+            TextPipelineDiagnostics.log("PP", "[PP] fallback to legacy pipeline because: \(ppFailReason) doc=\(document.id)", severity: .warning)
+
+            #if DEBUG
+            // Debug 模式下不静默回退 — 保留错误信息可见
+            structuredSourceErrors[document.id] = "⚠️ PP-StructureV3 失败: \(ppFailReason)，已回退到旧解析链路"
+            #endif
+
+            let legacyPayload = await fallbackToLegacyPipeline(for: document, draft: draft)
+            let legacySource: ParseSessionInfo.ParseSource = structuredSourceStages[document.id] == .buildingTree ? .legacyLocal : .legacyRemote
+
+            parseSessionInfos[document.id] = ParseSessionInfo(
+                source: legacySource,
+                requestURL: nil, jobID: nil,
+                ppAttempted: true, ppSucceeded: false, fallbackUsed: true,
+                fallbackReason: ppFailReason, failureClass: classifyPPFailure(ppFailReason),
+                normalizedBlockCount: 0, paragraphCount: 0, structureCandidateCount: 0,
+                sentenceCount: legacyPayload.bundle.sentences.count,
+                outlineNodeCount: legacyPayload.bundle.source.outlineNodeCount,
+                segmentCount: legacyPayload.bundle.segments.count,
+                parseDurationMs: nil, timestamp: Date()
+            )
+
+            structuredSources[document.id] = legacyPayload.bundle
+            mergeStructuredSourcePayload(legacyPayload, into: document)
+            seedWorkbenchProgressIfNeeded(for: document, with: legacyPayload.bundle)
+            structuredSourceStages[document.id] = .fallbackLegacy
         } catch {
             let errorMessage: String
             if error is TimeoutError {
@@ -446,8 +564,29 @@ final class AppViewModel: ObservableObject {
                 structuredSourceStages[document.id] = .failed
             }
             structuredSourceErrors[document.id] = errorMessage
-            TextPipelineDiagnostics.log("加载", "loadStructuredSource 失败 doc=\(document.id): \(errorMessage)", severity: .error)
+            parseSessionInfos[document.id] = ParseSessionInfo(
+                source: .ppStructureV3, requestURL: nil, jobID: nil,
+                ppAttempted: true, ppSucceeded: false, fallbackUsed: false,
+                fallbackReason: errorMessage, failureClass: error is TimeoutError ? .parseTimeout : nil,
+                normalizedBlockCount: 0, paragraphCount: 0, structureCandidateCount: 0,
+                sentenceCount: 0, outlineNodeCount: 0, segmentCount: 0,
+                parseDurationMs: nil, timestamp: Date()
+            )
+            TextPipelineDiagnostics.log("PP", "[PP] loadStructuredSource failed doc=\(document.id): \(errorMessage)", severity: .error)
         }
+    }
+
+    /// PP 失败原因分类
+    private func classifyPPFailure(_ reason: String) -> ParseSessionInfo.FailureClass? {
+        let lower = reason.lowercased()
+        if lower.contains("超时") || lower.contains("timeout") { return .parseTimeout }
+        if lower.contains("不可达") || lower.contains("unavailable") || lower.contains("无法连接") { return .backendUnavailable }
+        if lower.contains("无本地文件") || lower.contains("文件路径") { return .noLocalFile }
+        if lower.contains("读取") || lower.contains("read") { return .fileReadFailed }
+        if lower.contains("低质量") || lower.contains("无句子") { return .lowQualityResult }
+        if lower.contains("归一化") || lower.contains("invalid") { return .normalizedDocumentInvalid }
+        if lower.contains("转换") || lower.contains("convert") { return .converterFailed }
+        return nil
     }
 
     /// 超时错误类型
@@ -456,16 +595,20 @@ final class AppViewModel: ObservableObject {
     // MARK: - PP-StructureV3 解析路径
 
     /// 尝试通过 PP-StructureV3 后端解析文档
-    /// 返回 nil 表示不可用/失败，调用方应回退到旧管线
-    private func attemptPPStructureParse(for document: SourceDocument) async -> StructuredSourceParsePayload? {
+    /// 返回 (payload, normalizedDocument) 或 nil（不可用/失败）
+    private func attemptPPStructureParse(for document: SourceDocument) async -> (StructuredSourceParsePayload, NormalizedDocument)? {
         // 检查是否有本地文件可上传
         guard let filePath = document.filePath else {
-            TextPipelineDiagnostics.log("PP-StructureV3", "无本地文件路径，跳过", severity: .info)
+            let reason = "无本地文件路径，跳过 PP-StructureV3"
+            TextPipelineDiagnostics.log("PP", "[PP] \(reason)", severity: .info)
+            structuredSourceErrors[document.id] = reason
             return nil
         }
         let fileURL = URL(fileURLWithPath: filePath)
         guard let fileData = try? Data(contentsOf: fileURL) else {
-            TextPipelineDiagnostics.log("PP-StructureV3", "无法读取文件数据，跳过", severity: .warning)
+            let reason = "无法读取文件数据: \(filePath)"
+            TextPipelineDiagnostics.log("PP", "[PP] \(reason)", severity: .warning)
+            structuredSourceErrors[document.id] = reason
             return nil
         }
 
@@ -474,6 +617,8 @@ final class AppViewModel: ObservableObject {
             structuredSourceStages[document.id] = .uploading
             let fileName = fileURL.lastPathComponent
             let fileType = document.documentType.rawValue
+
+            TextPipelineDiagnostics.log("PP", "[PP] uploading doc=\(document.id) file=\(fileName) size=\(fileData.count) type=\(fileType)", severity: .info)
 
             let normalizedDoc = try await DocumentParseService.parseDocument(
                 fileData: fileData,
@@ -485,6 +630,8 @@ final class AppViewModel: ObservableObject {
 
             // 归一化阶段
             structuredSourceStages[document.id] = .normalizing
+            TextPipelineDiagnostics.log("PP", "[PP] normalizing doc=\(document.id) blocks=\(normalizedDoc.blocks.count) paragraphs=\(normalizedDoc.paragraphs.count) candidates=\(normalizedDoc.structureCandidates.count)", severity: .info)
+
             let payload = NormalizedDocumentConverter.convert(
                 normalizedDoc,
                 documentID: document.id,
@@ -495,23 +642,29 @@ final class AppViewModel: ObservableObject {
 
             // 验证结果质量
             guard payload.bundle.sentences.count >= 1 else {
-                TextPipelineDiagnostics.log("PP-StructureV3", "解析结果无句子，判定为低质量", severity: .warning)
+                let reason = "PP-StructureV3 解析结果无句子（blocks=\(normalizedDoc.blocks.count)），判定为低质量"
+                TextPipelineDiagnostics.log("PP", "[PP] \(reason)", severity: .warning)
+                structuredSourceErrors[document.id] = reason
                 return nil
             }
 
-            return payload
+            TextPipelineDiagnostics.log("PP", "[PP] conversion complete: sentences=\(payload.bundle.sentences.count) segments=\(payload.bundle.segments.count) outlineNodes=\(payload.bundle.source.outlineNodeCount)", severity: .info)
+            return (payload, normalizedDoc)
         } catch {
-            TextPipelineDiagnostics.log("PP-StructureV3", "解析失败: \(error.localizedDescription)，将回退旧管线", severity: .warning)
+            let reason = "PP-StructureV3 解析失败: \(error.localizedDescription)"
+            TextPipelineDiagnostics.log("PP", "[PP] \(reason)", severity: .warning)
+            structuredSourceErrors[document.id] = reason
             return nil
         }
     }
 
     /// 旧管线回退路径（本地 ChunkingService + AISourceParsingService）
     private func fallbackToLegacyPipeline(for document: SourceDocument, draft: SourceTextDraft) async -> StructuredSourceParsePayload {
+        TextPipelineDiagnostics.log("PP", "[PP] fallback → legacy pipeline doc=\(document.id)", severity: .warning)
         structuredSourceStages[document.id] = .classifying
 
         if AISourceParsingService.shouldPreferLocalFallback(for: draft) {
-            print("[AppViewModel] use local structured-source fallback for mixed-language document \(document.id)")
+            TextPipelineDiagnostics.log("PP", "[PP] fallback → legacy LOCAL (mixed-language) doc=\(document.id)", severity: .warning)
             structuredSourceStages[document.id] = .buildingTree
             return AISourceParsingService.buildLocalFallbackPayload(
                 documentID: document.id,
@@ -524,6 +677,7 @@ final class AppViewModel: ObservableObject {
 
         do {
             structuredSourceStages[document.id] = .buildingPreview
+            TextPipelineDiagnostics.log("PP", "[PP] fallback → legacy REMOTE doc=\(document.id)", severity: .warning)
             return try await AISourceParsingService.parseSource(
                 documentID: document.id,
                 title: document.title,
@@ -532,7 +686,7 @@ final class AppViewModel: ObservableObject {
                 draft: draft
             )
         } catch {
-            print("[AppViewModel] legacy remote parse failed, fallback locally: \(error.localizedDescription)")
+            TextPipelineDiagnostics.log("PP", "[PP] fallback legacy remote also failed: \(error.localizedDescription), using local fallback doc=\(document.id)", severity: .error)
             structuredSourceStages[document.id] = .buildingTree
             return AISourceParsingService.buildLocalFallbackPayload(
                 documentID: document.id,
