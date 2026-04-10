@@ -112,6 +112,11 @@
 		B00000000000000000000067 /* TextObjectResizeHandleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000067 /* TextObjectResizeHandleView.swift */; };
 		B00000000000000000000068 /* TextPipelineValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000068 /* TextPipelineValidator.swift */; };
 		B00000000000000000000069 /* TextPipelineDiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000069 /* TextPipelineDiagnosticsView.swift */; };
+		B0000000000000000000006A /* LayoutBlockGrouper.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000006A /* LayoutBlockGrouper.swift */; };
+		B0000000000000000000006B /* BlockContentClassifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000006B /* BlockContentClassifier.swift */; };
+		B0000000000000000000006C /* NormalizedDocumentModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000006C /* NormalizedDocumentModels.swift */; };
+		B0000000000000000000006D /* DocumentParseService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000006D /* DocumentParseService.swift */; };
+		B0000000000000000000006E /* NormalizedDocumentConverter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000006E /* NormalizedDocumentConverter.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -220,6 +225,11 @@
 		C00000000000000000000066 /* TextObjectSelectionOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextObjectSelectionOverlay.swift; sourceTree = "<group>"; };
 		C00000000000000000000067 /* TextObjectResizeHandleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextObjectResizeHandleView.swift; sourceTree = "<group>"; };
 		C00000000000000000000068 /* TextPipelineValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextPipelineValidator.swift; sourceTree = "<group>"; };
+		C0000000000000000000006A /* LayoutBlockGrouper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutBlockGrouper.swift; sourceTree = "<group>"; };
+		C0000000000000000000006B /* BlockContentClassifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockContentClassifier.swift; sourceTree = "<group>"; };
+		C0000000000000000000006C /* NormalizedDocumentModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NormalizedDocumentModels.swift; sourceTree = "<group>"; };
+		C0000000000000000000006D /* DocumentParseService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentParseService.swift; sourceTree = "<group>"; };
+		C0000000000000000000006E /* NormalizedDocumentConverter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NormalizedDocumentConverter.swift; sourceTree = "<group>"; };
 		C00000000000000000000069 /* TextPipelineDiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextPipelineDiagnosticsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -310,6 +320,7 @@
 				C0000000000000000000001A /* StructuredSourceModels.swift */,
 				C0000000000000000000000A /* Subject.swift */,
 				C0000000000000000000000B /* Subscription.swift */,
+				C0000000000000000000006C /* NormalizedDocumentModels.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -331,6 +342,10 @@
 				C0000000000000000000000F /* ReviewScheduler.swift */,
 				C0000000000000000000004C /* SourceJumpCoordinator.swift */,
 				C00000000000000000000068 /* TextPipelineValidator.swift */,
+				C0000000000000000000006A /* LayoutBlockGrouper.swift */,
+				C0000000000000000000006B /* BlockContentClassifier.swift */,
+				C0000000000000000000006D /* DocumentParseService.swift */,
+				C0000000000000000000006E /* NormalizedDocumentConverter.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -700,7 +715,10 @@
 				B0000000000000000000005D /* DependencyContainer.swift in Sources */,
 				B00000000000000000000061 /* BlockStyleTokens.swift in Sources */,
 				B00000000000000000000062 /* BlockStylePicker.swift in Sources */,
-				B00000000000000000000068 /* TextPipelineValidator.swift in Sources */,
+				B00000000000000000000068 /* TextPipelineValidator.swift in Sources */,					B0000000000000000000006A /* LayoutBlockGrouper.swift in Sources */,				B0000000000000000000006B /* BlockContentClassifier.swift in Sources */,
+				B0000000000000000000006C /* NormalizedDocumentModels.swift in Sources */,
+				B0000000000000000000006D /* DocumentParseService.swift in Sources */,
+				B0000000000000000000006E /* NormalizedDocumentConverter.swift in Sources */,
 				B00000000000000000000069 /* TextPipelineDiagnosticsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

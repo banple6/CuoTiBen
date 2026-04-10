@@ -1,6 +1,68 @@
 import Foundation
 import Combine
 
+// MARK: - 结构化加载阶段
+
+/// 结构化预览加载状态机
+enum StructuredLoadingStage: String, Equatable {
+    case idle           = "idle"
+    case extracting     = "extracting"      // 文本提取
+    case uploading      = "uploading"       // 上传到后端（PP-StructureV3 路径）
+    case parsing        = "parsing"         // 后端解析中
+    case normalizing    = "normalizing"     // 后端归一化中
+    case grouping       = "grouping"        // 版面块分组（本地路径）
+    case classifying    = "classifying"     // 块类型分类（本地路径）
+    case buildingPreview = "buildingPreview" // 远程解析（旧路径）
+    case buildingTree   = "buildingTree"    // 本地树构建
+    case partialReady   = "partialReady"    // 基础预览可用，结构树仍在加载
+    case ready          = "ready"           // 完成
+    case failed         = "failed"          // 失败
+    case timedOut       = "timedOut"        // 超时
+
+    /// 用户可见的中文阶段描述
+    var displayName: String {
+        switch self {
+        case .idle:             return "等待中"
+        case .extracting:       return "正在提取文本…"
+        case .uploading:        return "正在上传文档…"
+        case .parsing:          return "正在解析版面结构…"
+        case .normalizing:      return "正在归一化结果…"
+        case .grouping:         return "正在分析版面…"
+        case .classifying:      return "正在分类内容…"
+        case .buildingPreview:  return "正在生成结构预览…"
+        case .buildingTree:     return "正在构建结构树…"
+        case .partialReady:     return "基础预览已就绪，结构树加载中…"
+        case .ready:            return "加载完成"
+        case .failed:           return "加载失败"
+        case .timedOut:         return "加载超时"
+        }
+    }
+
+    /// 是否可以重试
+    var isRetryable: Bool {
+        self == .failed || self == .timedOut
+    }
+
+    /// 是否为终态
+    var isTerminal: Bool {
+        self == .ready || self == .failed || self == .timedOut
+    }
+
+    /// 是否已有可展示内容
+    var hasPreview: Bool {
+        self == .partialReady || self == .ready || self == .buildingTree
+    }
+
+    /// 中文失败回退消息
+    var failSafeMessage: String? {
+        switch self {
+        case .failed:   return "结构化预览生成失败，已展示基础预览"
+        case .timedOut: return "资料解析超时，请稍后重试"
+        default:        return nil
+        }
+    }
+}
+
 struct MaterialImportSummary {
     let documents: [SourceDocument]
     let processedPages: Int
@@ -57,6 +119,7 @@ final class AppViewModel: ObservableObject {
     @Published var workbenchProgress: [UUID: ReviewWorkbenchProgress]
     @Published var structuredSourceLoadingIDs: Set<UUID>
     @Published var structuredSourceErrors: [UUID: String]
+    @Published var structuredSourceStages: [UUID: StructuredLoadingStage]
     @Published var dailyGoal: Int = 50
     @Published var completedToday: Int = 0
     @Published var totalCardsLearned: Int = 0
@@ -114,6 +177,7 @@ final class AppViewModel: ObservableObject {
         self.workbenchProgress = workbenchProgress
         self.structuredSourceLoadingIDs = []
         self.structuredSourceErrors = [:]
+        self.structuredSourceStages = [:]
         self.dailyProgress = dailyProgress
         self.completedToday = dailyProgress.completedToday
         self.totalCardsLearned = dailyProgress.completedToday + 240
@@ -320,6 +384,10 @@ final class AppViewModel: ObservableObject {
         structuredSourceErrors[document.id]
     }
 
+    func structuredSourceStage(for document: SourceDocument) -> StructuredLoadingStage {
+        structuredSourceStages[document.id] ?? .idle
+    }
+
     func loadStructuredSource(for document: SourceDocument, force: Bool = false) async {
         guard document.processingStatus == .ready else { return }
         guard force || structuredSources[document.id] == nil else { return }
@@ -327,51 +395,168 @@ final class AppViewModel: ObservableObject {
 
         structuredSourceLoadingIDs.insert(document.id)
         structuredSourceErrors[document.id] = nil
-        defer { structuredSourceLoadingIDs.remove(document.id) }
+        structuredSourceStages[document.id] = .extracting
+        defer {
+            structuredSourceLoadingIDs.remove(document.id)
+            if structuredSourceStages[document.id] != .ready && structuredSourceStages[document.id] != .failed && structuredSourceStages[document.id] != .timedOut {
+                structuredSourceStages[document.id] = .failed
+            }
+        }
 
         do {
-            let draft = try await chunkingService.extractSourceDraft(document: document)
+            // ── 阶段1: 文本提取 60 秒超时保护 ──
+            structuredSourceStages[document.id] = .extracting
+            let draft: SourceTextDraft = try await withTimeoutOrThrow(seconds: 60) { [chunkingService, document] in
+                try await chunkingService.extractSourceDraft(document: document)
+            }
             guard AISourceParsingService.shouldAttemptEnglishParsing(for: draft) || draft.isLikelyEnglish || Self.containsEnglishLetters(draft.rawText) else {
                 structuredSourceErrors[document.id] = "当前资料未识别为英语资料，暂不进入英语结构化理解流程。"
+                structuredSourceStages[document.id] = .failed
                 return
             }
 
+            // ── 阶段2: 尝试 PP-StructureV3 后端解析 ──
             let payload: StructuredSourceParsePayload
-            if AISourceParsingService.shouldPreferLocalFallback(for: draft) {
-                print("[AppViewModel] use local structured-source fallback for mixed-language document \(document.id)")
-                payload = AISourceParsingService.buildLocalFallbackPayload(
-                    documentID: document.id,
-                    title: document.title,
-                    documentType: document.documentType,
-                    pageCount: document.pageCount,
-                    draft: draft
-                )
+
+            let ppStructureResult = await attemptPPStructureParse(for: document)
+
+            if let ppPayload = ppStructureResult {
+                // PP-StructureV3 成功
+                payload = ppPayload
+                TextPipelineDiagnostics.log("加载", "PP-StructureV3 解析成功 doc=\(document.id)", severity: .info)
             } else {
-                do {
-                    payload = try await AISourceParsingService.parseSource(
-                        documentID: document.id,
-                        title: document.title,
-                        documentType: document.documentType,
-                        pageCount: document.pageCount,
-                        draft: draft
-                    )
-                } catch {
-                    print("[AppViewModel] structured-source remote parse failed, fallback locally: \(error.localizedDescription)")
-                    payload = AISourceParsingService.buildLocalFallbackPayload(
-                        documentID: document.id,
-                        title: document.title,
-                        documentType: document.documentType,
-                        pageCount: document.pageCount,
-                        draft: draft
-                    )
-                }
+                // ── 阶段2b: PP-StructureV3 失败/不可用，回退到旧管线 ──
+                TextPipelineDiagnostics.log("加载", "PP-StructureV3 不可用，使用旧管线 doc=\(document.id)", severity: .warning)
+                payload = await fallbackToLegacyPipeline(for: document, draft: draft)
             }
+
+            // ── 阶段3: 完成 ──
             structuredSources[document.id] = payload.bundle
             mergeStructuredSourcePayload(payload, into: document)
             seedWorkbenchProgressIfNeeded(for: document, with: payload.bundle)
             structuredSourceErrors[document.id] = nil
+            structuredSourceStages[document.id] = .ready
         } catch {
-            structuredSourceErrors[document.id] = error.localizedDescription
+            let errorMessage: String
+            if error is TimeoutError {
+                errorMessage = "资料解析超时，请稍后重试。"
+                structuredSourceStages[document.id] = .timedOut
+            } else {
+                errorMessage = "结构化解析失败：\(error.localizedDescription)"
+                structuredSourceStages[document.id] = .failed
+            }
+            structuredSourceErrors[document.id] = errorMessage
+            TextPipelineDiagnostics.log("加载", "loadStructuredSource 失败 doc=\(document.id): \(errorMessage)", severity: .error)
+        }
+    }
+
+    /// 超时错误类型
+    private struct TimeoutError: Error {}
+
+    // MARK: - PP-StructureV3 解析路径
+
+    /// 尝试通过 PP-StructureV3 后端解析文档
+    /// 返回 nil 表示不可用/失败，调用方应回退到旧管线
+    private func attemptPPStructureParse(for document: SourceDocument) async -> StructuredSourceParsePayload? {
+        // 检查是否有本地文件可上传
+        guard let filePath = document.filePath else {
+            TextPipelineDiagnostics.log("PP-StructureV3", "无本地文件路径，跳过", severity: .info)
+            return nil
+        }
+        let fileURL = URL(fileURLWithPath: filePath)
+        guard let fileData = try? Data(contentsOf: fileURL) else {
+            TextPipelineDiagnostics.log("PP-StructureV3", "无法读取文件数据，跳过", severity: .warning)
+            return nil
+        }
+
+        do {
+            // 上传阶段
+            structuredSourceStages[document.id] = .uploading
+            let fileName = fileURL.lastPathComponent
+            let fileType = document.documentType.rawValue
+
+            let normalizedDoc = try await DocumentParseService.parseDocument(
+                fileData: fileData,
+                fileName: fileName,
+                fileType: fileType,
+                documentID: document.id,
+                title: document.title
+            )
+
+            // 归一化阶段
+            structuredSourceStages[document.id] = .normalizing
+            let payload = NormalizedDocumentConverter.convert(
+                normalizedDoc,
+                documentID: document.id,
+                title: document.title,
+                documentType: fileType,
+                pageCount: document.pageCount
+            )
+
+            // 验证结果质量
+            guard payload.bundle.sentences.count >= 1 else {
+                TextPipelineDiagnostics.log("PP-StructureV3", "解析结果无句子，判定为低质量", severity: .warning)
+                return nil
+            }
+
+            return payload
+        } catch {
+            TextPipelineDiagnostics.log("PP-StructureV3", "解析失败: \(error.localizedDescription)，将回退旧管线", severity: .warning)
+            return nil
+        }
+    }
+
+    /// 旧管线回退路径（本地 ChunkingService + AISourceParsingService）
+    private func fallbackToLegacyPipeline(for document: SourceDocument, draft: SourceTextDraft) async -> StructuredSourceParsePayload {
+        structuredSourceStages[document.id] = .classifying
+
+        if AISourceParsingService.shouldPreferLocalFallback(for: draft) {
+            print("[AppViewModel] use local structured-source fallback for mixed-language document \(document.id)")
+            structuredSourceStages[document.id] = .buildingTree
+            return AISourceParsingService.buildLocalFallbackPayload(
+                documentID: document.id,
+                title: document.title,
+                documentType: document.documentType,
+                pageCount: document.pageCount,
+                draft: draft
+            )
+        }
+
+        do {
+            structuredSourceStages[document.id] = .buildingPreview
+            return try await AISourceParsingService.parseSource(
+                documentID: document.id,
+                title: document.title,
+                documentType: document.documentType,
+                pageCount: document.pageCount,
+                draft: draft
+            )
+        } catch {
+            print("[AppViewModel] legacy remote parse failed, fallback locally: \(error.localizedDescription)")
+            structuredSourceStages[document.id] = .buildingTree
+            return AISourceParsingService.buildLocalFallbackPayload(
+                documentID: document.id,
+                title: document.title,
+                documentType: document.documentType,
+                pageCount: document.pageCount,
+                draft: draft
+            )
+        }
+    }
+
+    /// 带超时的异步操作包装
+    private func withTimeoutOrThrow<T: Sendable>(seconds: Double, operation: @Sendable @escaping () async throws -> T) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask {
+                try await operation()
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw TimeoutError()
+            }
+            let result = try await group.next()!
+            group.cancelAll()
+            return result
         }
     }
 

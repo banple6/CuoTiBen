@@ -981,8 +981,14 @@ private extension AISourceParsingService {
             let fallbackSentences = localSentences.isEmpty ? [normalizedInlineWhitespace(segment.text)] : localSentences
 
             for (localIndex, sentenceText) in fallbackSentences.enumerated() {
-                let normalizedText = normalizedInlineWhitespace(sentenceText)
+                var normalizedText = normalizedInlineWhitespace(sentenceText)
                 guard !normalizedText.isEmpty else { continue }
+
+                // 句子长度保护：超过 600 字符截断到最近的句末标点
+                if normalizedText.count > 600 {
+                    let truncated = truncateToSentenceBoundary(normalizedText, maxLength: 600)
+                    normalizedText = truncated
+                }
 
                 let sentenceID = "sen_\(String(sentenceIndex + 1).leftPadded(to: 3))"
                 let anchorTail = "第\(localIndex + 1)句"
@@ -1009,6 +1015,17 @@ private extension AISourceParsingService {
         return sentences
     }
 
+    /// 截断到最近的句末标点边界
+    private static func truncateToSentenceBoundary(_ text: String, maxLength: Int) -> String {
+        let prefix = String(text.prefix(maxLength))
+        let terminators: [Character] = [".", "!", "?", "。", "！", "？", ";", "；"]
+        if let lastTerminator = prefix.lastIndex(where: { terminators.contains($0) }) {
+            let endIndex = prefix.index(after: lastTerminator)
+            return String(prefix[prefix.startIndex..<endIndex])
+        }
+        return prefix
+    }
+
     static func makeLocalOutline(
         sourceID: String,
         title: String,
@@ -1020,8 +1037,8 @@ private extension AISourceParsingService {
         let groupedSegments = groupedSegmentsForOutline(segments)
         let rootID = "node_root"
 
-        let children = groupedSegments.enumerated().map { groupIndex, group in
-            let leadSegment = group[0]
+        let children = groupedSegments.enumerated().compactMap { groupIndex, group -> OutlineNode? in
+            guard let leadSegment = group.first else { return nil }
             let sourceSegmentIDs = group.map(\.id)
             let sourceSentenceIDs = group.flatMap { sentenceMap[$0.id, default: []].map(\.id) }
             let representativeSentence = sentenceMap[leadSegment.id]?.first
@@ -1030,6 +1047,63 @@ private extension AISourceParsingService {
                 .joined(separator: " ")
             let titleText = localNodeTitle(for: leadSegment, sentences: sentenceMap[leadSegment.id] ?? [])
 
+            // ── 节点资格验证 ──
+
+            // (1) 标题和摘要都太短或无意义的跳过
+            let titleCleaned = cleanTerm(titleText)
+            let summaryForNode = summaryText.isEmpty ? leadSegment.text : summaryText
+            if titleCleaned.count < 2 && summaryForNode.trimmingCharacters(in: .whitespacesAndNewlines).count < 6 {
+                TextPipelineDiagnostics.log(
+                    "树节点",
+                    "跳过低质节点 group=\(groupIndex) title=\"\(titleText)\" summary=\(summaryForNode.count)字符",
+                    severity: .warning
+                )
+                return nil
+            }
+
+            // (2) 混合语言污染检测：中英混杂严重的块不做独立节点
+            let langProfile = BlockContentClassifier.analyzeLanguage(leadSegment.text)
+            if langProfile.isContaminated {
+                TextPipelineDiagnostics.log(
+                    "树节点",
+                    "跳过混合语言污染节点 group=\(groupIndex) 混合度=\(String(format: "%.2f", langProfile.mixedScore)) en=\(String(format: "%.0f%%", langProfile.englishRatio * 100)) zh=\(String(format: "%.0f%%", langProfile.chineseRatio * 100))",
+                    severity: .warning
+                )
+                return nil
+            }
+
+            // (3) 噪声/页眉页脚类型检测
+            let classification = BlockContentClassifier.classify(
+                text: leadSegment.text,
+                layoutType: leadSegment.anchorLabel.contains("标题") ? .heading : .body,
+                confidence: 0.7
+            )
+            if !classification.contentType.isTreeNodeEligible {
+                TextPipelineDiagnostics.log(
+                    "树节点",
+                    "跳过非结构内容 group=\(groupIndex) 类型=\(classification.contentType.displayName)",
+                    severity: .info
+                )
+                return nil
+            }
+
+            // (4) 明显截断检测：文本在单词中间断开
+            let trimmedSummary = summaryForNode.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmedSummary.count > 10, let lastChar = trimmedSummary.last,
+               lastChar.isLetter && !lastChar.isPunctuation,
+               trimmedSummary.count < 30 {
+                // 短文本且末尾无标点 → 可能是截断碎片
+                let letterCount = trimmedSummary.unicodeScalars.filter { CharacterSet.letters.contains($0) }.count
+                if letterCount < 8 {
+                    TextPipelineDiagnostics.log(
+                        "树节点",
+                        "跳过疑似截断碎片 group=\(groupIndex) text=\"\(String(trimmedSummary.prefix(30)))\"",
+                        severity: .warning
+                    )
+                    return nil
+                }
+            }
+
             return OutlineNode(
                 id: "node_\(groupIndex + 1)",
                 sourceID: sourceID,
@@ -1037,7 +1111,7 @@ private extension AISourceParsingService {
                 depth: 1,
                 order: groupIndex,
                 title: titleText,
-                summary: truncate(summaryText.isEmpty ? leadSegment.text : summaryText, limit: 100),
+                summary: truncate(summaryForNode, limit: 100),
                 anchor: OutlineAnchor(
                     segmentID: leadSegment.id,
                     sentenceID: representativeSentence?.id,
@@ -1080,21 +1154,46 @@ private extension AISourceParsingService {
     }
 
     static func flatten(outline: [OutlineNode]) -> [OutlineNode] {
-        outline.flatMap { [$0] + flatten(outline: $0.children) }
+        flattenWithDepthLimit(outline, maxDepth: 20)
+    }
+
+    /// 带深度限制的树展平，防止循环引用导致无限递归
+    private static func flattenWithDepthLimit(_ nodes: [OutlineNode], maxDepth: Int, currentDepth: Int = 0) -> [OutlineNode] {
+        guard currentDepth < maxDepth else { return [] }
+        return nodes.flatMap { [$0] + flattenWithDepthLimit($0.children, maxDepth: maxDepth, currentDepth: currentDepth + 1) }
     }
 
     static func groupedSegmentsForOutline(_ segments: [Segment]) -> [[Segment]] {
-        guard segments.count > 8 else {
-            return segments.map { [$0] }
+        guard !segments.isEmpty else { return [] }
+
+        // 标题感知分组：以标题标签为分界点分组
+        var groups: [[Segment]] = []
+        var currentGroup: [Segment] = []
+
+        for segment in segments {
+            let isHeadingSegment = segment.anchorLabel.contains("标题")
+            if isHeadingSegment && !currentGroup.isEmpty {
+                groups.append(currentGroup)
+                currentGroup = []
+            }
+            currentGroup.append(segment)
+        }
+        if !currentGroup.isEmpty {
+            groups.append(currentGroup)
         }
 
-        let groupSize = Int(ceil(Double(segments.count) / 6.0))
-        var groups: [[Segment]] = []
-        var index = 0
-
-        while index < segments.count {
-            groups.append(Array(segments[index..<min(index + groupSize, segments.count)]))
-            index += groupSize
+        // 如果没有自然分组（全是 body、没有标题标签），按数量适度分组
+        if groups.count <= 1 && segments.count > 8 {
+            let groupSize = max(Int(ceil(Double(segments.count) / 6.0)), 2)
+            groups = []
+            var index = 0
+            while index < segments.count {
+                groups.append(Array(segments[index..<min(index + groupSize, segments.count)]))
+                index += groupSize
+            }
+        } else if groups.count <= 1 {
+            // ≤8 段，每段一组
+            groups = segments.map { [$0] }
         }
 
         return groups
@@ -1104,6 +1203,7 @@ private extension AISourceParsingService {
         let normalized = normalizedWhitespace(text)
         guard !normalized.isEmpty else { return [] }
 
+        // 显式双换行 = 段落分界
         let paragraphs = normalized
             .components(separatedBy: "\n\n")
             .map { normalizedWhitespace($0) }
@@ -1113,13 +1213,15 @@ private extension AISourceParsingService {
             return paragraphs
         }
 
-        let lineGrouped = normalized
+        // 单换行是视觉行折行，不是段落分界。
+        // 将所有行合并为一个段落块。
+        let lines = normalized
             .components(separatedBy: CharacterSet.newlines)
             .map { normalizedInlineWhitespace($0) }
             .filter { !$0.isEmpty }
 
-        if lineGrouped.count >= 2 {
-            return lineGrouped
+        if lines.count >= 2 {
+            return [lines.joined(separator: " ")]
         }
 
         return [normalized]
@@ -1161,15 +1263,35 @@ private extension AISourceParsingService {
             .first
             .map { normalizedInlineWhitespace($0) } ?? ""
 
-        if !firstLine.isEmpty, firstLine.count <= 34, !firstLine.allSatisfy({ $0.isNumber }) {
-            return truncate(firstLine, limit: 34)
+        // 首行为短行且非纯数字/标点→用作标题
+        if !firstLine.isEmpty, firstLine.count <= 34 {
+            let letterCount = firstLine.unicodeScalars.filter { CharacterSet.letters.contains($0) }.count
+            if letterCount >= 3 {
+                return truncate(firstLine, limit: 34)
+            }
         }
 
+        // 取第一句作为标题
         if let firstSentence = sentences.first?.text {
-            return truncate(firstSentence, limit: 34)
+            let trimmed = normalizedInlineWhitespace(firstSentence)
+            if !trimmed.isEmpty {
+                return truncate(trimmed, limit: 34)
+            }
         }
 
-        return truncate(segment.anchorLabel, limit: 34)
+        // 取 anchorLabel，但避免纯"第X段"之类的通用标签
+        let label = segment.anchorLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !label.isEmpty {
+            return truncate(label, limit: 34)
+        }
+
+        // 最终回退：取段落文本前 34 字符
+        let segText = normalizedInlineWhitespace(segment.text)
+        if !segText.isEmpty {
+            return truncate(segText, limit: 34)
+        }
+
+        return "段落 \(segment.index + 1)"
     }
 
     static func preferredOutlineTitle(
@@ -1188,10 +1310,14 @@ private extension AISourceParsingService {
             candidate = primaryClean
         } else if !fallbackClean.isEmpty, !isGenericOutlineTitle(fallbackClean) {
             candidate = fallbackClean
-        } else if !generated.isEmpty {
+        } else if !generated.isEmpty, !isGenericOutlineTitle(generated) {
             candidate = generated
+        } else if let sentenceText = sentence?.text, !sentenceText.isEmpty {
+            candidate = sentenceText
+        } else if let segmentText = segment?.text, !segmentText.isEmpty {
+            candidate = String(segmentText.prefix(40))
         } else {
-            candidate = depth == 0 ? "资料总览" : "资料节点"
+            candidate = depth == 0 ? "资料总览" : "段落 \(depth)"
         }
 
         return truncate(candidate, limit: depth == 0 ? 28 : 24)

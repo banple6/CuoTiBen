@@ -250,17 +250,97 @@ public final class ChunkingService: ChunkingServiceProtocol {
 
         for index in 0..<document.pageCount {
             guard let page = document.page(at: index) else { continue }
-            let text = page.string?.normalizedWhitespace() ?? ""
-            if !text.isEmpty {
+            let rawPageText = page.string ?? ""
+            let trimmedPageText = rawPageText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedPageText.isEmpty {
                 sourceTextPages += 1
-                segments.append(
-                    ParsedSegment(
-                        locator: "第\(index + 1)页",
-                        position: index + 1,
-                        text: text,
-                        sentenceDrafts: []
-                    )
+
+                // 版面块分组：标题检测 + 段落合并
+                let groupingResult = LayoutBlockGrouper.groupBlocks(
+                    from: rawPageText,
+                    attributedString: page.attributedString
                 )
+
+                if groupingResult.blocks.isEmpty {
+                    // 回退：无法分组时使用整页文本
+                    segments.append(
+                        ParsedSegment(
+                            locator: "第\(index + 1)页",
+                            position: index + 1,
+                            text: trimmedPageText.normalizedWhitespace(),
+                            sentenceDrafts: []
+                        )
+                    )
+                } else {
+                    // 多语言块分类
+                    let classified = BlockContentClassifier.classifyBlocks(groupingResult.blocks)
+                    let eligible = BlockContentClassifier.filterEligibleBlocks(classified)
+
+                    let headingCount = eligible.filter { $0.classification.contentType == .title || $0.classification.contentType == .heading || $0.classification.contentType == .subheading }.count
+                    var headingIndex = 0
+                    var paragraphIndex = 0
+
+                    TextPipelineDiagnostics.log(
+                        "版面分组",
+                        "第\(index + 1)页: \(groupingResult.rawLineCount)行 → \(groupingResult.blocks.count)块 → \(eligible.count)块合格 (分类: \(classified.map { $0.classification.contentType.displayName }.joined(separator: ",")))"
+                    )
+
+                    for (block, classification) in eligible {
+                        let locator: String
+                        let typeName = classification.contentType
+
+                        switch typeName {
+                        case .title, .heading, .subheading:
+                            headingIndex += 1
+                            locator = headingCount == 1
+                                ? "第\(index + 1)页 标题"
+                                : "第\(index + 1)页 标题\(headingIndex)"
+                        case .chineseExplanation:
+                            paragraphIndex += 1
+                            locator = "第\(index + 1)页 中文说明\(paragraphIndex)"
+                        case .bilingualNote, .glossaryNote:
+                            paragraphIndex += 1
+                            locator = "第\(index + 1)页 注释\(paragraphIndex)"
+                        case .questionStem, .optionList:
+                            paragraphIndex += 1
+                            locator = "第\(index + 1)页 题目\(paragraphIndex)"
+                        default:
+                            paragraphIndex += 1
+                            locator = "第\(index + 1)页 第\(paragraphIndex)段"
+                        }
+
+                        segments.append(
+                            ParsedSegment(
+                                locator: locator,
+                                position: index + 1,
+                                text: block.text,
+                                sentenceDrafts: []
+                            )
+                        )
+
+                        TextPipelineDiagnostics.log(
+                            "块分类",
+                            "第\(index + 1)页 \(classification.contentType.displayName): \"\(String(block.text.prefix(60)))\" 置信度=\(String(format: "%.2f", classification.confidence)) 语言=\(classification.languageProfile.dominantLanguage.rawValue) 原因=\(classification.reasons.joined(separator: ","))"
+                        )
+                    }
+
+                    // 如果所有块都被过滤掉，回退到整页文本
+                    if eligible.isEmpty && !groupingResult.blocks.isEmpty {
+                        TextPipelineDiagnostics.log(
+                            "块分类",
+                            "第\(index + 1)页 所有块不合格，回退整页文本",
+                            severity: .warning
+                        )
+                        segments.append(
+                            ParsedSegment(
+                                locator: "第\(index + 1)页",
+                                position: index + 1,
+                                text: trimmedPageText.normalizedWhitespace(),
+                                sentenceDrafts: []
+                            )
+                        )
+                    }
+                }
                 continue
             }
 

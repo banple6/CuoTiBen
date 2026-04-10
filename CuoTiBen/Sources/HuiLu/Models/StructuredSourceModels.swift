@@ -349,6 +349,28 @@ struct StructuredSourceBundle: Equatable {
     let sentences: [Sentence]
     let outline: [OutlineNode]
 
+    // 缓存索引（惰性构建，一次性）
+    private let _cachedFlatNodes: [OutlineNode]
+    private let _sentenceIndex: [String: Sentence]
+    private let _segmentIndex: [String: Segment]
+
+    static func == (lhs: StructuredSourceBundle, rhs: StructuredSourceBundle) -> Bool {
+        lhs.source == rhs.source &&
+        lhs.segments == rhs.segments &&
+        lhs.sentences == rhs.sentences &&
+        lhs.outline == rhs.outline
+    }
+
+    init(source: Source, segments: [Segment], sentences: [Sentence], outline: [OutlineNode]) {
+        self.source = source
+        self.segments = segments
+        self.sentences = sentences
+        self.outline = outline
+        self._cachedFlatNodes = Self.flattenSafe(nodes: outline, maxDepth: 20)
+        self._sentenceIndex = Dictionary(sentences.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        self._segmentIndex = Dictionary(segments.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
     func sentences(in segment: Segment) -> [Sentence] {
         let sentenceIDSet = Set(segment.sentenceIDs)
         return sentences.filter { sentenceIDSet.contains($0.id) }
@@ -356,23 +378,23 @@ struct StructuredSourceBundle: Equatable {
 
     func sentence(id: String?) -> Sentence? {
         guard let id else { return nil }
-        return sentences.first { $0.id == id }
+        return _sentenceIndex[id]
     }
 
     func segment(id: String?) -> Segment? {
         guard let id else { return nil }
-        return segments.first { $0.id == id }
+        return _segmentIndex[id]
     }
 
     func outlineNode(id: String?) -> OutlineNode? {
         guard let id else { return nil }
-        return flattenedOutlineNodes().first { $0.id == id }
+        return _cachedFlatNodes.first { $0.id == id }
     }
 
     func bestOutlineNode(forSentenceID id: String?) -> OutlineNode? {
         guard let id else { return nil }
 
-        return flattenedOutlineNodes()
+        return _cachedFlatNodes
             .filter { node in
                 node.sourceSentenceIDs.contains(id) || node.anchor.sentenceID == id
             }
@@ -389,7 +411,7 @@ struct StructuredSourceBundle: Equatable {
     func bestOutlineNode(forSegmentID id: String?) -> OutlineNode? {
         guard let id else { return nil }
 
-        return flattenedOutlineNodes()
+        return _cachedFlatNodes
             .filter { node in
                 node.sourceSegmentIDs.contains(id) || node.anchor.segmentID == id
             }
@@ -406,13 +428,15 @@ struct StructuredSourceBundle: Equatable {
     func ancestorNodeIDs(for nodeID: String?) -> [String] {
         guard let nodeID else { return [] }
 
-        let nodes = flattenedOutlineNodes()
-        let parentMap = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0.parentID) })
+        let parentMap = Dictionary(uniqueKeysWithValues: _cachedFlatNodes.map { ($0.id, $0.parentID) })
         var results: [String] = []
         var current = nodeID
+        var visited: Set<String> = []
 
         while let parentID = parentMap[current], let unwrappedParentID = parentID {
+            guard !visited.contains(unwrappedParentID) else { break }
             results.append(unwrappedParentID)
+            visited.insert(unwrappedParentID)
             current = unwrappedParentID
         }
 
@@ -421,18 +445,20 @@ struct StructuredSourceBundle: Equatable {
 
     func outlineNodes(forSegmentIDs ids: Set<String>) -> [OutlineNode] {
         guard !ids.isEmpty else { return [] }
-        return flattenedOutlineNodes().filter { node in
+        return _cachedFlatNodes.filter { node in
             !Set(node.sourceSegmentIDs).isDisjoint(with: ids) ||
             (node.anchor.segmentID.map { ids.contains($0) } ?? false)
         }
     }
 
     func flattenedOutlineNodes() -> [OutlineNode] {
-        flatten(nodes: outline)
+        _cachedFlatNodes
     }
 
-    private func flatten(nodes: [OutlineNode]) -> [OutlineNode] {
-        nodes.flatMap { [$0] + flatten(nodes: $0.children) }
+    /// 带深度限制的安全展平，防止循环引用导致无限递归
+    private static func flattenSafe(nodes: [OutlineNode], maxDepth: Int, currentDepth: Int = 0) -> [OutlineNode] {
+        guard currentDepth < maxDepth else { return [] }
+        return nodes.flatMap { [$0] + flattenSafe(nodes: $0.children, maxDepth: maxDepth, currentDepth: currentDepth + 1) }
     }
 }
 

@@ -1,0 +1,21 @@
+[Unit]
+Description=CuoTiBen Document Parser (PP-StructureV3 Gateway)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/cuotiben-parser
+EnvironmentFile=/opt/cuotiben-parser/.env
+ExecStart=/opt/cuotiben-parser/.venv/bin/uvicorn app.main:app \
+    --host 0.0.0.0 \
+    --port 8900 \
+    --log-level info \
+    --workers 2
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

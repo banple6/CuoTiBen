@@ -12,6 +12,9 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
     @Published var isLoadingAnalysis = false
     @Published var analysisError: String?
 
+    /// 当前分析任务，用于取消
+    private var analysisTask: Task<Void, Never>?
+
     init(document: SourceDocument, bundle: StructuredSourceBundle) {
         self.document = document
         self.bundle = bundle
@@ -75,7 +78,20 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
         return node.anchor.label
     }
 
+    /// 取消正在进行的分析请求
+    func cancelAnalysis() {
+        analysisTask?.cancel()
+        analysisTask = nil
+        isLoadingAnalysis = false
+    }
+
     func loadAnalysis(using appViewModel: AppViewModel) async {
+        // 取消之前的分析请求
+        analysisTask?.cancel()
+
+        // 捕获当前 sentenceID 以检测竞态
+        let targetSentenceID = selectedSentenceID
+
         guard let sentence = selectedSentence else {
             analysisResult = nil
             return
@@ -84,14 +100,49 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
         isLoadingAnalysis = true
         analysisError = nil
 
-        do {
-            let context = appViewModel.explainSentenceContext(for: sentence, in: document)
-            analysisResult = try await AIExplainSentenceService.fetchExplanation(for: context)
-        } catch {
-            analysisError = error.localizedDescription
-            analysisResult = nil
+        let task = Task { @MainActor [weak self] in
+            defer {
+                // 仅当仍是同一请求时重置 loading
+                if self?.selectedSentenceID == targetSentenceID {
+                    self?.isLoadingAnalysis = false
+                }
+            }
+
+            do {
+                try Task.checkCancellation()
+                let context = appViewModel.explainSentenceContext(for: sentence, in: document)
+
+                // 30 秒超时
+                let result = try await withThrowingTaskGroup(of: AIExplainSentenceResult.self) { group in
+                    group.addTask {
+                        try await AIExplainSentenceService.fetchExplanation(for: context)
+                    }
+                    group.addTask {
+                        try await Task.sleep(nanoseconds: 30_000_000_000)
+                        throw CancellationError()
+                    }
+                    let first = try await group.next()!
+                    group.cancelAll()
+                    return first
+                }
+
+                try Task.checkCancellation()
+
+                // 竞态检查：sentence 是否已变更
+                guard self?.selectedSentenceID == targetSentenceID else { return }
+
+                self?.analysisResult = result
+                self?.analysisError = nil
+            } catch is CancellationError {
+                // 被取消，不更新状态
+            } catch {
+                guard self?.selectedSentenceID == targetSentenceID else { return }
+                self?.analysisError = "解析失败：\(error.localizedDescription)"
+                self?.analysisResult = nil
+            }
         }
 
-        isLoadingAnalysis = false
+        analysisTask = task
+        await task.value
     }
 }

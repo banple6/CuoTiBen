@@ -1,6 +1,6 @@
 # 慧录 / CuoTiBen 开发记录
 
-截至 `2026-04-09`，这个项目已经从最初的 SwiftUI 原型推进到了一个可运行的英语学习工作台，主链路包括：
+截至 `2026-04-10`，这个项目已经从最初的 SwiftUI 原型推进到了一个可运行的英语学习工作台，主链路包括：
 
 - 英语资料导入、OCR、结构化理解与大纲树
 - 原始 PDF / 阅读版 PDF 双模式阅读
@@ -10,6 +10,7 @@
 - `Digital Archivist` 风格的 iPad 学术工作区
 - `Repository -> UseCase -> Coordinator` 中间层架构
 - `LearningRecordContext` 与 PDF 高亮的性能优化
+- `PP-StructureV3 -> NormalizedDocument -> StructuredSourceBundle` 的新解析链路
 
 当前主界面正在继续向统一的“纸张隐喻 + 档案工作台 + 学术阅读台”设计语言收敛：
 
@@ -21,6 +22,81 @@
 - 文本解析链路已新增 **质量诊断日志 + OCR 方向校正 + 反转英文自动修复**
 
 本文档用于记录当前实际开发进度、项目结构、运行方式和最近迭代日志。
+
+## 当前仓库结构
+
+当前仓库已经从早期“单文件原型”收敛到较清晰的模块化结构，顶层目前是 iOS 主工程 + Xcode 工程文件 + 两套后端服务并存的形态：
+
+```text
+.
+├── CuoTiBen/                           # iOS App 源码与资源
+│   ├── Assets.xcassets/                # 图标、颜色、图片资源
+│   ├── Sources/HuiLu/
+│   │   ├── App/                        # App 入口
+│   │   ├── Architecture/               # 依赖注入与装配
+│   │   ├── Coordinators/               # 资料 / 工作台流转协调
+│   │   ├── DesignSystem/               # 设计 Token 与通用组件
+│   │   ├── Models/                     # 领域模型
+│   │   ├── Repositories/               # Repository 协议与实现
+│   │   ├── Services/                   # OCR / AI / 导入 / 归一化解析 / 笔记 / 诊断服务
+│   │   ├── UseCases/                   # 笔记与工作流动作
+│   │   ├── ViewModels/                 # 页面状态与展示模型
+│   │   ├── Views/                      # 页面与组件视图
+│   │   ├── Data/                       # 预留目录，当前基本为空
+│   │   └── Utilities/                  # 预留目录，当前基本为空
+│   ├── README_zh.md
+│   └── README_INDEX.md
+├── CuoTiBen.xcodeproj/                 # Xcode 工程
+├── backend/
+│   └── src/                            # 现有 Node / Express AI 后端
+└── server/
+    ├── app/                            # FastAPI PP-StructureV3 网关
+    └── deploy/                         # systemd / nginx 部署文件
+```
+
+按当前实际代码分布，iOS 端的重点目录可以这样理解：
+
+- `App/`
+  - `HuiLuApp.swift` 负责应用入口和根级装配。
+- `Architecture/`
+  - `DependencyContainer.swift` 负责依赖注入、服务组装和根对象连接。
+- `Coordinators/`
+  - 负责资料跳转、工作区流转和跨页面上下文协同。
+- `DesignSystem/`
+  - 同时维护 `Archivist`、`Modern` 和笔记工作台相关 Token / 组件。
+- `Services/`
+  - 当前聚合了导入、OCR、AI 解析、句子讲解、笔记仓储、知识点提取、文本管线诊断等核心能力。
+  - 新增 `DocumentParseService.swift`、`NormalizedDocumentConverter.swift`、`LayoutBlockGrouper.swift`、`BlockContentClassifier.swift`，用于承接 PP-StructureV3 网关返回的归一化文档，并回落到现有 `StructuredSourceBundle`。
+  - `TextPipelineValidator.swift` 继续负责反转文本检测、质量评估和诊断日志。
+- `Models/`
+  - 除原有 `Source / Segment / Sentence / OutlineNode` 外，已新增 `NormalizedDocumentModels.swift` 用于接收后端归一化文档。
+- `ViewModels/`
+  - 当前以 `AppViewModel`、`NotesHomeViewModel`、`NoteWorkspaceViewModel`、`ArchivistWorkspaceViewModel` 等为主。
+- `Views/`
+  - `Notes/` 已经是最大的业务视图子模块，承载笔记首页、详情、工作台、纸页画布、参考面板、文本对象编辑等能力。
+  - `Workspace/` 保留更偏 `Archivist` 的实验性工作区视图。
+  - `Settings/` 当前主要包含 `AppSettingsSheet.swift`。
+  - `TextPipelineDiagnosticsView.swift` 已发展为解析诊断、阶段筛选和日志复制的调试入口。
+
+当前仓库里的后端已经分成两条线：
+
+- `backend/src/routes/`
+  - `health.js`、`ai.js`
+- `backend/src/services/`
+  - `explainSentenceService.js`
+  - `parseSourceService.js`
+- `backend/src/validators/`
+  - 请求体校验
+- `backend/src/lib/` 与 `middleware/`
+  - DashScope 适配、错误对象与统一错误处理
+- `server/app/routes/`
+  - `document_parse.py` 负责 `POST /api/document/parse` 和查询端点
+- `server/app/services/`
+  - `ai_studio_client.py` 调用 PP-StructureV3
+  - `normalizer.py` 将原始布局结果归一化
+  - `block_classifier.py`、`paragraph_builder.py`、`structure_candidate_builder.py` 负责块分类、段落拼接和结构候选生成
+- `server/deploy/`
+  - 已包含 `systemd` 与 `nginx` 的部署模板
 
 ## 当前状态
 
@@ -37,9 +113,14 @@
   - 资料复盘工作台
   - 本地笔记 MVP
 - 后端最小可用版本已搭建：
-  - `GET /health`
-  - `POST /ai/explain-sentence`
-  - `POST /ai/parse-source`
+  - Node / Express 后端：
+    - `GET /health`
+    - `POST /ai/explain-sentence`
+    - `POST /ai/parse-source`
+  - FastAPI 解析网关：
+    - `GET /health`
+    - `POST /api/document/parse`
+    - `GET /api/document/parse/{job_id}`（当前为同步模式预留）
 - iPad 与 iPhone 均已适配，但布局策略不同：
   - iPhone：原文主视图 + 底部解析抽屉
   - iPad：可调宽度的双栏复盘工作台
@@ -64,6 +145,9 @@
   - `Chunking -> Parse -> Explain` 各阶段可记录诊断日志
   - 可检测并自动修复字符级反转英文文本
   - OCR 阶段会按 PDF 页面旋转角度校正 Vision 识别方向
+- 文档解析入口正在切换到双路径：
+  - 优先走 `PP-StructureV3 -> NormalizedDocumentConverter`
+  - 不可用时回退到现有 `ChunkingService + AISourceParsingService`
 
 ## 已完成能力
 
@@ -437,19 +521,42 @@
 #### 文件结构
 ```
 Sources/HuiLu/
+├── App/
+│   └── HuiLuApp.swift
+├── Architecture/
+│   └── DependencyContainer.swift
 ├── DesignSystem/
-│   └── ArchivistTokens.swift              # 设计 Token 系统
-├── Views/
-│   ├── Workspace/
-│   │   ├── ArchivistWorkspaceView.swift   # 主工作区视图
-│   │   └── ArchivistWorkspaceComponents.swift
-│   └── Paper/
-│       └── EditorialPaperComponents.swift
-└── ViewModels/
-    └── ArchivistWorkspaceViewModel.swift  # TODO
+│   ├── ArchivistTokens.swift
+│   ├── ModernDesignTokens.swift
+│   ├── WorkspaceDesignTokens.swift
+│   ├── ModernComponents.swift
+│   └── WorkspaceComponents.swift
+├── Services/
+│   ├── ChunkingService.swift
+│   ├── AISourceParsingService.swift
+│   ├── AIExplainSentenceService.swift
+│   ├── NoteRepository.swift
+│   └── TextPipelineValidator.swift
+├── ViewModels/
+│   ├── AppViewModel.swift
+│   ├── NotesHomeViewModel.swift
+│   ├── NoteWorkspaceViewModel.swift
+│   └── ArchivistWorkspaceViewModel.swift
+└── Views/
+    ├── Notes/
+    │   ├── NotebookWorkspaceView.swift
+    │   ├── NotebookPageCanvasView.swift
+    │   ├── ReferencePanel.swift
+    │   └── CanvasTextObjectsLayer.swift
+    ├── Workspace/
+    │   ├── ArchivistWorkspaceView.swift
+    │   └── EditorialPaperCanvas.swift
+    ├── Settings/
+    │   └── AppSettingsSheet.swift
+    └── TextPipelineDiagnosticsView.swift
 ```
 
-#### 配套文档 (4 份)
+#### 配套文档 (5 份)
 1. **ARCHIVIST_FINAL_DELIVERY_SUMMARY.md** - 完整交付总结
 2. **ARCHIVIST_QUICK_REFERENCE.md** - 快速参考手册
 3. **ARCHIVIST_VS_MODERN_COMPARISON.md** - 新旧对比指南

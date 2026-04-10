@@ -11,13 +11,13 @@ enum TextPipelineValidator {
     /// 检测文本是否为字符级反转（如 "wen yreve etanimod" 实为 "dominate every new"）
     static func isLikelyReversedEnglish(_ text: String) -> Bool {
         let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard cleaned.count >= 8 else { return false }
+        guard cleaned.count >= 12 else { return false }
 
         let words = cleaned.lowercased()
             .components(separatedBy: .whitespacesAndNewlines)
             .filter { $0.count >= 2 && $0.rangeOfCharacter(from: .letters) != nil }
 
-        guard words.count >= 3 else { return false }
+        guard words.count >= 4 else { return false }
 
         let forwardHits = commonEnglishWordHits(in: words)
 
@@ -28,16 +28,28 @@ enum TextPipelineValidator {
 
         let reverseHits = commonEnglishWordHits(in: reversedWords)
 
-        // 反转后常见词命中显著多于正向：判定为反转
-        if reverseHits >= 3 && reverseHits > forwardHits + 1 {
+        // 排除回文词（如 was/saw, on/no）导致的误判
+        let palindromeWords: Set<String> = ["was", "saw", "on", "no", "is", "si", "put", "tup",
+                                             "god", "dog", "live", "evil", "part", "trap",
+                                             "net", "ten", "pot", "top", "tap", "pat", "tip", "pit"]
+        let forwardNonPalindrome = words.filter { !palindromeWords.contains($0) && highFrequencyEnglishWords.contains($0) }.count
+        let reverseNonPalindrome = reversedWords.filter { !palindromeWords.contains($0) && highFrequencyEnglishWords.contains($0) }.count
+
+        // 反转后非回文常见词 >= 4 且显著多于正向：判定为反转
+        if reverseNonPalindrome >= 4 && reverseNonPalindrome > forwardNonPalindrome + 2 {
             return true
         }
 
-        // NLLanguageRecognizer 辅助判定
-        if forwardHits == 0 && reverseHits >= 2 {
+        // 严格模式：反转后总命中 >= 5 且正向 <= 1
+        if reverseHits >= 5 && forwardHits <= 1 {
+            return true
+        }
+
+        // NLLanguageRecognizer 辅助判定（仅当正向几乎无英文词时）
+        if forwardHits == 0 && reverseHits >= 3 {
             let forwardConfidence = englishConfidence(for: cleaned)
             let reverseConfidence = englishConfidence(for: reversedText)
-            if reverseConfidence > forwardConfidence + 0.15 {
+            if reverseConfidence > forwardConfidence + 0.2 {
                 return true
             }
         }
@@ -51,12 +63,24 @@ enum TextPipelineValidator {
     }
 
     /// 对文本做反转检测，如果检测到反转则自动修复；否则原样返回
+    /// 修复后会验证修复质量，避免把正常文本搞坏
     static func validateAndRepairIfReversed(_ text: String) -> (text: String, wasRepaired: Bool) {
         guard isLikelyReversedEnglish(text) else {
             return (text, false)
         }
         let repaired = repairReversedText(text)
-        return (repaired, true)
+
+        // 验证修复后质量确实优于原文
+        let originalHits = commonEnglishWordHits(in: text.lowercased().components(separatedBy: .whitespacesAndNewlines))
+        let repairedHits = commonEnglishWordHits(in: repaired.lowercased().components(separatedBy: .whitespacesAndNewlines))
+
+        if repairedHits > originalHits {
+            TextPipelineDiagnostics.log("反转修复", "修复成功: 命中 \(originalHits) → \(repairedHits)", severity: .repaired)
+            return (repaired, true)
+        } else {
+            TextPipelineDiagnostics.log("反转修复", "修复未提升质量(\(originalHits) vs \(repairedHits))，保留原文", severity: .warning)
+            return (text, false)
+        }
     }
 
     // MARK: - 文本质量评估
