@@ -119,8 +119,14 @@ enum DocumentParseService {
         let decoder = JSONDecoder()
         do {
             let result = try decoder.decode(DocumentParseResponse.self, from: data)
+
+            // 记录 schema + quality 信息
+            let sv = result.schemaVersion ?? "v1(legacy)"
+            let qr = result.qualityReason ?? "none"
+            TextPipelineDiagnostics.log("PP", "[PP] parse response schema=\(sv) quality_reason=\(qr) doc=\(documentID)", severity: .info)
+
             if let error = result.error, !result.success {
-                TextPipelineDiagnostics.log("PP", "[PP] parse request server error: \(error)", severity: .error)
+                TextPipelineDiagnostics.log("PP", "[PP] parse request server error: \(error) quality_reason=\(qr)", severity: .error)
                 throw DocumentParseServiceError.serverError(error)
             }
             TextPipelineDiagnostics.log("PP", "[PP] parse request success doc=\(documentID) status=\(result.status?.rawValue ?? "immediate") jobID=\(result.jobID ?? "sync")", severity: .info)

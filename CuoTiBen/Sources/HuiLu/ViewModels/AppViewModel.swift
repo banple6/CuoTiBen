@@ -15,6 +15,7 @@ enum StructuredLoadingStage: String, Equatable {
     case buildingPreview = "buildingPreview" // 远程解析（旧路径）
     case buildingTree   = "buildingTree"    // 本地树构建
     case partialReady   = "partialReady"    // 基础预览可用，结构树仍在加载
+    case aiEnriching    = "aiEnriching"     // AI 教授级分析升级中
     case ready          = "ready"           // 完成
     case failed         = "failed"          // 失败
     case timedOut       = "timedOut"        // 超时
@@ -33,6 +34,7 @@ enum StructuredLoadingStage: String, Equatable {
         case .buildingPreview:  return "正在生成结构预览…"
         case .buildingTree:     return "正在构建结构树…"
         case .partialReady:     return "基础预览已就绪，结构树加载中…"
+        case .aiEnriching:      return "AI 教授级分析升级中…"
         case .ready:            return "加载完成"
         case .failed:           return "加载失败"
         case .timedOut:         return "加载超时"
@@ -52,7 +54,7 @@ enum StructuredLoadingStage: String, Equatable {
 
     /// 是否已有可展示内容
     var hasPreview: Bool {
-        self == .partialReady || self == .ready || self == .buildingTree || self == .fallbackLegacy
+        self == .partialReady || self == .ready || self == .buildingTree || self == .fallbackLegacy || self == .aiEnriching
     }
 
     /// 中文失败回退消息
@@ -97,6 +99,8 @@ struct ParseSessionInfo: Equatable {
     let fallbackUsed: Bool
     let fallbackReason: String?
     let failureClass: FailureClass?
+    let qualityReasonCode: String?
+    let schemaVersion: String?
     let normalizedBlockCount: Int
     let paragraphCount: Int
     let structureCandidateCount: Int
@@ -110,6 +114,7 @@ struct ParseSessionInfo: Equatable {
     var debugSummary: String {
         var parts: [String] = []
         parts.append("来源: \(source.rawValue)")
+        if let sv = schemaVersion { parts.append("Schema: \(sv)") }
         if let url = requestURL { parts.append("URL: \(url)") }
         if let jid = jobID { parts.append("Job: \(jid)") }
         parts.append("PP尝试: \(ppAttempted ? "是" : "否")")
@@ -118,6 +123,7 @@ struct ParseSessionInfo: Equatable {
             parts.append("回退原因: \(reason)")
         }
         if let fc = failureClass { parts.append("失败类: \(fc.rawValue)") }
+        if let qr = qualityReasonCode { parts.append("质量原因: \(qr)") }
         parts.append("块:\(normalizedBlockCount) 段:\(paragraphCount) 候选:\(structureCandidateCount)")
         parts.append("句:\(sentenceCount) 大纲:\(outlineNodeCount) 段落:\(segmentCount)")
         if let d = parseDurationMs { parts.append("耗时: \(d)ms") }
@@ -471,7 +477,7 @@ final class AppViewModel: ObservableObject {
         defer {
             structuredSourceLoadingIDs.remove(document.id)
             let stage = structuredSourceStages[document.id]
-            if stage != .ready && stage != .failed && stage != .timedOut && stage != .fallbackLegacy && stage != .partialReady {
+            if stage != .ready && stage != .failed && stage != .timedOut && stage != .fallbackLegacy && stage != .partialReady && stage != .aiEnriching {
                 TextPipelineDiagnostics.log("PP", "[PP] ⚠️ defer guard: stage=\(stage?.rawValue ?? "nil") 不是终态，强制设为 .failed doc=\(document.id)", severity: .error)
                 structuredSourceStages[document.id] = .failed
             }
@@ -493,6 +499,7 @@ final class AppViewModel: ObservableObject {
                     source: .ppStructureV3, requestURL: nil, jobID: nil,
                     ppAttempted: false, ppSucceeded: false, fallbackUsed: false,
                     fallbackReason: "非英语资料", failureClass: nil,
+                    qualityReasonCode: nil, schemaVersion: nil,
                     normalizedBlockCount: 0, paragraphCount: 0, structureCandidateCount: 0,
                     sentenceCount: 0, outlineNodeCount: 0, segmentCount: 0,
                     parseDurationMs: nil, timestamp: Date()
@@ -515,6 +522,7 @@ final class AppViewModel: ObservableObject {
                     jobID: document.id.uuidString,
                     ppAttempted: true, ppSucceeded: true, fallbackUsed: false,
                     fallbackReason: nil, failureClass: nil,
+                    qualityReasonCode: nil, schemaVersion: ppNormDoc.metadata.parseVersion,
                     normalizedBlockCount: ppNormDoc.blocks.count,
                     paragraphCount: ppNormDoc.paragraphs.count,
                     structureCandidateCount: ppNormDoc.structureCandidates.count,
@@ -528,7 +536,29 @@ final class AppViewModel: ObservableObject {
                 mergeStructuredSourcePayload(ppPayload, into: document)
                 seedWorkbenchProgressIfNeeded(for: document, with: ppPayload.bundle)
                 structuredSourceErrors[document.id] = nil
-                structuredSourceStages[document.id] = .ready
+
+                // ── 阶段3: AI 教授级分析升级（非阻塞：先展示基础结果，后台升级） ──
+                structuredSourceStages[document.id] = .aiEnriching
+                Task { [weak self] in
+                    guard let self else { return }
+                    do {
+                        let enriched = try await ProfessorAnalysisService.enrichBundle(
+                            ppPayload.bundle,
+                            title: document.title
+                        )
+                        await MainActor.run {
+                            self.structuredSources[document.id] = enriched
+                            self.structuredSourceStages[document.id] = .ready
+                            TextPipelineDiagnostics.log("PP", "[PP] AI enrichment complete doc=\(document.id) sentenceCards=\(enriched.professorSentenceCards.count)", severity: .info)
+                        }
+                    } catch {
+                        await MainActor.run {
+                            // AI 升级失败不影响基础结果，静默降级
+                            self.structuredSourceStages[document.id] = .ready
+                            TextPipelineDiagnostics.log("PP", "[PP] AI enrichment failed (non-fatal) doc=\(document.id): \(error.localizedDescription)", severity: .warning)
+                        }
+                    }
+                }
                 return
             }
 
@@ -550,6 +580,7 @@ final class AppViewModel: ObservableObject {
                 requestURL: nil, jobID: nil,
                 ppAttempted: true, ppSucceeded: false, fallbackUsed: true,
                 fallbackReason: ppFailReason, failureClass: classifyPPFailure(ppFailReason),
+                qualityReasonCode: nil, schemaVersion: nil,
                 normalizedBlockCount: 0, paragraphCount: 0, structureCandidateCount: 0,
                 sentenceCount: legacyPayload.bundle.sentences.count,
                 outlineNodeCount: legacyPayload.bundle.source.outlineNodeCount,
@@ -561,6 +592,23 @@ final class AppViewModel: ObservableObject {
             mergeStructuredSourcePayload(legacyPayload, into: document)
             seedWorkbenchProgressIfNeeded(for: document, with: legacyPayload.bundle)
             structuredSourceStages[document.id] = .fallbackLegacy
+
+            // Legacy 路径也尝试 AI 升级
+            Task { [weak self] in
+                guard let self else { return }
+                do {
+                    let enriched = try await ProfessorAnalysisService.enrichBundle(
+                        legacyPayload.bundle,
+                        title: document.title
+                    )
+                    await MainActor.run {
+                        self.structuredSources[document.id] = enriched
+                        TextPipelineDiagnostics.log("PP", "[PP] AI enrichment (legacy) complete doc=\(document.id)", severity: .info)
+                    }
+                } catch {
+                    TextPipelineDiagnostics.log("PP", "[PP] AI enrichment (legacy) failed (non-fatal) doc=\(document.id): \(error.localizedDescription)", severity: .warning)
+                }
+            }
         } catch {
             let errorMessage: String
             if error is TimeoutError {
@@ -575,6 +623,7 @@ final class AppViewModel: ObservableObject {
                 source: .ppStructureV3, requestURL: nil, jobID: nil,
                 ppAttempted: true, ppSucceeded: false, fallbackUsed: false,
                 fallbackReason: errorMessage, failureClass: error is TimeoutError ? .parseTimeout : nil,
+                qualityReasonCode: nil, schemaVersion: nil,
                 normalizedBlockCount: 0, paragraphCount: 0, structureCandidateCount: 0,
                 sentenceCount: 0, outlineNodeCount: 0, segmentCount: 0,
                 parseDurationMs: nil, timestamp: Date()
@@ -768,7 +817,10 @@ final class AppViewModel: ObservableObject {
             return ExplainSentenceContext(
                 title: document.title,
                 sentence: sentence.text,
-                context: sentence.text
+                context: sentence.text,
+                paragraphTheme: "",
+                paragraphRole: "",
+                questionPrompt: ""
             )
         }
 
@@ -778,11 +830,16 @@ final class AppViewModel: ObservableObject {
         }
 
         let context = surrounding.map(\.text).joined(separator: " ")
+        let paragraphCard = bundle.paragraphCard(forSegmentID: sentence.segmentID)
+        let linkedQuestion = bundle.questionLinks.first { $0.supportingSentenceIDs.contains(sentence.id) }?.questionText ?? ""
 
         return ExplainSentenceContext(
             title: document.title,
             sentence: sentence.text,
-            context: context.isEmpty ? segment.text : context
+            context: context.isEmpty ? segment.text : context,
+            paragraphTheme: paragraphCard?.theme ?? "",
+            paragraphRole: paragraphCard?.argumentRole.displayName ?? "",
+            questionPrompt: linkedQuestion
         )
     }
 
@@ -849,7 +906,7 @@ final class AppViewModel: ObservableObject {
         guard let bundle = structuredSource(for: document) else {
             return OutlineNodeDetailSnapshot(
                 id: node.id,
-                levelLabel: levelLabel(for: node.depth),
+                levelLabel: levelLabel(for: node),
                 title: node.title,
                 summary: node.summary,
                 anchorItems: [
@@ -872,13 +929,17 @@ final class AppViewModel: ObservableObject {
 
         return OutlineNodeDetailSnapshot(
             id: node.id,
-            levelLabel: levelLabel(for: node.depth),
+            levelLabel: levelLabel(for: node),
             title: node.title,
             summary: node.summary,
             anchorItems: anchors,
             keySentences: keySentences,
             keywords: keywords
         )
+    }
+
+    func professorSentenceCard(for sentence: Sentence, in document: SourceDocument) -> ProfessorSentenceCard? {
+        structuredSource(for: document)?.sentenceCard(id: sentence.id)
     }
 
     func wordExplanation(
@@ -954,8 +1015,9 @@ final class AppViewModel: ObservableObject {
     ) -> NoteEditorSeed {
         let anchor = sourceAnchor(for: sentence, in: document)
         let suggestedBody = [
-            explanation?.translation,
-            explanation?.mainStructure
+            explanation?.naturalChineseMeaning,
+            explanation?.sentenceCore,
+            explanation?.examRewritePoints.first
         ]
         .compactMap { $0?.nonEmpty }
         .joined(separator: "\n\n")
@@ -968,7 +1030,7 @@ final class AppViewModel: ObservableObject {
                     definition: $0.explanation
                 )
             } ?? [],
-            tags: (explanation?.keyTerms.map(\.term) ?? []) + ["句子讲解"],
+            tags: (explanation?.keyTerms.map(\.term) ?? []) + ["句子讲解", "教授式解析"],
             noteTitle: "句子笔记：\(anchor.anchorLabel)",
             body: suggestedBody,
             quote: sentence.text
@@ -980,7 +1042,7 @@ final class AppViewModel: ObservableObject {
             anchor: anchor,
             suggestedTitle: "句子笔记：\(anchor.anchorLabel)",
             suggestedBody: suggestedBody,
-            suggestedTags: (explanation?.keyTerms.map(\.term) ?? []) + ["句子讲解"],
+            suggestedTags: (explanation?.keyTerms.map(\.term) ?? []) + ["句子讲解", "教授式解析"],
             suggestedKnowledgePoints: suggestedKnowledgePoints
         )
     }
@@ -1252,8 +1314,10 @@ final class AppViewModel: ObservableObject {
         )
 
         let back = [
-            explanation?.translation,
-            explanation?.mainStructure
+            explanation?.naturalChineseMeaning,
+            explanation?.sentenceCore,
+            explanation?.misreadPoints.first.map { "易错点：\($0)" },
+            explanation?.examRewritePoints.first.map { "出题改写：\($0)" }
         ]
         .compactMap { $0?.nonEmpty }
         .joined(separator: "\n\n")
@@ -1338,7 +1402,10 @@ final class AppViewModel: ObservableObject {
         return ExplainSentenceContext(
             title: sourceTitle,
             sentence: sentence,
-            context: context
+            context: context,
+            paragraphTheme: "",
+            paragraphRole: "",
+            questionPrompt: ""
         )
     }
 
@@ -1717,14 +1784,24 @@ final class AppViewModel: ObservableObject {
             }
     }
 
-    private func levelLabel(for depth: Int) -> String {
-        switch max(depth, 0) {
-        case 0:
-            return "一级节点"
-        case 1:
-            return "二级节点"
-        default:
-            return "三级及以下"
+    private func levelLabel(for node: OutlineNode) -> String {
+        switch node.nodeType {
+        case .passageRoot:
+            return "文章主题"
+        case .paragraphTheme:
+            return "段落主旨"
+        case .teachingFocus:
+            return "教学重点"
+        case .supportingSentence:
+            return "支撑句"
+        case .questionLink:
+            return "题目联动"
+        case .vocabularySupport:
+            return "词汇支持"
+        case .metaInstruction:
+            return "讲义说明"
+        case .answerKey:
+            return "答案区"
         }
     }
 

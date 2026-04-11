@@ -15,6 +15,11 @@ def _require_env(key: str) -> str:
     return val
 
 
+# ── 版本信息 ──
+PARSER_VERSION: str = "2026.04.11-1"
+NORMALIZER_VERSION: str = "2026.04.11-wide-extractor"
+SCHEMA_VERSION: str = "v2"
+
 # ── AI Studio ──
 AI_STUDIO_API_URL: str = _require_env("AI_STUDIO_API_URL")
 AI_STUDIO_ACCESS_TOKEN: str = _require_env("AI_STUDIO_ACCESS_TOKEN")

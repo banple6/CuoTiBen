@@ -99,6 +99,7 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
 
         isLoadingAnalysis = true
         analysisError = nil
+        let currentDocument = document
 
         let task = Task { @MainActor [weak self] in
             defer {
@@ -110,7 +111,7 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
 
             do {
                 try Task.checkCancellation()
-                let context = appViewModel.explainSentenceContext(for: sentence, in: document)
+                let context = appViewModel.explainSentenceContext(for: sentence, in: currentDocument)
 
                 // 30 秒超时
                 let result = try await withThrowingTaskGroup(of: AIExplainSentenceResult.self) { group in

@@ -24,6 +24,7 @@ class NormalizedBlock(BaseModel):
     order: int
     bbox: BoundingBox
     block_type: str               # NormalizedBlockType rawValue
+    zone_role: str = "unknown"    # "passage" / "question" / "answer_key" / "vocabulary_support" / "meta_instruction" / "unknown"
     sub_type: Optional[str] = None
     text: str
     language: str                  # "en" / "zh" / "mixed" / "unknown"
@@ -51,6 +52,7 @@ class NormalizedParagraph(BaseModel):
     end_page: int = 1
     text: str = ""
     language: str = "unknown"
+    zone_role: str = "unknown"
     cross_page: bool = False
     order: int = 0
 
@@ -99,8 +101,10 @@ class NormalizedDocument(BaseModel):
 # ── API 响应 ──
 
 class DocumentParseResponse(BaseModel):
+    schema_version: str = "v2"
     success: bool
     job_id: Optional[str] = None
     status: Optional[str] = None   # ParseJobStatus rawValue
     document: Optional[NormalizedDocument] = None
     error: Optional[str] = None
+    quality_reason: Optional[str] = None  # 机器可读的质量拒绝原因码

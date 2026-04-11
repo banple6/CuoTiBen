@@ -117,6 +117,7 @@
 		B0000000000000000000006C /* NormalizedDocumentModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000006C /* NormalizedDocumentModels.swift */; };
 		B0000000000000000000006D /* DocumentParseService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000006D /* DocumentParseService.swift */; };
 		B0000000000000000000006E /* NormalizedDocumentConverter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000006E /* NormalizedDocumentConverter.swift */; };
+		B0000000000000000000006F /* ProfessorAnalysisService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000006F /* ProfessorAnalysisService.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -231,6 +232,7 @@
 		C0000000000000000000006D /* DocumentParseService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentParseService.swift; sourceTree = "<group>"; };
 		C0000000000000000000006E /* NormalizedDocumentConverter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NormalizedDocumentConverter.swift; sourceTree = "<group>"; };
 		C00000000000000000000069 /* TextPipelineDiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextPipelineDiagnosticsView.swift; sourceTree = "<group>"; };
+		C0000000000000000000006F /* ProfessorAnalysisService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfessorAnalysisService.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -346,6 +348,7 @@
 				C0000000000000000000006B /* BlockContentClassifier.swift */,
 				C0000000000000000000006D /* DocumentParseService.swift */,
 				C0000000000000000000006E /* NormalizedDocumentConverter.swift */,
+				C0000000000000000000006F /* ProfessorAnalysisService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -719,6 +722,7 @@
 				B0000000000000000000006C /* NormalizedDocumentModels.swift in Sources */,
 				B0000000000000000000006D /* DocumentParseService.swift in Sources */,
 				B0000000000000000000006E /* NormalizedDocumentConverter.swift in Sources */,
+				B0000000000000000000006F /* ProfessorAnalysisService.swift in Sources */,
 				B00000000000000000000069 /* TextPipelineDiagnosticsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

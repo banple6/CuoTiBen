@@ -3,6 +3,9 @@ import { AppError } from "../lib/appError.js";
 const MAX_TITLE_LENGTH = 300;
 const MAX_SENTENCE_LENGTH = 2000;
 const MAX_CONTEXT_LENGTH = 12000;
+const MAX_PARAGRAPH_THEME_LENGTH = 800;
+const MAX_PARAGRAPH_ROLE_LENGTH = 120;
+const MAX_QUESTION_PROMPT_LENGTH = 1200;
 
 function ensureObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -42,6 +45,9 @@ export function validateExplainSentenceRequest(body) {
   const title = normalizeOptionalString(body.title, "title", MAX_TITLE_LENGTH);
   const sentence = normalizeOptionalString(body.sentence, "sentence", MAX_SENTENCE_LENGTH);
   const context = normalizeOptionalString(body.context, "context", MAX_CONTEXT_LENGTH);
+  const paragraphTheme = normalizeOptionalString(body.paragraph_theme, "paragraph_theme", MAX_PARAGRAPH_THEME_LENGTH);
+  const paragraphRole = normalizeOptionalString(body.paragraph_role, "paragraph_role", MAX_PARAGRAPH_ROLE_LENGTH);
+  const questionPrompt = normalizeOptionalString(body.question_prompt, "question_prompt", MAX_QUESTION_PROMPT_LENGTH);
 
   if (!sentence) {
     throw new AppError("sentence 不能为空。", {
@@ -53,6 +59,9 @@ export function validateExplainSentenceRequest(body) {
   return {
     title,
     sentence,
-    context
+    context,
+    paragraph_theme: paragraphTheme,
+    paragraph_role: paragraphRole,
+    question_prompt: questionPrompt
   };
 }

@@ -319,14 +319,7 @@ private struct OutlineTreeNodeRow: View {
     }
 
     private var levelLabel: String {
-        switch normalizedDepth {
-        case 0:
-            return "一级节点"
-        case 1:
-            return "二级节点"
-        default:
-            return "子节点"
-        }
+        node.nodeType.displayName
     }
 
     private var levelLabelColor: Color {

@@ -339,11 +339,11 @@ private struct ArchivistLibrarySideRail: View {
     let onImport: () -> Void
 
     private let items: [(String, String, Bool)] = [
-        ("Notebooks", "book_5", false),
-        ("Library", "inventory_2", true),
-        ("Research", "analytics", false),
+        ("Notebooks", "books.vertical", false),
+        ("Library", "archivebox", true),
+        ("Research", "chart.bar", false),
         ("Favorites", "star", false),
-        ("Trash", "delete", false)
+        ("Trash", "trash", false)
     ]
 
     var body: some View {

@@ -71,6 +71,7 @@ struct NormalizedBlock: Codable, Equatable, Sendable, Identifiable {
     let order: Int
     let bbox: BoundingBox
     let blockType: NormalizedBlockType
+    let zoneRole: DocumentZoneRole
     let subType: String?
     let text: String
     let language: BlockLanguage
@@ -82,6 +83,7 @@ struct NormalizedBlock: Codable, Equatable, Sendable, Identifiable {
     private enum CodingKeys: String, CodingKey {
         case id, page, order, bbox
         case blockType = "block_type"
+        case zoneRole = "zone_role"
         case subType = "sub_type"
         case text, language, confidence
         case paragraphStart = "paragraph_start"
@@ -91,12 +93,13 @@ struct NormalizedBlock: Codable, Equatable, Sendable, Identifiable {
 
     /// 是否适合进入结构树
     var isTreeNodeEligible: Bool {
+        guard zoneRole == .passage else { return false }
         switch blockType {
-        case .title, .heading, .subheading, .englishBody,
-             .questionStem, .optionList, .glossary:
+        case .title, .heading, .subheading, .englishBody:
             return confidence >= 0.35
-        case .chineseExplanation, .bilingualNote:
-            return confidence >= 0.5
+        case .questionStem, .optionList, .glossary,
+             .chineseExplanation, .bilingualNote:
+            return false
         case .pageHeader, .pageFooter, .reference, .noise:
             return false
         }
@@ -104,6 +107,7 @@ struct NormalizedBlock: Codable, Equatable, Sendable, Identifiable {
 
     /// 是否为英语主体内容
     var isEnglishPrimary: Bool {
+        guard zoneRole == .passage else { return false }
         switch blockType {
         case .title, .heading, .subheading, .englishBody:
             return language == .english || language == .mixed
@@ -158,6 +162,26 @@ enum BlockLanguage: String, Codable, Sendable {
     case unknown = "unknown"
 }
 
+enum DocumentZoneRole: String, Codable, Sendable, CaseIterable {
+    case passage = "passage"
+    case metaInstruction = "meta_instruction"
+    case question = "question"
+    case answerKey = "answer_key"
+    case vocabularySupport = "vocabulary_support"
+    case unknown = "unknown"
+
+    var displayName: String {
+        switch self {
+        case .passage: return "正文"
+        case .metaInstruction: return "讲义说明"
+        case .question: return "题目区"
+        case .answerKey: return "答案区"
+        case .vocabularySupport: return "词汇支持"
+        case .unknown: return "未归类"
+        }
+    }
+}
+
 // MARK: - 边界框
 
 struct BoundingBox: Codable, Equatable, Sendable {
@@ -180,6 +204,7 @@ struct NormalizedParagraph: Codable, Equatable, Sendable, Identifiable {
     let endPage: Int                // 结束页
     let text: String                // 合并后的文本
     let language: BlockLanguage
+    let zoneRole: DocumentZoneRole
     let crossPage: Bool             // 是否跨页
     let order: Int                  // 阅读顺序
 
@@ -189,8 +214,13 @@ struct NormalizedParagraph: Codable, Equatable, Sendable, Identifiable {
         case page
         case endPage = "end_page"
         case text, language
+        case zoneRole = "zone_role"
         case crossPage = "cross_page"
         case order
+    }
+
+    var isPassageParagraph: Bool {
+        zoneRole == .passage
     }
 }
 
@@ -228,16 +258,20 @@ struct StructureCandidate: Codable, Equatable, Sendable, Identifiable {
 // MARK: - 后端 API 响应封装
 
 struct DocumentParseResponse: Codable, Sendable {
+    let schemaVersion: String?
     let success: Bool
     let jobID: String?
     let status: ParseJobStatus?
     let document: NormalizedDocument?
     let error: String?
+    let qualityReason: String?
 
     private enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
         case success
         case jobID = "job_id"
         case status, document, error
+        case qualityReason = "quality_reason"
     }
 }
 

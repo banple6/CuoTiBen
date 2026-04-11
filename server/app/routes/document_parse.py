@@ -25,6 +25,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+# ── 质量拒绝原因码 ──
+class QualityReason:
+    EMPTY_RAW_RESULT = "pp_empty_raw_result"
+    EMPTY_NORMALIZED_BLOCKS = "pp_empty_normalized_blocks"
+    EMPTY_PARAGRAPHS = "pp_empty_paragraphs"
+    EMPTY_CANDIDATES = "pp_empty_candidates"
+    RESPONSE_SHAPE_UNRECOGNIZED = "pp_response_shape_unrecognized"
+
+
 @router.post(
     "/api/document/parse",
     response_model=DocumentParseResponse,
@@ -55,8 +64,10 @@ async def parse_document(
     file_name = file.filename or "upload.pdf"
 
     logger.info(
-        "收到解析请求  doc_id=%s  title=%s  size=%dKB  file_type=%s",
+        "[PP-REQ] 收到解析请求  doc_id=%s  title=%s  size=%dKB  file_type=%s  "
+        "normalizer=%s  schema=%s",
         doc_id, doc_title, len(file_bytes) // 1024, file_type,
+        config.NORMALIZER_VERSION, config.SCHEMA_VERSION,
     )
 
     t0 = time.monotonic()
@@ -64,6 +75,24 @@ async def parse_document(
     try:
         # 1) 调用 AI Studio
         raw_result = await call_pp_structure_v3(file_bytes, file_name)
+
+        # 诊断: raw 结果是否为空
+        raw_top_keys = list(raw_result.keys()) if isinstance(raw_result, dict) else []
+        if not raw_top_keys:
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            logger.warning(
+                "[PP-REQ] RESULT doc_id=%s  quality_reason=%s  elapsed=%dms",
+                doc_id, QualityReason.EMPTY_RAW_RESULT, elapsed_ms,
+            )
+            return DocumentParseResponse(
+                schema_version=config.SCHEMA_VERSION,
+                success=False,
+                job_id=doc_id,
+                status="failed",
+                document=None,
+                error="AI Studio 返回空结果",
+                quality_reason=QualityReason.EMPTY_RAW_RESULT,
+            )
 
         # 2) 归一化
         document = normalize(
@@ -74,53 +103,98 @@ async def parse_document(
         )
 
         elapsed_ms = int((time.monotonic() - t0) * 1000)
+
+        # 结构化请求摘要日志
         logger.info(
-            "解析完成  doc_id=%s  blocks=%d  paragraphs=%d  candidates=%d  总耗时=%dms",
-            doc_id, len(document.blocks), len(document.paragraphs),
-            len(document.structure_candidates), elapsed_ms,
+            "[PP-REQ] RESULT doc_id=%s  blocks=%d  paragraphs=%d  candidates=%d  "
+            "pages=%d  dominant_lang=%s  english_ratio=%.2f  elapsed=%dms  "
+            "normalizer=%s  schema=%s",
+            doc_id,
+            len(document.blocks),
+            len(document.paragraphs),
+            len(document.structure_candidates),
+            len(document.pages),
+            document.metadata.dominant_language,
+            document.metadata.english_ratio,
+            elapsed_ms,
+            config.NORMALIZER_VERSION,
+            config.SCHEMA_VERSION,
         )
 
-        # ── 防护: raw 存在但归一化产生 0 blocks ──
+        # ── 质量检查链 ──
+        quality_reason = None
+
         if len(document.blocks) == 0:
+            quality_reason = QualityReason.EMPTY_NORMALIZED_BLOCKS
             logger.warning(
-                "⚠️ 归一化产生 0 blocks — AI Studio 返回可能格式不匹配  "
-                "doc_id=%s  raw_keys=%s",
-                doc_id,
-                list(raw_result.keys()) if isinstance(raw_result, dict) else type(raw_result).__name__,
+                "[PP-REQ] QUALITY_REJECTED doc_id=%s  reason=%s  raw_keys=%s  elapsed=%dms",
+                doc_id, quality_reason, raw_top_keys, elapsed_ms,
             )
             return DocumentParseResponse(
+                schema_version=config.SCHEMA_VERSION,
                 success=False,
                 job_id=doc_id,
                 status="failed",
                 document=document,
-                error=f"归一化结果异常: blocks=0 (AI Studio 原始响应 keys={list(raw_result.keys()) if isinstance(raw_result, dict) else 'N/A'})",
+                error=f"归一化结果异常: blocks=0 (raw_keys={raw_top_keys})",
+                quality_reason=quality_reason,
+            )
+
+        if len(document.paragraphs) == 0:
+            quality_reason = QualityReason.EMPTY_PARAGRAPHS
+            logger.warning(
+                "[PP-REQ] QUALITY_WARNING doc_id=%s  reason=%s  blocks=%d",
+                doc_id, quality_reason, len(document.blocks),
+            )
+
+        if len(document.structure_candidates) == 0:
+            if quality_reason is None:
+                quality_reason = QualityReason.EMPTY_CANDIDATES
+            logger.warning(
+                "[PP-REQ] QUALITY_WARNING doc_id=%s  reason=%s  blocks=%d  paragraphs=%d",
+                doc_id, quality_reason or QualityReason.EMPTY_CANDIDATES,
+                len(document.blocks), len(document.paragraphs),
             )
 
         return DocumentParseResponse(
+            schema_version=config.SCHEMA_VERSION,
             success=True,
             job_id=doc_id,
             status="completed",
             document=document,
             error=None,
+            quality_reason=quality_reason,
         )
 
     except AIStudioError as e:
-        logger.error("AI Studio 调用失败: %s", e)
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+        logger.error(
+            "[PP-REQ] AI_STUDIO_ERROR doc_id=%s  error=%s  elapsed=%dms",
+            doc_id, e, elapsed_ms,
+        )
         return DocumentParseResponse(
+            schema_version=config.SCHEMA_VERSION,
             success=False,
             job_id=doc_id,
             status="failed",
             document=None,
             error=f"AI Studio 错误: {e}",
+            quality_reason=None,
         )
     except Exception as e:
-        logger.exception("解析异常: %s", e)
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+        logger.exception(
+            "[PP-REQ] SERVER_ERROR doc_id=%s  error=%s  elapsed=%dms",
+            doc_id, e, elapsed_ms,
+        )
         return DocumentParseResponse(
+            schema_version=config.SCHEMA_VERSION,
             success=False,
             job_id=doc_id,
             status="failed",
             document=None,
             error=f"服务器内部错误: {type(e).__name__}",
+            quality_reason=None,
         )
 
 
@@ -135,6 +209,7 @@ async def get_parse_status(job_id: str):
     预留给将来的异步队列模式。
     """
     return DocumentParseResponse(
+        schema_version=config.SCHEMA_VERSION,
         success=False,
         job_id=job_id,
         status="completed",

@@ -20,6 +20,7 @@
 - 最新一轮完成了 **PencilKit 手写墨迹底层稳定化 + 自由画布文本对象系统 + 完整手写工具面板**
 - 文本对象系统已进一步收口到 **Canvas object shell + UITextView input core + transient frame / commit on end** 的稳定交互架构
 - 最新一轮已吸收 **Saber 的移动端画布组织** 与 **Xournal++ 的专业画布内核**，把笔记页进一步收口到 **Paper / Ink / Object / Overlay** 分层与 **Selection / Viewport / Tool / History** 四控制器结构
+- 英语解析链路已开始切到 **Professor Mode 教授式教学分析**，不再只做浅层摘要
 - 文本解析链路已新增 **质量诊断日志 + OCR 方向校正 + 反转英文自动修复**
 - `PP-StructureV3` 主链路已新增 **请求级日志 + 失败分类 + 可见回退 Debug 徽标**
 
@@ -69,6 +70,7 @@
 - `Services/`
   - 当前聚合了导入、OCR、AI 解析、句子讲解、笔记仓储、知识点提取、文本管线诊断等核心能力。
   - 新增 `DocumentParseService.swift`、`NormalizedDocumentConverter.swift`、`LayoutBlockGrouper.swift`、`BlockContentClassifier.swift`，用于承接 PP-StructureV3 网关返回的归一化文档，并回落到现有 `StructuredSourceBundle`。
+  - 新增 `ProfessorAnalysisService.swift`，用于把结构化后的 passage 进一步扩展成文章总览、段落教学卡、教授式句子卡与题目证据联动。
   - `TextPipelineValidator.swift` 继续负责反转文本检测、质量评估和诊断日志。
 - `Models/`
   - 除原有 `Source / Segment / Sentence / OutlineNode` 外，已新增 `NormalizedDocumentModels.swift` 用于接收后端归一化文档。
@@ -117,10 +119,12 @@
   - 单词讲解
   - 资料复盘工作台
   - 本地笔记 MVP
+  - 教授式全文教学分析（文章总览 / 段落教学卡 / 教授式句子卡 / 题目证据联动）
 - 后端最小可用版本已搭建：
   - Node / Express 后端：
     - `GET /health`
     - `POST /ai/explain-sentence`
+    - `POST /ai/analyze-passage`
     - `POST /ai/parse-source`
   - FastAPI 解析网关：
     - `GET /health`
@@ -206,11 +210,17 @@
 
 - `POST /ai/explain-sentence` 已接入阿里云百炼 OpenAI 兼容接口。
 - 句子讲解页已具备：
-  - 中文翻译
-  - 主干结构
-  - 语法点
-  - 关键词
-  - 改写示例
+  - 原句
+  - 自然中文义
+  - 句子主干
+  - 语块切分
+  - 关键语法点
+  - 词汇在句中义
+  - 常见误读点
+  - 出题改写点
+  - 更简单的英文改写
+  - 微型练习
+  - 长难句的层级重组与句法替换版
   - 来源面包屑
   - 上一句 / 下一句
   - 查看原文上下文
@@ -231,6 +241,51 @@
   - 常见搭配
   - 例句
   - 加入词汇卡 / 加入笔记
+
+### 4.1 教授式全文教学分析 (2026-04-11)
+
+**核心目标**: 把导入资料从“结构化摘要”升级为“教授式讲解”，重点服务英语精读、句法教学和阅读理解出题逻辑。
+
+#### 文档分区
+- 先把导入内容区分为：
+  - `passage`
+  - `question`
+  - `answer_key`
+  - `vocabulary_support`
+  - `meta_instruction`
+- 只有 `passage` 会进入主阅读树，题目、答案、词汇和中文说明不再污染正文结构树。
+
+#### 教学输出
+- `StructuredSourceBundle` 已新增：
+  - `PassageProfessorAnalysis`
+  - `ParagraphTeachingCard`
+  - `ProfessorSentenceCard`
+  - `QuestionEvidenceLink`
+- 全文分析会输出：
+  - 文章主题
+  - 作者核心问题意识
+  - 行文推进路径
+  - 各段功能图
+  - 句法学习重点
+  - 阅读陷阱
+  - 词汇/搭配学习点
+
+#### UI 展示
+- `SourceDetailView` 已新增“教授式解析”视图：
+  - 文章总览
+  - 段落教学卡
+  - 教授式句子卡
+  - 题目证据联动
+- 结构树节点类型已升级为：
+  - `passage_root`
+  - `paragraph_theme`
+  - `teaching_focus`
+  - `supporting_sentence`
+  - `question_link`
+  - `vocabulary_support`
+  - `meta_instruction`
+  - `answer_key`
+- 主树只显示正文教学节点，其余节点转去教授式解析面板。
 
 ### 5. 资料复盘工作台
 

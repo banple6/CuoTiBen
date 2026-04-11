@@ -30,14 +30,40 @@ def build_structure_candidates(
     然后将标题之间的段落归入 section candidate。
     """
     candidates: list[StructureCandidate] = []
-    para_map: dict[str, NormalizedParagraph] = {p.id: p for p in paragraphs}
+    passage_paragraphs = [p for p in paragraphs if p.zone_role == "passage"]
+    para_map: dict[str, NormalizedParagraph] = {p.id: p for p in passage_paragraphs}
     # block_id → paragraph_id
     blk_to_para: dict[str, str] = {}
-    for p in paragraphs:
+    for p in passage_paragraphs:
         for bid in p.block_ids:
             blk_to_para[bid] = p.id
 
-    heading_blocks = [(i, b) for i, b in enumerate(blocks) if b.block_type in _HEADING_TYPES]
+    passage_blocks = [
+        (i, b)
+        for i, b in enumerate(blocks)
+        if b.zone_role == "passage" and b.block_type not in {"noise", "page_header", "page_footer", "reference"}
+    ]
+    heading_blocks = [(i, b) for i, b in passage_blocks if b.block_type in _HEADING_TYPES]
+
+    if not heading_blocks and passage_paragraphs:
+        paragraph_ids = [p.id for p in passage_paragraphs]
+        block_ids = [bid for p in passage_paragraphs for bid in p.block_ids]
+        summary_text = " ".join(p.text for p in passage_paragraphs)[:300] or None
+        title = (passage_paragraphs[0].text or "Passage").strip()[:80]
+        return [
+            StructureCandidate(
+                id=f"sc-{uuid.uuid4().hex[:12]}",
+                parent_id=None,
+                depth=0,
+                order=0,
+                title=title,
+                summary=summary_text,
+                block_ids=block_ids,
+                paragraph_ids=paragraph_ids,
+                confidence=0.55,
+                candidate_type="section",
+            )
+        ]
 
     order = 0
     parent_stack: list[str] = []  # (candidate_id) 栈，按 depth
@@ -78,7 +104,7 @@ def build_structure_candidates(
 
         for bi in range(blk_idx + 1, next_blk_idx):
             b = blocks[bi]
-            if b.block_type in ("noise", "page_header", "page_footer"):
+            if b.zone_role != "passage" or b.block_type in ("noise", "page_header", "page_footer", "reference"):
                 continue
             section_block_ids.append(b.id)
             section_text_parts.append(b.text)

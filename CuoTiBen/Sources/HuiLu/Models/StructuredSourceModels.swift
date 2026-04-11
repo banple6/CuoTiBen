@@ -252,6 +252,226 @@ struct Sentence: Identifiable, Codable, Equatable, Hashable {
     }
 }
 
+enum PedagogicalNodeType: String, Codable, CaseIterable, Hashable {
+    case passageRoot = "passage_root"
+    case paragraphTheme = "paragraph_theme"
+    case teachingFocus = "teaching_focus"
+    case supportingSentence = "supporting_sentence"
+    case questionLink = "question_link"
+    case vocabularySupport = "vocabulary_support"
+    case metaInstruction = "meta_instruction"
+    case answerKey = "answer_key"
+
+    var displayName: String {
+        switch self {
+        case .passageRoot: return "文章主题"
+        case .paragraphTheme: return "段落主旨"
+        case .teachingFocus: return "教学重点"
+        case .supportingSentence: return "支撑句"
+        case .questionLink: return "题目联动"
+        case .vocabularySupport: return "词汇支持"
+        case .metaInstruction: return "讲义说明"
+        case .answerKey: return "答案区"
+        }
+    }
+}
+
+enum ParagraphArgumentRole: String, Codable, CaseIterable, Hashable {
+    case background = "background"
+    case support = "support"
+    case objection = "objection"
+    case transition = "transition"
+    case evidence = "evidence"
+    case conclusion = "conclusion"
+
+    var displayName: String {
+        switch self {
+        case .background: return "背景铺垫"
+        case .support: return "观点支撑"
+        case .objection: return "转折/异议"
+        case .transition: return "承接推进"
+        case .evidence: return "举例论据"
+        case .conclusion: return "结论收束"
+        }
+    }
+}
+
+struct ProfessorGrammarPoint: Codable, Equatable, Hashable {
+    let name: String
+    let explanation: String
+}
+
+struct ProfessorVocabularyItem: Codable, Equatable, Hashable {
+    let term: String
+    let meaning: String
+}
+
+struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
+    let originalSentence: String
+    let naturalChineseMeaning: String
+    let sentenceCore: String
+    let chunkBreakdown: [String]
+    let grammarPoints: [ProfessorGrammarPoint]
+    let vocabularyInContext: [ProfessorVocabularyItem]
+    let misreadPoints: [String]
+    let examRewritePoints: [String]
+    let simplifiedEnglish: String
+    let miniExercise: String?
+    let hierarchyRebuild: [String]
+    let syntacticVariation: String?
+    let evidenceType: String?
+    let isAIGenerated: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case originalSentence = "original_sentence"
+        case naturalChineseMeaning = "natural_chinese_meaning"
+        case sentenceCore = "sentence_core"
+        case chunkBreakdown = "chunk_breakdown"
+        case grammarPoints = "grammar_points"
+        case vocabularyInContext = "vocabulary_in_context"
+        case misreadPoints = "misread_points"
+        case examRewritePoints = "exam_rewrite_points"
+        case simplifiedEnglish = "simplified_english"
+        case miniExercise = "mini_exercise"
+        case hierarchyRebuild = "hierarchy_rebuild"
+        case syntacticVariation = "syntactic_variation"
+        case evidenceType = "evidence_type"
+        case isAIGenerated = "is_ai_generated"
+    }
+
+    init(
+        originalSentence: String,
+        naturalChineseMeaning: String,
+        sentenceCore: String,
+        chunkBreakdown: [String],
+        grammarPoints: [ProfessorGrammarPoint],
+        vocabularyInContext: [ProfessorVocabularyItem],
+        misreadPoints: [String],
+        examRewritePoints: [String],
+        simplifiedEnglish: String,
+        miniExercise: String?,
+        hierarchyRebuild: [String],
+        syntacticVariation: String?,
+        evidenceType: String? = nil,
+        isAIGenerated: Bool = false
+    ) {
+        self.originalSentence = originalSentence
+        self.naturalChineseMeaning = naturalChineseMeaning
+        self.sentenceCore = sentenceCore
+        self.chunkBreakdown = chunkBreakdown
+        self.grammarPoints = grammarPoints
+        self.vocabularyInContext = vocabularyInContext
+        self.misreadPoints = misreadPoints
+        self.examRewritePoints = examRewritePoints
+        self.simplifiedEnglish = simplifiedEnglish
+        self.miniExercise = miniExercise
+        self.hierarchyRebuild = hierarchyRebuild
+        self.syntacticVariation = syntacticVariation
+        self.evidenceType = evidenceType
+        self.isAIGenerated = isAIGenerated
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        originalSentence = try container.decode(String.self, forKey: .originalSentence)
+        naturalChineseMeaning = try container.decode(String.self, forKey: .naturalChineseMeaning)
+        sentenceCore = try container.decode(String.self, forKey: .sentenceCore)
+        chunkBreakdown = try container.decode([String].self, forKey: .chunkBreakdown)
+        grammarPoints = try container.decode([ProfessorGrammarPoint].self, forKey: .grammarPoints)
+        vocabularyInContext = try container.decode([ProfessorVocabularyItem].self, forKey: .vocabularyInContext)
+        misreadPoints = try container.decode([String].self, forKey: .misreadPoints)
+        examRewritePoints = try container.decode([String].self, forKey: .examRewritePoints)
+        simplifiedEnglish = try container.decode(String.self, forKey: .simplifiedEnglish)
+        miniExercise = try container.decodeIfPresent(String.self, forKey: .miniExercise)
+        hierarchyRebuild = try container.decode([String].self, forKey: .hierarchyRebuild)
+        syntacticVariation = try container.decodeIfPresent(String.self, forKey: .syntacticVariation)
+        evidenceType = try container.decodeIfPresent(String.self, forKey: .evidenceType)
+        isAIGenerated = try container.decodeIfPresent(Bool.self, forKey: .isAIGenerated) ?? false
+    }
+}
+
+struct ProfessorSentenceCard: Identifiable, Equatable, Hashable {
+    let id: String
+    let sentenceID: String
+    let segmentID: String
+    let isKeySentence: Bool
+    let analysis: ProfessorSentenceAnalysis
+}
+
+struct ParagraphTeachingCard: Identifiable, Equatable, Hashable {
+    let id: String
+    let segmentID: String
+    let paragraphIndex: Int
+    let anchorLabel: String
+    let theme: String
+    let argumentRole: ParagraphArgumentRole
+    let coreSentenceID: String?
+    let keywords: [String]
+    let relationToPrevious: String
+    let examValue: String
+    let teachingFocuses: [String]
+    let studentBlindSpot: String?
+    let isAIGenerated: Bool
+
+    init(
+        id: String,
+        segmentID: String,
+        paragraphIndex: Int,
+        anchorLabel: String,
+        theme: String,
+        argumentRole: ParagraphArgumentRole,
+        coreSentenceID: String?,
+        keywords: [String],
+        relationToPrevious: String,
+        examValue: String,
+        teachingFocuses: [String],
+        studentBlindSpot: String? = nil,
+        isAIGenerated: Bool = false
+    ) {
+        self.id = id
+        self.segmentID = segmentID
+        self.paragraphIndex = paragraphIndex
+        self.anchorLabel = anchorLabel
+        self.theme = theme
+        self.argumentRole = argumentRole
+        self.coreSentenceID = coreSentenceID
+        self.keywords = keywords
+        self.relationToPrevious = relationToPrevious
+        self.examValue = examValue
+        self.teachingFocuses = teachingFocuses
+        self.studentBlindSpot = studentBlindSpot
+        self.isAIGenerated = isAIGenerated
+    }
+}
+
+struct QuestionEvidenceLink: Identifiable, Equatable, Hashable {
+    let id: String
+    let questionText: String
+    let supportParagraphIDs: [String]
+    let supportingSentenceIDs: [String]
+    let paraphraseEvidence: [String]
+    let trapType: String
+    let answerKeySnippet: String?
+}
+
+struct PassageOverview: Equatable, Hashable {
+    let articleTheme: String
+    let authorCoreQuestion: String
+    let progressionPath: String
+    let paragraphFunctionMap: [String]
+    let syntaxHighlights: [String]
+    let readingTraps: [String]
+    let vocabularyHighlights: [String]
+}
+
+struct DocumentZoningSummary: Equatable, Hashable {
+    let passageParagraphCount: Int
+    let questionParagraphCount: Int
+    let answerKeyParagraphCount: Int
+    let vocabularyParagraphCount: Int
+    let metaInstructionParagraphCount: Int
+}
+
 struct OutlineAnchor: Codable, Equatable, Hashable {
     let segmentID: String?
     let sentenceID: String?
@@ -272,6 +492,7 @@ struct OutlineNode: Identifiable, Codable, Equatable, Hashable {
     let parentID: String?
     let depth: Int
     let order: Int
+    let nodeType: PedagogicalNodeType
     let title: String
     let summary: String
     let anchor: OutlineAnchor
@@ -285,6 +506,7 @@ struct OutlineNode: Identifiable, Codable, Equatable, Hashable {
         case parentID = "parent_id"
         case depth
         case order
+        case nodeType = "node_type"
         case title
         case summary
         case anchor
@@ -299,6 +521,7 @@ struct OutlineNode: Identifiable, Codable, Equatable, Hashable {
         parentID: String?,
         depth: Int,
         order: Int,
+        nodeType: PedagogicalNodeType = .teachingFocus,
         title: String,
         summary: String,
         anchor: OutlineAnchor,
@@ -311,6 +534,7 @@ struct OutlineNode: Identifiable, Codable, Equatable, Hashable {
         self.parentID = parentID
         self.depth = depth
         self.order = order
+        self.nodeType = nodeType
         self.title = title
         self.summary = summary
         self.anchor = anchor
@@ -326,6 +550,7 @@ struct OutlineNode: Identifiable, Codable, Equatable, Hashable {
         parentID = try container.decodeIfPresent(String.self, forKey: .parentID)
         depth = try container.decode(Int.self, forKey: .depth)
         order = try container.decode(Int.self, forKey: .order)
+        nodeType = try container.decodeIfPresent(PedagogicalNodeType.self, forKey: .nodeType) ?? .teachingFocus
         title = try container.decode(String.self, forKey: .title)
         summary = try container.decode(String.self, forKey: .summary)
         anchor = try container.decode(OutlineAnchor.self, forKey: .anchor)
@@ -348,27 +573,62 @@ struct StructuredSourceBundle: Equatable {
     let segments: [Segment]
     let sentences: [Sentence]
     let outline: [OutlineNode]
+    let passageOverview: PassageOverview?
+    let paragraphTeachingCards: [ParagraphTeachingCard]
+    let professorSentenceCards: [ProfessorSentenceCard]
+    let questionLinks: [QuestionEvidenceLink]
+    let zoningSummary: DocumentZoningSummary
 
     // 缓存索引（惰性构建，一次性）
     private let _cachedFlatNodes: [OutlineNode]
     private let _sentenceIndex: [String: Sentence]
     private let _segmentIndex: [String: Segment]
+    private let _sentenceCardIndex: [String: ProfessorSentenceCard]
+    private let _paragraphCardIndex: [String: ParagraphTeachingCard]
 
     static func == (lhs: StructuredSourceBundle, rhs: StructuredSourceBundle) -> Bool {
         lhs.source == rhs.source &&
         lhs.segments == rhs.segments &&
         lhs.sentences == rhs.sentences &&
-        lhs.outline == rhs.outline
+        lhs.outline == rhs.outline &&
+        lhs.passageOverview == rhs.passageOverview &&
+        lhs.paragraphTeachingCards == rhs.paragraphTeachingCards &&
+        lhs.professorSentenceCards == rhs.professorSentenceCards &&
+        lhs.questionLinks == rhs.questionLinks &&
+        lhs.zoningSummary == rhs.zoningSummary
     }
 
-    init(source: Source, segments: [Segment], sentences: [Sentence], outline: [OutlineNode]) {
+    init(
+        source: Source,
+        segments: [Segment],
+        sentences: [Sentence],
+        outline: [OutlineNode],
+        passageOverview: PassageOverview? = nil,
+        paragraphTeachingCards: [ParagraphTeachingCard] = [],
+        professorSentenceCards: [ProfessorSentenceCard] = [],
+        questionLinks: [QuestionEvidenceLink] = [],
+        zoningSummary: DocumentZoningSummary = DocumentZoningSummary(
+            passageParagraphCount: 0,
+            questionParagraphCount: 0,
+            answerKeyParagraphCount: 0,
+            vocabularyParagraphCount: 0,
+            metaInstructionParagraphCount: 0
+        )
+    ) {
         self.source = source
         self.segments = segments
         self.sentences = sentences
         self.outline = outline
+        self.passageOverview = passageOverview
+        self.paragraphTeachingCards = paragraphTeachingCards
+        self.professorSentenceCards = professorSentenceCards
+        self.questionLinks = questionLinks
+        self.zoningSummary = zoningSummary
         self._cachedFlatNodes = Self.flattenSafe(nodes: outline, maxDepth: 20)
         self._sentenceIndex = Dictionary(sentences.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         self._segmentIndex = Dictionary(segments.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        self._sentenceCardIndex = Dictionary(professorSentenceCards.map { ($0.sentenceID, $0) }, uniquingKeysWith: { first, _ in first })
+        self._paragraphCardIndex = Dictionary(paragraphTeachingCards.map { ($0.segmentID, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
     func sentences(in segment: Segment) -> [Sentence] {
@@ -384,6 +644,16 @@ struct StructuredSourceBundle: Equatable {
     func segment(id: String?) -> Segment? {
         guard let id else { return nil }
         return _segmentIndex[id]
+    }
+
+    func sentenceCard(id: String?) -> ProfessorSentenceCard? {
+        guard let id else { return nil }
+        return _sentenceCardIndex[id]
+    }
+
+    func paragraphCard(forSegmentID id: String?) -> ParagraphTeachingCard? {
+        guard let id else { return nil }
+        return _paragraphCardIndex[id]
     }
 
     func outlineNode(id: String?) -> OutlineNode? {
@@ -453,6 +723,165 @@ struct StructuredSourceBundle: Equatable {
 
     func flattenedOutlineNodes() -> [OutlineNode] {
         _cachedFlatNodes
+    }
+
+    /// 用 AI 生成的教授级分析内容替换启发式占位内容
+    func enrichedWithAIAnalysis(
+        overview: PassageOverview?,
+        paragraphCards: [ParagraphTeachingCard],
+        sentenceCards: [ProfessorSentenceCard]
+    ) -> StructuredSourceBundle {
+        // 段落卡：用 AI 版本替换匹配的段落，保留未覆盖的
+        let aiParagraphIndex = Dictionary(
+            paragraphCards.map { ($0.segmentID, $0) },
+            uniquingKeysWith: { _, new in new }
+        )
+        let mergedParagraphCards = self.paragraphTeachingCards.map { existing in
+            aiParagraphIndex[existing.segmentID] ?? existing
+        }
+
+        // 句子卡：用 AI 版本替换匹配的句子，保留未覆盖的
+        let aiSentenceIndex = Dictionary(
+            sentenceCards.map { ($0.sentenceID, $0) },
+            uniquingKeysWith: { _, new in new }
+        )
+        let mergedSentenceCards = self.professorSentenceCards.map { existing in
+            aiSentenceIndex[existing.sentenceID] ?? existing
+        }
+
+        // 重建教学树大纲，使用更新后的段落卡和句子卡内容
+        let sentencesBySegment = Dictionary(
+            grouping: sentences,
+            by: { $0.segmentID }
+        )
+        let sentenceCardIndex = Dictionary(
+            mergedSentenceCards.map { ($0.sentenceID, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let mergedOutline = Self.rebuildOutline(
+            sourceID: source.id,
+            segments: segments,
+            sentencesBySegment: sentencesBySegment,
+            paragraphCards: mergedParagraphCards,
+            sentenceCardIndex: sentenceCardIndex,
+            overview: overview ?? passageOverview
+        )
+
+        return StructuredSourceBundle(
+            source: source,
+            segments: segments,
+            sentences: sentences,
+            outline: mergedOutline,
+            passageOverview: overview ?? passageOverview,
+            paragraphTeachingCards: mergedParagraphCards,
+            professorSentenceCards: mergedSentenceCards,
+            questionLinks: questionLinks,
+            zoningSummary: zoningSummary
+        )
+    }
+
+    /// 重建教学大纲树
+    private static func rebuildOutline(
+        sourceID: String,
+        segments: [Segment],
+        sentencesBySegment: [String: [Sentence]],
+        paragraphCards: [ParagraphTeachingCard],
+        sentenceCardIndex: [String: ProfessorSentenceCard],
+        overview: PassageOverview?
+    ) -> [OutlineNode] {
+        let paragraphNodes: [OutlineNode] = paragraphCards.map { card in
+            let sentences = sentencesBySegment[card.segmentID] ?? []
+            let supportingSentenceNodes = sentences
+                .filter { sentence in
+                    sentence.id == card.coreSentenceID || sentenceCardIndex[sentence.id]?.isKeySentence == true
+                }
+                .prefix(2)
+                .map { sentence in
+                    OutlineNode(
+                        id: "support_\(sentence.id)",
+                        sourceID: sourceID,
+                        parentID: "para_\(card.segmentID)",
+                        depth: 2,
+                        order: sentence.index,
+                        nodeType: .supportingSentence,
+                        title: String(sentence.text.prefix(60)),
+                        summary: sentenceCardIndex[sentence.id]?.analysis.sentenceCore ?? sentence.text,
+                        anchor: OutlineAnchor(
+                            segmentID: sentence.segmentID,
+                            sentenceID: sentence.id,
+                            page: sentence.page,
+                            label: sentence.anchorLabel
+                        ),
+                        sourceSegmentIDs: [sentence.segmentID],
+                        sourceSentenceIDs: [sentence.id],
+                        children: []
+                    )
+                }
+
+            let focusSummary = card.teachingFocuses.joined(separator: "；")
+                .isEmpty ? card.examValue : card.teachingFocuses.joined(separator: "；")
+            let focusNode = OutlineNode(
+                id: "focus_\(card.segmentID)",
+                sourceID: sourceID,
+                parentID: "para_\(card.segmentID)",
+                depth: 2,
+                order: card.paragraphIndex * 10,
+                nodeType: .teachingFocus,
+                title: "教学重点",
+                summary: focusSummary,
+                anchor: OutlineAnchor(
+                    segmentID: card.segmentID,
+                    sentenceID: card.coreSentenceID,
+                    page: sentences.first?.page,
+                    label: card.anchorLabel
+                ),
+                sourceSegmentIDs: [card.segmentID],
+                sourceSentenceIDs: card.coreSentenceID.map { [$0] } ?? [],
+                children: []
+            )
+
+            return OutlineNode(
+                id: "para_\(card.segmentID)",
+                sourceID: sourceID,
+                parentID: "passage_root",
+                depth: 1,
+                order: card.paragraphIndex,
+                nodeType: .paragraphTheme,
+                title: "第\(card.paragraphIndex + 1)段：\(card.argumentRole.displayName)",
+                summary: card.theme,
+                anchor: OutlineAnchor(
+                    segmentID: card.segmentID,
+                    sentenceID: card.coreSentenceID,
+                    page: sentences.first?.page,
+                    label: card.anchorLabel
+                ),
+                sourceSegmentIDs: [card.segmentID],
+                sourceSentenceIDs: sentences.map(\.id),
+                children: [focusNode] + supportingSentenceNodes
+            )
+        }
+
+        let rootNode = OutlineNode(
+            id: "passage_root",
+            sourceID: sourceID,
+            parentID: nil,
+            depth: 0,
+            order: 0,
+            nodeType: .passageRoot,
+            title: "文章主题",
+            summary: overview?.progressionPath ?? "正文教学树",
+            anchor: OutlineAnchor(
+                segmentID: segments.first?.id,
+                sentenceID: nil,
+                page: segments.first?.page,
+                label: segments.first?.anchorLabel ?? "原文"
+            ),
+            sourceSegmentIDs: segments.map(\.id),
+            sourceSentenceIDs: [],
+            children: paragraphNodes
+        )
+
+        return [rootNode]
     }
 
     /// 带深度限制的安全展平，防止循环引用导致无限递归

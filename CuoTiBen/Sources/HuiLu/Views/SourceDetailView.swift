@@ -2,7 +2,8 @@ import SwiftUI
 
 private enum SourceDetailTab: String, CaseIterable {
     case original = "原文"
-    case outline = "大纲"
+    case outline = "教学树"
+    case professor = "教授式解析"
 }
 
 struct SourceDetailView: View {
@@ -346,7 +347,7 @@ struct SourceDetailView: View {
                 },
                 onJumpHandled: handleOriginalJumpHandled
             )
-        } else {
+        } else if selectedTab == .outline {
             SourceOutlineTab(
                 nodes: structuredSource.outline,
                 highlightedNodeID: highlightedOutlineNodeID,
@@ -356,6 +357,13 @@ struct SourceDetailView: View {
                     handleOutlineNodeTap(node)
                 },
                 onJumpHandled: handleOutlineJumpHandled
+            )
+        } else {
+            ProfessorAnalysisTab(
+                bundle: structuredSource,
+                onSentenceTap: { sentence in
+                    handleSentenceTap(sentence, in: structuredSource)
+                }
             )
         }
     }
@@ -676,5 +684,205 @@ struct SourceDetailView: View {
                     dragOffset = 0
                 }
             }
+    }
+}
+
+private struct ProfessorAnalysisTab: View {
+    let bundle: StructuredSourceBundle
+    let onSentenceTap: (Sentence) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            zoningSummarySection
+
+            if let overview = bundle.passageOverview {
+                overviewSection(overview)
+            }
+
+            if !bundle.paragraphTeachingCards.isEmpty {
+                paragraphCardsSection
+            }
+
+            if !bundle.questionLinks.isEmpty {
+                questionLinksSection
+            }
+        }
+    }
+
+    private var zoningSummarySection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            MarkerTitle(text: "文档分区", tint: AppPalette.paperHighlightMint)
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 10)], spacing: 10) {
+                SketchBadge(title: "正文 \(bundle.zoningSummary.passageParagraphCount) 段", tint: AppPalette.paperHighlightMint)
+                SketchBadge(title: "题目 \(bundle.zoningSummary.questionParagraphCount) 段", tint: AppPalette.paperTapeBlue.opacity(0.28))
+                SketchBadge(title: "答案 \(bundle.zoningSummary.answerKeyParagraphCount) 段", tint: AppPalette.paperHighlight.opacity(0.52))
+                SketchBadge(title: "词汇 \(bundle.zoningSummary.vocabularyParagraphCount) 段", tint: AppPalette.paperTape.opacity(0.34))
+                SketchBadge(title: "说明 \(bundle.zoningSummary.metaInstructionParagraphCount) 段", tint: AppPalette.paperLine.opacity(0.82))
+            }
+        }
+    }
+
+    private func overviewSection(_ overview: PassageOverview) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            MarkerTitle(text: "文章总览", tint: AppPalette.paperTapeBlue.opacity(0.28))
+
+            professorCard {
+                SentenceExplainBlock(title: "文章主题", content: overview.articleTheme, tone: .node)
+                SentenceExplainBlock(title: "作者核心问题意识", content: overview.authorCoreQuestion, tone: .structure)
+                SentenceExplainBlock(title: "行文推进路径", content: overview.progressionPath, tone: .structure)
+
+                if !overview.paragraphFunctionMap.isEmpty {
+                    SentenceExplainListBlock(title: "各段功能图", items: overview.paragraphFunctionMap, tone: .sentence)
+                }
+                if !overview.syntaxHighlights.isEmpty {
+                    SentenceExplainListBlock(title: "最重要的句法学习点", items: overview.syntaxHighlights, tone: .grammar)
+                }
+                if !overview.readingTraps.isEmpty {
+                    SentenceExplainListBlock(title: "最重要的阅读陷阱", items: overview.readingTraps, tone: .rewrite)
+                }
+                if !overview.vocabularyHighlights.isEmpty {
+                    SentenceExplainListBlock(title: "最重要的词汇/搭配学习点", items: overview.vocabularyHighlights, tone: .vocabulary)
+                }
+            }
+        }
+    }
+
+    private var paragraphCardsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            MarkerTitle(text: "段落教学卡", tint: AppPalette.paperHighlight)
+
+            ForEach(bundle.paragraphTeachingCards) { card in
+                professorCard {
+                    HStack(spacing: 8) {
+                        SketchBadge(title: "第\(card.paragraphIndex + 1)段", tint: AppPalette.paperTapeBlue.opacity(0.24))
+                        SketchBadge(title: card.argumentRole.displayName, tint: AppPalette.paperHighlightMint.opacity(0.5))
+                    }
+
+                    SentenceExplainBlock(title: "段落主旨", content: card.theme, tone: .sentence)
+                    SentenceExplainBlock(title: "与上一段关系", content: card.relationToPrevious, tone: .neutral)
+                    SentenceExplainBlock(title: "对应题型价值", content: card.examValue, tone: .rewrite)
+
+                    if !card.keywords.isEmpty {
+                        SentenceExplainListBlock(title: "关键词", items: card.keywords, tone: .vocabulary)
+                    }
+
+                    if !card.teachingFocuses.isEmpty {
+                        SentenceExplainListBlock(title: "教学重点", items: card.teachingFocuses, tone: .grammar)
+                    }
+
+                    if let blindSpot = card.studentBlindSpot, !blindSpot.isEmpty {
+                        SentenceExplainBlock(title: "学生易错点", content: blindSpot, tone: .misread)
+                    }
+
+                    if card.isAIGenerated {
+                        HStack(spacing: 4) {
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 11))
+                            Text("AI 教授级分析")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .foregroundStyle(Color.purple.opacity(0.7))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(
+                            Capsule().fill(Color.purple.opacity(0.08))
+                        )
+                    }
+
+                    if let coreSentence = bundle.sentence(id: card.coreSentenceID) {
+                        Button {
+                            onSentenceTap(coreSentence)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("本段核心句")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundStyle(Color.blue.opacity(0.82))
+                                Text(coreSentence.text)
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundStyle(Color.black.opacity(0.72))
+                                    .lineSpacing(3)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(14)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .fill(Color.white.opacity(0.72))
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+
+    private var questionLinksSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            MarkerTitle(text: "题目与证据联动", tint: Color.pink.opacity(0.28))
+
+            ForEach(bundle.questionLinks) { link in
+                professorCard {
+                    SentenceExplainBlock(title: "题目", content: link.questionText, tone: .sentence)
+                    SentenceExplainBlock(title: "陷阱类型", content: link.trapType, tone: .rewrite)
+
+                    if !link.supportParagraphIDs.isEmpty {
+                        let paragraphLabels = link.supportParagraphIDs.compactMap { bundle.paragraphCard(forSegmentID: $0)?.theme }
+                        SentenceExplainListBlock(title: "支撑段落", items: paragraphLabels, tone: .structure)
+                    }
+
+                    if !link.supportingSentenceIDs.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("支撑句")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(Color.black.opacity(0.78))
+
+                            ForEach(link.supportingSentenceIDs, id: \.self) { sentenceID in
+                                if let sentence = bundle.sentence(id: sentenceID) {
+                                    Button {
+                                        onSentenceTap(sentence)
+                                    } label: {
+                                        Text(sentence.text)
+                                            .font(.system(size: 14, weight: .medium))
+                                            .foregroundStyle(Color.black.opacity(0.72))
+                                            .lineSpacing(3)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .padding(12)
+                                            .background(
+                                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                                    .fill(Color.white.opacity(0.72))
+                                            )
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    }
+
+                    if !link.paraphraseEvidence.isEmpty {
+                        SentenceExplainListBlock(title: "改写证据", items: link.paraphraseEvidence, tone: .grammar)
+                    }
+
+                    if let answerKeySnippet = link.answerKeySnippet, !answerKeySnippet.isEmpty {
+                        SentenceExplainBlock(title: "答案区线索", content: answerKeySnippet, tone: .neutral)
+                    }
+                }
+            }
+        }
+    }
+
+    private func professorCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            content()
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Color.white.opacity(0.78))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(Color.white.opacity(0.96), lineWidth: 1)
+                )
+        )
     }
 }

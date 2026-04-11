@@ -47,6 +47,342 @@ from app.utils.language_detector import analyze_language
 
 logger = logging.getLogger(__name__)
 
+_RESULT_CONTAINER_KEYS = ("result", "data", "res", "output", "payload")
+_PAGE_LIST_KEYS = (
+    "parsing_result",
+    "layoutParsingResults",
+    "pages",
+    "page_results",
+    "pageResults",
+    "results",
+)
+_LAYOUT_LIST_KEYS = (
+    "layouts",
+    "layout_parsing_result",
+    "layoutElements",
+    "parsing_res_list",
+    "parsingResList",
+    "blocks",
+    "elements",
+    "items",
+)
+_PAGE_NUMBER_KEYS = ("page_id", "pageId", "page_index", "pageIndex", "page_no", "pageNo")
+_PAGE_WIDTH_KEYS = ("page_width", "pageWidth", "img_w", "imgWidth", "width")
+_PAGE_HEIGHT_KEYS = ("page_height", "pageHeight", "img_h", "imgHeight", "height")
+_LABEL_KEYS = ("layout_label", "block_label", "label", "type", "category")
+_TEXT_KEYS = (
+    "layout_text",
+    "block_content",
+    "text",
+    "content",
+    "rec_text",
+    "words",
+    "markdown",
+    "html",
+    "text_content",
+)
+_BBOX_KEYS = ("layout_bbox", "block_bbox", "bbox", "layout_location", "box", "coordinate", "coordinates", "points")
+_SCORE_KEYS = ("layout_score", "block_score", "score", "confidence")
+_NESTED_LAYOUT_CONTAINER_KEYS = ("prunedResult", "pruned_result", "result", "data")
+_TEXT_SCAN_SKIP_KEYS = set(
+    _PAGE_NUMBER_KEYS
+    + _PAGE_WIDTH_KEYS
+    + _PAGE_HEIGHT_KEYS
+    + _LABEL_KEYS
+    + _TEXT_KEYS
+    + _BBOX_KEYS
+    + _SCORE_KEYS
+    + ("sub_layouts", "subLayouts", "order", "index", "block_order", "source")
+)
+
+
+def _iter_dict_candidates(root: Any, max_depth: int = 4):
+    queue: list[tuple[str, Any, int]] = [("raw", root, 0)]
+    visited: set[int] = set()
+
+    while queue:
+        path, node, depth = queue.pop(0)
+        if not isinstance(node, dict):
+            continue
+
+        node_id = id(node)
+        if node_id in visited:
+            continue
+        visited.add(node_id)
+
+        yield path, node
+
+        if depth >= max_depth:
+            continue
+
+        for key in _RESULT_CONTAINER_KEYS:
+            nested = node.get(key)
+            if isinstance(nested, dict):
+                queue.append((f"{path}.{key}", nested, depth + 1))
+
+
+def _looks_like_block(node: Any) -> bool:
+    if not isinstance(node, dict):
+        return False
+    keys = set(node.keys())
+    return bool(
+        keys.intersection(set(_TEXT_KEYS) | set(_BBOX_KEYS) | set(_LABEL_KEYS) | {"sub_layouts", "subLayouts"})
+    )
+
+
+def _looks_like_page(node: Any) -> bool:
+    if not isinstance(node, dict):
+        return False
+    keys = set(node.keys())
+    return bool(
+        keys.intersection(set(_PAGE_NUMBER_KEYS) | set(_LAYOUT_LIST_KEYS) | {"prunedResult", "pruned_result"})
+    )
+
+
+def _coerce_page_list(candidate: Any) -> list[dict[str, Any]] | None:
+    if isinstance(candidate, list):
+        if not candidate:
+            return []
+        if all(_looks_like_page(item) for item in candidate if isinstance(item, dict)):
+            return [item for item in candidate if isinstance(item, dict)]
+        if isinstance(candidate[0], dict) and _looks_like_block(candidate[0]):
+            return [{"page_id": 0, "layouts": candidate}]
+        return None
+
+    if isinstance(candidate, dict):
+        if _looks_like_page(candidate):
+            return [candidate]
+        values = [value for value in candidate.values() if isinstance(value, dict)]
+        if values and all(_looks_like_page(value) for value in values):
+            return values
+
+    return None
+
+
+def _extract_pages_raw(raw: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+    best_source = "none (all paths returned empty)"
+
+    if isinstance(raw, list):
+        coerced = _coerce_page_list(raw)
+        if coerced is not None:
+            return coerced, "raw (list)"
+
+    for path, container in _iter_dict_candidates(raw):
+        coerced_container = _coerce_page_list(container)
+        if coerced_container is not None and coerced_container:
+            return coerced_container, f"{path} (page-like)"
+
+        for key in _PAGE_LIST_KEYS:
+            candidate = container.get(key)
+            coerced = _coerce_page_list(candidate)
+            if coerced is None:
+                continue
+            source = f"{path}.{key}"
+            if coerced:
+                return coerced, source
+            if best_source.startswith("none"):
+                best_source = source
+
+    return [], best_source
+
+
+def _coerce_layout_list(candidate: Any) -> list[dict[str, Any]] | None:
+    if isinstance(candidate, list):
+        if not candidate:
+            return []
+        dict_items = [item for item in candidate if isinstance(item, dict)]
+        if dict_items and all(_looks_like_block(item) or _looks_like_page(item) for item in dict_items):
+            return dict_items
+        return None
+
+    if isinstance(candidate, dict):
+        if _looks_like_block(candidate):
+            return [candidate]
+        values = [value for value in candidate.values() if isinstance(value, dict)]
+        if values and all(_looks_like_block(value) for value in values):
+            return values
+
+    return None
+
+
+def _extract_layouts(page_raw: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+    queue: list[tuple[str, Any]] = [("page", page_raw)]
+    visited: set[int] = set()
+    best_source = "none"
+
+    while queue:
+        path, node = queue.pop(0)
+        if not isinstance(node, dict):
+            continue
+
+        node_id = id(node)
+        if node_id in visited:
+            continue
+        visited.add(node_id)
+
+        for key in _LAYOUT_LIST_KEYS:
+            candidate = node.get(key)
+            coerced = _coerce_layout_list(candidate)
+            if coerced is None:
+                continue
+            source = f"{path}.{key}"
+            if coerced:
+                return coerced, source
+            if best_source == "none":
+                best_source = source
+
+        for nested_key in _NESTED_LAYOUT_CONTAINER_KEYS:
+            nested = node.get(nested_key)
+            if isinstance(nested, dict):
+                queue.append((f"{path}.{nested_key}", nested))
+
+    if _looks_like_block(page_raw):
+        return [page_raw], "page_as_block"
+
+    return [], best_source
+
+
+def _extract_string(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float)):
+        return str(value).strip()
+    if isinstance(value, list):
+        parts = [_extract_string(item) for item in value]
+        return "\n".join(part for part in parts if part).strip()
+    if isinstance(value, dict):
+        for key in _TEXT_KEYS:
+            if key in value:
+                text = _extract_string(value.get(key))
+                if text:
+                    return text
+    return ""
+
+
+def _extract_layout_text(layout: dict[str, Any]) -> tuple[str, str]:
+    for key in _TEXT_KEYS:
+        if key in layout:
+            text = _extract_string(layout.get(key))
+            if text:
+                return text, key
+
+    for key in ("sub_layouts", "subLayouts"):
+        sub_layouts = layout.get(key)
+        if isinstance(sub_layouts, list):
+            parts = [_extract_layout_text(sub_layout)[0] for sub_layout in sub_layouts if isinstance(sub_layout, dict)]
+            text = "\n".join(part for part in parts if part).strip()
+            if text:
+                return text, key
+
+    label = str(next((layout.get(key) for key in _LABEL_KEYS if layout.get(key)), "")).strip().lower()
+    if label and label in layout:
+        text = _extract_string(layout.get(label))
+        if text:
+            return text, label
+
+    for key, value in layout.items():
+        if key in _TEXT_SCAN_SKIP_KEYS:
+            continue
+        text = _extract_string(value)
+        if text:
+            return text, key
+
+    return "", "none"
+
+
+def _to_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _parse_bbox(raw_bbox: Any) -> BoundingBox:
+    if isinstance(raw_bbox, dict):
+        if all(key in raw_bbox for key in ("x", "y", "width", "height")):
+            return BoundingBox(
+                x=_to_float(raw_bbox.get("x")),
+                y=_to_float(raw_bbox.get("y")),
+                width=_to_float(raw_bbox.get("width")),
+                height=_to_float(raw_bbox.get("height")),
+            )
+        if all(key in raw_bbox for key in ("x1", "y1", "x2", "y2")):
+            x1 = _to_float(raw_bbox.get("x1"))
+            y1 = _to_float(raw_bbox.get("y1"))
+            x2 = _to_float(raw_bbox.get("x2"))
+            y2 = _to_float(raw_bbox.get("y2"))
+            return BoundingBox(x=x1, y=y1, width=max(x2 - x1, 0.0), height=max(y2 - y1, 0.0))
+        for key in _BBOX_KEYS:
+            if key in raw_bbox:
+                return _parse_bbox(raw_bbox.get(key))
+
+    if isinstance(raw_bbox, list):
+        numeric = [value for value in raw_bbox if isinstance(value, (int, float))]
+        if len(numeric) == 4:
+            x1, y1, v3, v4 = [float(value) for value in numeric]
+            if v3 >= x1 and v4 >= y1:
+                return BoundingBox(x=x1, y=y1, width=v3 - x1, height=v4 - y1)
+            return BoundingBox(x=x1, y=y1, width=max(v3, 0.0), height=max(v4, 0.0))
+        if len(numeric) >= 8 and len(numeric) % 2 == 0:
+            xs = [float(numeric[index]) for index in range(0, len(numeric), 2)]
+            ys = [float(numeric[index]) for index in range(1, len(numeric), 2)]
+            return BoundingBox(x=min(xs), y=min(ys), width=max(xs) - min(xs), height=max(ys) - min(ys))
+        if raw_bbox and all(isinstance(item, (list, tuple)) and len(item) >= 2 for item in raw_bbox):
+            xs = [_to_float(item[0]) for item in raw_bbox]
+            ys = [_to_float(item[1]) for item in raw_bbox]
+            return BoundingBox(x=min(xs), y=min(ys), width=max(xs) - min(xs), height=max(ys) - min(ys))
+
+    return BoundingBox()
+
+
+def _extract_bbox(layout: dict[str, Any]) -> BoundingBox:
+    for key in _BBOX_KEYS:
+        if key in layout:
+            return _parse_bbox(layout.get(key))
+    return BoundingBox()
+
+
+def _extract_label(layout: dict[str, Any]) -> str:
+    for key in _LABEL_KEYS:
+        value = layout.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return "text"
+
+
+def _extract_score(layout: dict[str, Any], default: float = 0.75) -> float:
+    for key in _SCORE_KEYS:
+        if key in layout:
+            return _to_float(layout.get(key), default)
+    return default
+
+
+def _extract_page_index(page_raw: dict[str, Any], fallback_index: int) -> int:
+    for key in _PAGE_NUMBER_KEYS:
+        if key in page_raw:
+            try:
+                value = int(page_raw.get(key))
+                return value + 1 if value == fallback_index or value == fallback_index - 1 else value if value >= 1 else fallback_index + 1
+            except (TypeError, ValueError):
+                break
+    return fallback_index + 1
+
+
+def _extract_page_size(page_raw: dict[str, Any]) -> tuple[float, float]:
+    width = 0.0
+    height = 0.0
+    for key in _PAGE_WIDTH_KEYS:
+        if key in page_raw:
+            width = _to_float(page_raw.get(key))
+            if width:
+                break
+    for key in _PAGE_HEIGHT_KEYS:
+        if key in page_raw:
+            height = _to_float(page_raw.get(key))
+            if height:
+                break
+    return width, height
+
 
 def normalize(
     raw: dict[str, Any],
@@ -67,39 +403,7 @@ def normalize(
     )
 
     # 提取页面列表 — 适配不同版本的字段名，并记录命中的 key 路径
-    _pages_raw_source = "none"
-    pages_raw = None
-
-    _result_obj = raw.get("result", {})
-    if isinstance(_result_obj, dict):
-        for _candidate_key in ("parsing_result", "layoutParsingResults"):
-            _candidate = _result_obj.get(_candidate_key)
-            if _candidate:
-                pages_raw = _candidate
-                _pages_raw_source = f"result.{_candidate_key}"
-                break
-    if pages_raw is None:
-        for _candidate_key in ("parsing_result", "layoutParsingResults"):
-            _candidate = raw.get(_candidate_key)
-            if _candidate:
-                pages_raw = _candidate
-                _pages_raw_source = _candidate_key
-                break
-    if pages_raw is None and isinstance(_result_obj, list):
-        pages_raw = _result_obj
-        _pages_raw_source = "result (list)"
-    if pages_raw is None:
-        pages_raw = []
-        _pages_raw_source = "none (all paths returned empty)"
-
-    if isinstance(pages_raw, dict):
-        pages_raw = [pages_raw]
-    if not isinstance(pages_raw, list):
-        logger.warning(
-            "归一化: pages_raw 类型异常  type=%s  source=%s  doc_id=%s",
-            type(pages_raw).__name__, _pages_raw_source, document_id,
-        )
-        pages_raw = []
+    pages_raw, _pages_raw_source = _extract_pages_raw(raw)
 
     logger.info(
         "归一化页面提取  source=%s  page_count=%d  doc_id=%s",
@@ -111,21 +415,13 @@ def normalize(
     global_order = 0
 
     for page_idx, page_raw in enumerate(pages_raw):
-        page_num = page_raw.get("page_id", page_raw.get("pageId", page_idx)) + 1
-        page_w = float(page_raw.get("page_width", page_raw.get("pageWidth", 0)))
-        page_h = float(page_raw.get("page_height", page_raw.get("pageHeight", 0)))
-
-        layouts = (
-            page_raw.get("layouts")
-            or page_raw.get("layout_parsing_result", [])
-            or page_raw.get("layoutElements", [])
-        )
-        if not isinstance(layouts, list):
-            layouts = []
+        page_num = _extract_page_index(page_raw, page_idx)
+        page_w, page_h = _extract_page_size(page_raw)
+        layouts, layout_source = _extract_layouts(page_raw)
 
         logger.info(
-            "归一化 page=%d  raw_layout_count=%d  page_keys=%s  doc_id=%s",
-            page_num, len(layouts),
+            "归一化 page=%d  raw_layout_count=%d  layout_source=%s  page_keys=%s  doc_id=%s",
+            page_num, len(layouts), layout_source,
             list(page_raw.keys()) if isinstance(page_raw, dict) else "non-dict",
             document_id,
         )
@@ -134,35 +430,8 @@ def normalize(
         skipped_empty = 0
 
         for layout_idx, layout in enumerate(layouts):
-            label = (
-                layout.get("layout_label")
-                or layout.get("label")
-                or layout.get("type", "text")
-            )
-
-            # 适配多种 PP-StructureV3 版本的文本字段
-            text = (
-                layout.get("layout_text")
-                or layout.get("text")
-                or layout.get("content")
-                or layout.get("rec_text")
-                or layout.get("words")
-                or ""
-            )
-            # sub_layouts 中可能藏着文本
-            if not text.strip() and isinstance(layout.get("sub_layouts"), list):
-                sub_texts = []
-                for sub in layout["sub_layouts"]:
-                    st = (
-                        sub.get("layout_text")
-                        or sub.get("text")
-                        or sub.get("content")
-                        or sub.get("rec_text")
-                        or ""
-                    )
-                    if st.strip():
-                        sub_texts.append(st.strip())
-                text = "\n".join(sub_texts)
+            label = _extract_label(layout)
+            text, text_source = _extract_layout_text(layout)
 
             # 跳过空文本
             if not text.strip():
@@ -170,30 +439,15 @@ def normalize(
                 # 首个被跳过的 layout 记录其 keys 帮助诊断
                 if skipped_empty == 1 and isinstance(layout, dict):
                     logger.info(
-                        "归一化 page=%d 首个空文本 layout  keys=%s  label=%s  doc_id=%s",
-                        page_num, list(layout.keys()), label, document_id,
+                        "归一化 page=%d 首个空文本 layout  keys=%s  label=%s  text_source=%s  doc_id=%s",
+                        page_num, list(layout.keys()), label, text_source, document_id,
                     )
                 continue
 
-            bbox_raw = (
-                layout.get("layout_bbox")
-                or layout.get("bbox")
-                or layout.get("layout_location")
-                or [0, 0, 0, 0]
-            )
-            # PP-StructureV3 使用 [x1,y1,x2,y2]
-            if isinstance(bbox_raw, list) and len(bbox_raw) == 4:
-                x1, y1, x2, y2 = [float(v) for v in bbox_raw]
-                bbox = BoundingBox(x=x1, y=y1, width=x2 - x1, height=y2 - y1)
-            else:
-                bbox = BoundingBox()
+            bbox = _extract_bbox(layout)
+            score = _extract_score(layout)
 
-            score = float(
-                layout.get("layout_score")
-                or layout.get("score", 0.75)
-            )
-
-            block_type, lang, confidence = classify_block(label, text)
+            block_type, zone_role, lang, confidence = classify_block(label, text)
             confidence = min(confidence, score)  # 不超过 layout 置信度
 
             block_id = f"blk-{uuid.uuid4().hex[:12]}"
@@ -203,6 +457,7 @@ def normalize(
                 order=global_order,
                 bbox=bbox,
                 block_type=block_type,
+                zone_role=zone_role,
                 sub_type=label if label != block_type else None,
                 text=text,
                 language=lang,
