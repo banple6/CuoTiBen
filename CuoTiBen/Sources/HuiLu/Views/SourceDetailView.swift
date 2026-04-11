@@ -15,7 +15,7 @@ struct SourceDetailView: View {
     @State private var generationNote: String?
     @State private var isExpanded = false
     @State private var dragOffset: CGFloat = 0
-    @State private var selectedTab: SourceDetailTab = .original
+    @State private var selectedTab: SourceDetailTab = .professor
     @State private var selectedSentence: Sentence?
     @State private var selectedOutlineNode: OutlineNode?
     @State private var jumpTargetSentenceID: String?
@@ -730,16 +730,15 @@ private struct ProfessorAnalysisTab: View {
             professorCard {
                 SentenceExplainBlock(title: "文章主题", content: overview.articleTheme, tone: .node)
                 SentenceExplainBlock(title: "作者核心问题意识", content: overview.authorCoreQuestion, tone: .structure)
-                SentenceExplainBlock(title: "行文推进路径", content: overview.progressionPath, tone: .structure)
-
-                if !overview.paragraphFunctionMap.isEmpty {
-                    SentenceExplainListBlock(title: "各段功能图", items: overview.paragraphFunctionMap, tone: .sentence)
-                }
                 if !overview.syntaxHighlights.isEmpty {
                     SentenceExplainListBlock(title: "最重要的句法学习点", items: overview.syntaxHighlights, tone: .grammar)
                 }
                 if !overview.readingTraps.isEmpty {
-                    SentenceExplainListBlock(title: "最重要的阅读陷阱", items: overview.readingTraps, tone: .rewrite)
+                    SentenceExplainListBlock(title: "最重要的阅读陷阱", items: overview.readingTraps, tone: .misread)
+                }
+                SentenceExplainBlock(title: "行文推进路径", content: overview.progressionPath, tone: .structure)
+                if !overview.paragraphFunctionMap.isEmpty {
+                    SentenceExplainListBlock(title: "各段功能图", items: overview.paragraphFunctionMap, tone: .sentence)
                 }
                 if !overview.vocabularyHighlights.isEmpty {
                     SentenceExplainListBlock(title: "最重要的词汇/搭配学习点", items: overview.vocabularyHighlights, tone: .vocabulary)
@@ -760,35 +759,6 @@ private struct ProfessorAnalysisTab: View {
                     }
 
                     SentenceExplainBlock(title: "段落主旨", content: card.theme, tone: .sentence)
-                    SentenceExplainBlock(title: "与上一段关系", content: card.relationToPrevious, tone: .neutral)
-                    SentenceExplainBlock(title: "对应题型价值", content: card.examValue, tone: .rewrite)
-
-                    if !card.keywords.isEmpty {
-                        SentenceExplainListBlock(title: "关键词", items: card.keywords, tone: .vocabulary)
-                    }
-
-                    if !card.teachingFocuses.isEmpty {
-                        SentenceExplainListBlock(title: "教学重点", items: card.teachingFocuses, tone: .grammar)
-                    }
-
-                    if let blindSpot = card.studentBlindSpot, !blindSpot.isEmpty {
-                        SentenceExplainBlock(title: "学生易错点", content: blindSpot, tone: .misread)
-                    }
-
-                    if card.isAIGenerated {
-                        HStack(spacing: 4) {
-                            Image(systemName: "sparkles")
-                                .font(.system(size: 11))
-                            Text("AI 教授级分析")
-                                .font(.system(size: 11, weight: .medium))
-                        }
-                        .foregroundStyle(Color.purple.opacity(0.7))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(
-                            Capsule().fill(Color.purple.opacity(0.08))
-                        )
-                    }
 
                     if let coreSentence = bundle.sentence(id: card.coreSentenceID) {
                         Button {
@@ -812,9 +782,67 @@ private struct ProfessorAnalysisTab: View {
                         }
                         .buttonStyle(.plain)
                     }
+
+                    if !card.teachingFocuses.isEmpty {
+                        SentenceExplainListBlock(title: "教学重点", items: card.teachingFocuses, tone: .grammar)
+                    }
+
+                    if let blindSpot = card.studentBlindSpot, !blindSpot.isEmpty {
+                        SentenceExplainBlock(title: "学生易错点", content: blindSpot, tone: .misread)
+                    }
+
+                    let relatedQuestionHints = relatedQuestionHints(for: card.segmentID)
+                    if !relatedQuestionHints.isEmpty {
+                        SentenceExplainListBlock(
+                            title: "相关题目线索",
+                            items: relatedQuestionHints,
+                            tone: .rewrite
+                        )
+                    }
+
+                    SentenceExplainBlock(title: "与上一段关系", content: card.relationToPrevious, tone: .neutral)
+                    SentenceExplainBlock(title: "对应题型价值", content: card.examValue, tone: .rewrite)
+
+                    if !card.keywords.isEmpty {
+                        SentenceExplainListBlock(title: "关键词", items: card.keywords, tone: .vocabulary)
+                    }
+
+                    if card.isAIGenerated {
+                        HStack(spacing: 4) {
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 11))
+                            Text("AI 教授级分析")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .foregroundStyle(Color.purple.opacity(0.7))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(
+                            Capsule().fill(Color.purple.opacity(0.08))
+                        )
+                    }
                 }
             }
         }
+    }
+
+    private func relatedQuestionHints(for segmentID: String) -> [String] {
+        bundle.questionLinks
+            .filter { $0.supportParagraphIDs.contains(segmentID) }
+            .prefix(2)
+            .map { link in
+                let trap = link.trapType.trimmingCharacters(in: .whitespacesAndNewlines)
+                let evidence = link.paraphraseEvidence.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let question = link.questionText.trimmingCharacters(in: .whitespacesAndNewlines)
+                let head = trap.isEmpty ? shortHint(question) : trap
+                let tail = !evidence.isEmpty ? evidence : shortHint(question)
+                return "\(head)：\(tail)"
+            }
+    }
+
+    private func shortHint(_ text: String) -> String {
+        let trimmed = text.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        return String(trimmed.prefix(48))
     }
 
     private var questionLinksSection: some View {
@@ -825,6 +853,10 @@ private struct ProfessorAnalysisTab: View {
                 professorCard {
                     SentenceExplainBlock(title: "题目", content: link.questionText, tone: .sentence)
                     SentenceExplainBlock(title: "陷阱类型", content: link.trapType, tone: .rewrite)
+
+                    if !link.paraphraseEvidence.isEmpty {
+                        SentenceExplainListBlock(title: "改写证据", items: link.paraphraseEvidence, tone: .grammar)
+                    }
 
                     if !link.supportParagraphIDs.isEmpty {
                         let paragraphLabels = link.supportParagraphIDs.compactMap { bundle.paragraphCard(forSegmentID: $0)?.theme }
@@ -857,10 +889,6 @@ private struct ProfessorAnalysisTab: View {
                                 }
                             }
                         }
-                    }
-
-                    if !link.paraphraseEvidence.isEmpty {
-                        SentenceExplainListBlock(title: "改写证据", items: link.paraphraseEvidence, tone: .grammar)
                     }
 
                     if let answerKeySnippet = link.answerKeySnippet, !answerKeySnippet.isEmpty {

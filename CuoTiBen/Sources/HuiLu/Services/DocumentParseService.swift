@@ -9,6 +9,7 @@ enum DocumentParseServiceError: LocalizedError {
     case invalidBackendURL
     case uploadFailed(String)
     case parseFailed(String)
+    case legacySchema(String)
     case pollTimeout
     case invalidResponse
     case jobNotFound
@@ -20,6 +21,7 @@ enum DocumentParseServiceError: LocalizedError {
         case .invalidBackendURL:    return "后端地址格式无效"
         case .uploadFailed(let m):  return "上传失败：\(m)"
         case .parseFailed(let m):   return "解析失败：\(m)"
+        case .legacySchema(let m):  return "后端仍返回旧版结构：\(m)"
         case .pollTimeout:          return "解析超时，请稍后重试"
         case .invalidResponse:      return "后端返回格式异常"
         case .jobNotFound:          return "解析任务不存在"
@@ -129,6 +131,14 @@ enum DocumentParseService {
                 TextPipelineDiagnostics.log("PP", "[PP] parse request server error: \(error) quality_reason=\(qr)", severity: .error)
                 throw DocumentParseServiceError.serverError(error)
             }
+
+            if looksLikeLegacySchema(result) {
+                let parseVersion = result.document?.metadata.parseVersion ?? "none"
+                let reason = "schema=\(sv) parse_version=\(parseVersion) blocks=\(result.document?.blocks.count ?? 0)"
+                TextPipelineDiagnostics.log("PP", "[PP] parse response incompatible with PP-StructureV3: \(reason)", severity: .warning)
+                throw DocumentParseServiceError.legacySchema(reason)
+            }
+
             TextPipelineDiagnostics.log("PP", "[PP] parse request success doc=\(documentID) status=\(result.status?.rawValue ?? "immediate") jobID=\(result.jobID ?? "sync")", severity: .info)
             return result
         } catch let e as DocumentParseServiceError {
@@ -235,6 +245,22 @@ enum DocumentParseService {
         case "txt":             return "text/plain"
         default:                return "application/octet-stream"
         }
+    }
+
+    private static func looksLikeLegacySchema(_ result: DocumentParseResponse) -> Bool {
+        let schemaVersion = (result.schemaVersion ?? "").lowercased()
+        let parseVersion = (result.document?.metadata.parseVersion ?? "").lowercased()
+        let blockCount = result.document?.blocks.count ?? 0
+
+        if parseVersion.contains("v3") || blockCount > 0 {
+            return false
+        }
+
+        if schemaVersion.isEmpty {
+            return true
+        }
+
+        return schemaVersion.contains("legacy") || schemaVersion.hasPrefix("v1")
     }
 }
 

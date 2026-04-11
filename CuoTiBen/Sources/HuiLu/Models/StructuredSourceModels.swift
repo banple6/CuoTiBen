@@ -464,6 +464,191 @@ struct PassageOverview: Equatable, Hashable {
     let vocabularyHighlights: [String]
 }
 
+private enum PedagogicalTextKind {
+    case naturalMeaning
+    case sentenceCore
+    case paragraphTheme
+    case overviewTheme
+    case overviewQuestion
+    case overviewProgression
+    case relation
+    case examValue
+    case generic
+}
+
+private func trimmedOrEmpty(_ value: String) -> String {
+    value.trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private func pedagogicalList(_ preferred: [String], fallback: [String], limit: Int = 6) -> [String] {
+    var ordered: [String] = []
+    var seen: Set<String> = []
+
+    for item in preferred + fallback {
+        let normalized = trimmedOrEmpty(item)
+        guard !normalized.isEmpty else { continue }
+        let key = normalized.lowercased()
+        guard seen.insert(key).inserted else { continue }
+        ordered.append(normalized)
+        if ordered.count >= limit {
+            break
+        }
+    }
+
+    return ordered
+}
+
+private func pedagogicalTextScore(_ value: String, kind: PedagogicalTextKind) -> Int {
+    let trimmed = trimmedOrEmpty(value)
+    guard !trimmed.isEmpty else { return 0 }
+
+    let lower = trimmed.lowercased()
+    var score = min(trimmed.count, 120)
+
+    switch kind {
+    case .naturalMeaning:
+        if lower.contains("这句话服务于本段") { score -= 24 }
+        if lower.contains("不要平均翻译") { score -= 18 }
+        if lower.contains("自然意思是") || lower.contains("真正想说的是") { score += 12 }
+    case .sentenceCore:
+        if lower.hasPrefix("先抓主干") { score -= 30 }
+        if lower.contains("主语") { score += 18 }
+        if lower.contains("谓语") { score += 18 }
+        if lower.contains("宾语") || lower.contains("补语") { score += 12 }
+    case .paragraphTheme:
+        if lower.hasPrefix("第") && lower.contains("承担") { score -= 28 }
+        if lower.contains("围绕") || lower.contains("真正要说明") { score += 10 }
+    case .overviewTheme:
+        if lower.contains("文章核心围绕") { score -= 20 }
+        if lower.contains("本文真正讨论") || lower.contains("作者真正关注") { score += 14 }
+    case .overviewQuestion:
+        if lower.contains("作者真正要回答的问题可以概括为") { score -= 16 }
+        if lower.contains("作者真正追问的是") || lower.contains("核心问题是") { score += 12 }
+    case .overviewProgression:
+        if lower.contains("→") { score += 8 }
+        if lower.contains("先") && lower.contains("再") { score += 10 }
+    case .relation:
+        if lower == "承接上文" { score -= 40 }
+        if lower.contains("转折") || lower.contains("推进") || lower.contains("限定") { score += 10 }
+    case .examValue:
+        if lower.contains("常见于") { score += 6 }
+        if lower.contains("陷阱") || lower.contains("题型") { score += 10 }
+    case .generic:
+        break
+    }
+
+    return score
+}
+
+private func preferredPedagogicalText(
+    _ preferred: String,
+    fallback: String,
+    kind: PedagogicalTextKind
+) -> String {
+    let preferredTrimmed = trimmedOrEmpty(preferred)
+    let fallbackTrimmed = trimmedOrEmpty(fallback)
+
+    let preferredScore = pedagogicalTextScore(preferredTrimmed, kind: kind)
+    let fallbackScore = pedagogicalTextScore(fallbackTrimmed, kind: kind)
+
+    if preferredScore == 0 { return fallbackTrimmed }
+    if fallbackScore == 0 { return preferredTrimmed }
+    return preferredScore >= fallbackScore ? preferredTrimmed : fallbackTrimmed
+}
+
+extension ProfessorSentenceAnalysis {
+    func mergingFallback(_ fallback: ProfessorSentenceAnalysis?) -> ProfessorSentenceAnalysis {
+        guard let fallback else { return self }
+
+        return ProfessorSentenceAnalysis(
+            originalSentence: preferredPedagogicalText(originalSentence, fallback: fallback.originalSentence, kind: .generic),
+            naturalChineseMeaning: preferredPedagogicalText(
+                naturalChineseMeaning,
+                fallback: fallback.naturalChineseMeaning,
+                kind: .naturalMeaning
+            ),
+            sentenceCore: preferredPedagogicalText(sentenceCore, fallback: fallback.sentenceCore, kind: .sentenceCore),
+            chunkBreakdown: pedagogicalList(chunkBreakdown, fallback: fallback.chunkBreakdown, limit: 6),
+            grammarPoints: grammarPoints.isEmpty ? fallback.grammarPoints : grammarPoints,
+            vocabularyInContext: vocabularyInContext.isEmpty ? fallback.vocabularyInContext : vocabularyInContext,
+            misreadPoints: pedagogicalList(misreadPoints, fallback: fallback.misreadPoints, limit: 4),
+            examRewritePoints: pedagogicalList(examRewritePoints, fallback: fallback.examRewritePoints, limit: 4),
+            simplifiedEnglish: preferredPedagogicalText(simplifiedEnglish, fallback: fallback.simplifiedEnglish, kind: .generic),
+            miniExercise: preferredPedagogicalText(miniExercise ?? "", fallback: fallback.miniExercise ?? "", kind: .generic).isEmpty
+                ? nil
+                : preferredPedagogicalText(miniExercise ?? "", fallback: fallback.miniExercise ?? "", kind: .generic),
+            hierarchyRebuild: pedagogicalList(hierarchyRebuild, fallback: fallback.hierarchyRebuild, limit: 5),
+            syntacticVariation: preferredPedagogicalText(
+                syntacticVariation ?? "",
+                fallback: fallback.syntacticVariation ?? "",
+                kind: .generic
+            ).isEmpty ? nil : preferredPedagogicalText(
+                syntacticVariation ?? "",
+                fallback: fallback.syntacticVariation ?? "",
+                kind: .generic
+            ),
+            evidenceType: preferredPedagogicalText(evidenceType ?? "", fallback: fallback.evidenceType ?? "", kind: .generic).isEmpty
+                ? nil
+                : preferredPedagogicalText(evidenceType ?? "", fallback: fallback.evidenceType ?? "", kind: .generic),
+            isAIGenerated: isAIGenerated || fallback.isAIGenerated
+        )
+    }
+}
+
+extension ParagraphTeachingCard {
+    func mergingFallback(_ fallback: ParagraphTeachingCard?) -> ParagraphTeachingCard {
+        guard let fallback else { return self }
+
+        return ParagraphTeachingCard(
+            id: id,
+            segmentID: segmentID,
+            paragraphIndex: paragraphIndex,
+            anchorLabel: preferredPedagogicalText(anchorLabel, fallback: fallback.anchorLabel, kind: .generic),
+            theme: preferredPedagogicalText(theme, fallback: fallback.theme, kind: .paragraphTheme),
+            argumentRole: isAIGenerated ? argumentRole : fallback.argumentRole,
+            coreSentenceID: coreSentenceID ?? fallback.coreSentenceID,
+            keywords: pedagogicalList(keywords, fallback: fallback.keywords, limit: 6),
+            relationToPrevious: preferredPedagogicalText(relationToPrevious, fallback: fallback.relationToPrevious, kind: .relation),
+            examValue: preferredPedagogicalText(examValue, fallback: fallback.examValue, kind: .examValue),
+            teachingFocuses: pedagogicalList(teachingFocuses, fallback: fallback.teachingFocuses, limit: 4),
+            studentBlindSpot: preferredPedagogicalText(
+                studentBlindSpot ?? "",
+                fallback: fallback.studentBlindSpot ?? "",
+                kind: .generic
+            ).isEmpty ? nil : preferredPedagogicalText(
+                studentBlindSpot ?? "",
+                fallback: fallback.studentBlindSpot ?? "",
+                kind: .generic
+            ),
+            isAIGenerated: isAIGenerated || fallback.isAIGenerated
+        )
+    }
+}
+
+extension PassageOverview {
+    func mergingFallback(_ fallback: PassageOverview?) -> PassageOverview {
+        guard let fallback else { return self }
+
+        return PassageOverview(
+            articleTheme: preferredPedagogicalText(articleTheme, fallback: fallback.articleTheme, kind: .overviewTheme),
+            authorCoreQuestion: preferredPedagogicalText(
+                authorCoreQuestion,
+                fallback: fallback.authorCoreQuestion,
+                kind: .overviewQuestion
+            ),
+            progressionPath: preferredPedagogicalText(
+                progressionPath,
+                fallback: fallback.progressionPath,
+                kind: .overviewProgression
+            ),
+            paragraphFunctionMap: pedagogicalList(paragraphFunctionMap, fallback: fallback.paragraphFunctionMap, limit: 10),
+            syntaxHighlights: pedagogicalList(syntaxHighlights, fallback: fallback.syntaxHighlights, limit: 6),
+            readingTraps: pedagogicalList(readingTraps, fallback: fallback.readingTraps, limit: 6),
+            vocabularyHighlights: pedagogicalList(vocabularyHighlights, fallback: fallback.vocabularyHighlights, limit: 8)
+        )
+    }
+}
+
 struct DocumentZoningSummary: Equatable, Hashable {
     let passageParagraphCount: Int
     let questionParagraphCount: Int
@@ -731,25 +916,39 @@ struct StructuredSourceBundle: Equatable {
         paragraphCards: [ParagraphTeachingCard],
         sentenceCards: [ProfessorSentenceCard]
     ) -> StructuredSourceBundle {
-        // 段落卡：用 AI 版本替换匹配的段落，保留未覆盖的
         let aiParagraphIndex = Dictionary(
             paragraphCards.map { ($0.segmentID, $0) },
             uniquingKeysWith: { _, new in new }
         )
-        let mergedParagraphCards = self.paragraphTeachingCards.map { existing in
-            aiParagraphIndex[existing.segmentID] ?? existing
+        var mergedParagraphCards = self.paragraphTeachingCards.map { existing in
+            aiParagraphIndex[existing.segmentID]?.mergingFallback(existing) ?? existing
         }
+        let existingParagraphIDs = Set(mergedParagraphCards.map(\.segmentID))
+        mergedParagraphCards.append(
+            contentsOf: paragraphCards.filter { !existingParagraphIDs.contains($0.segmentID) }
+        )
+        mergedParagraphCards.sort { $0.paragraphIndex < $1.paragraphIndex }
 
-        // 句子卡：用 AI 版本替换匹配的句子，保留未覆盖的
         let aiSentenceIndex = Dictionary(
             sentenceCards.map { ($0.sentenceID, $0) },
             uniquingKeysWith: { _, new in new }
         )
-        let mergedSentenceCards = self.professorSentenceCards.map { existing in
-            aiSentenceIndex[existing.sentenceID] ?? existing
+        var mergedSentenceCards = self.professorSentenceCards.map { existing in
+            guard let aiCard = aiSentenceIndex[existing.sentenceID] else { return existing }
+            return ProfessorSentenceCard(
+                id: existing.id,
+                sentenceID: existing.sentenceID,
+                segmentID: existing.segmentID,
+                isKeySentence: existing.isKeySentence || aiCard.isKeySentence,
+                analysis: aiCard.analysis.mergingFallback(existing.analysis)
+            )
         }
+        let existingSentenceIDs = Set(mergedSentenceCards.map(\.sentenceID))
+        mergedSentenceCards.append(
+            contentsOf: sentenceCards.filter { !existingSentenceIDs.contains($0.sentenceID) }
+        )
+        mergedSentenceCards.sort { $0.sentenceID < $1.sentenceID }
 
-        // 重建教学树大纲，使用更新后的段落卡和句子卡内容
         let sentencesBySegment = Dictionary(
             grouping: sentences,
             by: { $0.segmentID }
@@ -764,7 +963,8 @@ struct StructuredSourceBundle: Equatable {
             sentencesBySegment: sentencesBySegment,
             paragraphCards: mergedParagraphCards,
             sentenceCardIndex: sentenceCardIndex,
-            overview: overview ?? passageOverview
+            overview: (overview?.mergingFallback(passageOverview)) ?? passageOverview,
+            questionLinks: questionLinks
         )
 
         return StructuredSourceBundle(
@@ -772,7 +972,7 @@ struct StructuredSourceBundle: Equatable {
             segments: segments,
             sentences: sentences,
             outline: mergedOutline,
-            passageOverview: overview ?? passageOverview,
+            passageOverview: (overview?.mergingFallback(passageOverview)) ?? passageOverview,
             paragraphTeachingCards: mergedParagraphCards,
             professorSentenceCards: mergedSentenceCards,
             questionLinks: questionLinks,
@@ -787,25 +987,65 @@ struct StructuredSourceBundle: Equatable {
         sentencesBySegment: [String: [Sentence]],
         paragraphCards: [ParagraphTeachingCard],
         sentenceCardIndex: [String: ProfessorSentenceCard],
-        overview: PassageOverview?
+        overview: PassageOverview?,
+        questionLinks: [QuestionEvidenceLink]
     ) -> [OutlineNode] {
+        let questionHintsBySegment = Dictionary(
+            grouping: questionLinks.flatMap { link in
+                link.supportParagraphIDs.map { ($0, link) }
+            },
+            by: { $0.0 }
+        )
+        let sentenceSegmentIndex = Dictionary(
+            uniqueKeysWithValues: sentencesBySegment.values
+                .flatMap { $0 }
+                .map { ($0.id, $0.segmentID) }
+        )
+
         let paragraphNodes: [OutlineNode] = paragraphCards.map { card in
             let sentences = sentencesBySegment[card.segmentID] ?? []
+            let linkedQuestions = (questionHintsBySegment[card.segmentID] ?? []).map(\.1)
+            let questionNodes = linkedQuestions.enumerated().map { offset, link in
+                let localSentenceIDs = link.supportingSentenceIDs.filter {
+                    sentenceSegmentIndex[$0] == card.segmentID
+                }
+                let anchorSentenceID = localSentenceIDs.first ?? card.coreSentenceID
+                return OutlineNode(
+                    id: "question_\(card.segmentID)_\(link.id)",
+                    sourceID: sourceID,
+                    parentID: "para_\(card.segmentID)",
+                    depth: 2,
+                    order: card.paragraphIndex * 100 + offset + 20,
+                    nodeType: .questionLink,
+                    title: "题目联动｜\(pedagogicalQuestionNodeTitle(link: link))",
+                    summary: pedagogicalQuestionNodeSummary(link: link),
+                    anchor: OutlineAnchor(
+                        segmentID: card.segmentID,
+                        sentenceID: anchorSentenceID,
+                        page: sentences.first?.page,
+                        label: card.anchorLabel
+                    ),
+                    sourceSegmentIDs: [card.segmentID],
+                    sourceSentenceIDs: localSentenceIDs,
+                    children: []
+                )
+            }
             let supportingSentenceNodes = sentences
                 .filter { sentence in
                     sentence.id == card.coreSentenceID || sentenceCardIndex[sentence.id]?.isKeySentence == true
                 }
                 .prefix(2)
                 .map { sentence in
-                    OutlineNode(
+                    let analysis = sentenceCardIndex[sentence.id]?.analysis
+                    return OutlineNode(
                         id: "support_\(sentence.id)",
                         sourceID: sourceID,
                         parentID: "para_\(card.segmentID)",
                         depth: 2,
                         order: sentence.index,
                         nodeType: .supportingSentence,
-                        title: String(sentence.text.prefix(60)),
-                        summary: sentenceCardIndex[sentence.id]?.analysis.sentenceCore ?? sentence.text,
+                        title: pedagogicalSentenceNodeTitle(sentence: sentence, analysis: analysis),
+                        summary: pedagogicalSentenceNodeSummary(sentence: sentence, analysis: analysis),
                         anchor: OutlineAnchor(
                             segmentID: sentence.segmentID,
                             sentenceID: sentence.id,
@@ -818,8 +1058,7 @@ struct StructuredSourceBundle: Equatable {
                     )
                 }
 
-            let focusSummary = card.teachingFocuses.joined(separator: "；")
-                .isEmpty ? card.examValue : card.teachingFocuses.joined(separator: "；")
+            let focusSummary = pedagogicalFocusSummary(card: card, linkedQuestions: linkedQuestions)
             let focusNode = OutlineNode(
                 id: "focus_\(card.segmentID)",
                 sourceID: sourceID,
@@ -827,7 +1066,7 @@ struct StructuredSourceBundle: Equatable {
                 depth: 2,
                 order: card.paragraphIndex * 10,
                 nodeType: .teachingFocus,
-                title: "教学重点",
+                title: pedagogicalFocusTitle(card: card),
                 summary: focusSummary,
                 anchor: OutlineAnchor(
                     segmentID: card.segmentID,
@@ -847,7 +1086,7 @@ struct StructuredSourceBundle: Equatable {
                 depth: 1,
                 order: card.paragraphIndex,
                 nodeType: .paragraphTheme,
-                title: "第\(card.paragraphIndex + 1)段：\(card.argumentRole.displayName)",
+                title: "第\(card.paragraphIndex + 1)段｜\(card.argumentRole.displayName)",
                 summary: card.theme,
                 anchor: OutlineAnchor(
                     segmentID: card.segmentID,
@@ -857,7 +1096,7 @@ struct StructuredSourceBundle: Equatable {
                 ),
                 sourceSegmentIDs: [card.segmentID],
                 sourceSentenceIDs: sentences.map(\.id),
-                children: [focusNode] + supportingSentenceNodes
+                children: [focusNode] + questionNodes + supportingSentenceNodes
             )
         }
 
@@ -868,8 +1107,8 @@ struct StructuredSourceBundle: Equatable {
             depth: 0,
             order: 0,
             nodeType: .passageRoot,
-            title: "文章主题",
-            summary: overview?.progressionPath ?? "正文教学树",
+            title: "文章主题与问题意识",
+            summary: pedagogicalRootSummary(overview: overview),
             anchor: OutlineAnchor(
                 segmentID: segments.first?.id,
                 sentenceID: nil,
@@ -882,6 +1121,114 @@ struct StructuredSourceBundle: Equatable {
         )
 
         return [rootNode]
+    }
+
+    private static func pedagogicalRootSummary(overview: PassageOverview?) -> String {
+        guard let overview else { return "正文教学树" }
+        let theme = trimmedOrEmpty(overview.articleTheme)
+        let question = trimmedOrEmpty(overview.authorCoreQuestion)
+        let progression = trimmedOrEmpty(overview.progressionPath)
+
+        return [theme, question, progression]
+            .filter { !$0.isEmpty }
+            .joined(separator: "｜")
+            .isEmpty ? "正文教学树" : [theme, question, progression]
+                .filter { !$0.isEmpty }
+                .joined(separator: "｜")
+    }
+
+    private static func pedagogicalFocusTitle(card: ParagraphTeachingCard) -> String {
+        if let first = card.teachingFocuses.first, !trimmedOrEmpty(first).isEmpty {
+            return "教学重点｜\(trimmedOrEmpty(first))"
+        }
+        return "教学重点"
+    }
+
+    private static func pedagogicalFocusSummary(
+        card: ParagraphTeachingCard,
+        linkedQuestions: [QuestionEvidenceLink]
+    ) -> String {
+        var parts = pedagogicalList(card.teachingFocuses, fallback: [], limit: 3)
+
+        if let blindSpot = card.studentBlindSpot {
+            parts.append("易偏点：\(trimmedOrEmpty(blindSpot))")
+        }
+
+        if let firstQuestion = linkedQuestions.first {
+            let evidence = trimmedOrEmpty(firstQuestion.paraphraseEvidence.first ?? "")
+            let trap = trimmedOrEmpty(firstQuestion.trapType)
+            let questionHint = [trap, evidence].filter { !$0.isEmpty }.joined(separator: "｜")
+            if !questionHint.isEmpty {
+                parts.append("对应考点：\(questionHint)")
+            }
+        }
+
+        if parts.isEmpty {
+            parts.append(card.examValue)
+        }
+
+        return pedagogicalList(parts, fallback: [card.examValue], limit: 4).joined(separator: "；")
+    }
+
+    private static func pedagogicalSentenceNodeTitle(
+        sentence: Sentence,
+        analysis: ProfessorSentenceAnalysis?
+    ) -> String {
+        if let analysis {
+            let core = trimmedOrEmpty(analysis.sentenceCore)
+            if !core.isEmpty {
+                return core
+            }
+        }
+        return String(sentence.text.prefix(60))
+    }
+
+    private static func pedagogicalSentenceNodeSummary(
+        sentence: Sentence,
+        analysis: ProfessorSentenceAnalysis?
+    ) -> String {
+        guard let analysis else { return sentence.text }
+
+        let parts = [
+            trimmedOrEmpty(analysis.naturalChineseMeaning),
+            trimmedOrEmpty(analysis.misreadPoints.first ?? ""),
+            trimmedOrEmpty(analysis.examRewritePoints.first ?? "")
+        ].filter { !$0.isEmpty }
+
+        return parts.isEmpty ? sentence.text : parts.joined(separator: "｜")
+    }
+
+    private static func pedagogicalQuestionNodeTitle(link: QuestionEvidenceLink) -> String {
+        let trap = trimmedOrEmpty(link.trapType)
+        if !trap.isEmpty {
+            return trap
+        }
+
+        return trimmedOrEmpty(link.questionText)
+            .split(separator: "\n")
+            .first
+            .map(String.init)?
+            .prefix(18)
+            .description ?? "考题证据"
+    }
+
+    private static func pedagogicalQuestionNodeSummary(link: QuestionEvidenceLink) -> String {
+        var parts: [String] = []
+        let question = trimmedOrEmpty(link.questionText)
+        let evidence = trimmedOrEmpty(link.paraphraseEvidence.first ?? "")
+        let answerKey = trimmedOrEmpty(link.answerKeySnippet ?? "")
+
+        if !question.isEmpty {
+            parts.append("题干：\(question)")
+        }
+        if !evidence.isEmpty {
+            parts.append("证据：\(evidence)")
+        }
+        if !answerKey.isEmpty {
+            parts.append("答案线索：\(answerKey)")
+        }
+
+        return parts.joined(separator: "｜")
     }
 
     /// 带深度限制的安全展平，防止循环引用导致无限递归

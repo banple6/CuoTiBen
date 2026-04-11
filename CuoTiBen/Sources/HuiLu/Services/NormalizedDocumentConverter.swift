@@ -137,7 +137,8 @@ enum NormalizedDocumentConverter {
             sentencesBySegment: sentencesBySegment,
             paragraphCards: paragraphCards,
             sentenceCards: sentenceCards,
-            overview: overview
+            overview: overview,
+            questionLinks: questionLinks
         )
 
         let zoningSummary = DocumentZoningSummary(
@@ -380,9 +381,14 @@ enum NormalizedDocumentConverter {
                 originalSentence: sentence.text,
                 naturalChineseMeaning: buildNaturalChineseMeaning(
                     sentence: sentence.text,
-                    paragraphCard: paragraphCard
+                    paragraphCard: paragraphCard,
+                    coreClause: coreClause,
+                    chunks: chunks
                 ),
-                sentenceCore: "先抓主干：\(coreClause)",
+                sentenceCore: buildSentenceCoreDescription(
+                    sentence: sentence.text,
+                    coreClause: coreClause
+                ),
                 chunkBreakdown: chunks,
                 grammarPoints: grammarPoints,
                 vocabularyInContext: vocabulary,
@@ -474,30 +480,42 @@ enum NormalizedDocumentConverter {
     ) -> PassageOverview? {
         guard !paragraphCards.isEmpty else { return nil }
 
-        let themeSource = shortFocusText(from: title.nonEmpty ?? paragraphCards.first?.theme ?? "the passage")
-        let articleTheme = "文章核心围绕“\(themeSource)”展开，重点不是零散事实，而是作者怎样一步步推进判断。"
-        let authorCoreQuestion = "作者真正要回答的问题可以概括为：围绕“\(themeSource)”这一议题，读者应当如何理解其原因、证据与结论。"
+        let openingTheme = paragraphCards.first?.theme.nonEmpty ?? title.nonEmpty ?? "文章核心议题"
+        let landingTheme = paragraphCards.last?.theme.nonEmpty ?? openingTheme
+        let articleTheme = "本文真正讨论的不是零散信息，而是“\(openingTheme)”这一议题如何一步步被论证，并最终落到“\(landingTheme)”这一判断上。"
+        let authorCoreQuestion = "作者真正追问的是：围绕“\(shortFocusText(from: title.nonEmpty ?? openingTheme))”这个议题，哪些只是背景和例证，哪些才构成最后应抓住的判断？"
         let progressionPath = paragraphCards
-            .map { "第\($0.paragraphIndex + 1)段用\($0.argumentRole.displayName)推进：\($0.theme)" }
+            .map { card in
+                "第\(card.paragraphIndex + 1)段先用\(card.argumentRole.displayName)处理“\(shortFocusText(from: card.theme))”"
+            }
             .joined(separator: " → ")
         let paragraphFunctionMap = paragraphCards.map {
-            "第\($0.paragraphIndex + 1)段｜\($0.argumentRole.displayName)｜\($0.theme)"
+            "第\($0.paragraphIndex + 1)段｜\($0.argumentRole.displayName)｜\(shortSnippet(from: $0.theme))"
         }
-        let grammarNames = sentenceCards.reduce(into: [String]()) { partialResult, card in
-            partialResult.append(contentsOf: card.analysis.grammarPoints.map(\.name))
-        }
-        let misreadPoints = sentenceCards.reduce(into: [String]()) { partialResult, card in
-            partialResult.append(contentsOf: card.analysis.misreadPoints)
-        }
-        let syntaxHighlights = NSOrderedSet(
-            array: grammarNames
-        ).array.compactMap { $0 as? String }.prefix(5).map { $0 }
-        let readingTraps = NSOrderedSet(
-            array: questionLinks.map(\.trapType) + misreadPoints
-        ).array.compactMap { $0 as? String }.filter { !$0.isEmpty }.prefix(5).map { $0 }
-        let vocabularyHighlights = NSOrderedSet(
-            array: paragraphCards.flatMap(\.keywords)
-        ).array.compactMap { $0 as? String }.prefix(5).map { $0 }
+        let syntaxHighlights = uniqueStrings(
+            from: sentenceCards.flatMap { card in
+                card.analysis.grammarPoints.map { point in
+                    let explanation = shortSnippet(from: point.explanation)
+                    return explanation.isEmpty ? point.name : "\(point.name)：\(explanation)"
+                }
+            },
+            limit: 5
+        )
+        let readingTraps = uniqueStrings(
+            from: questionLinks.map(\.trapType)
+                + paragraphCards.compactMap(\.studentBlindSpot)
+                + sentenceCards.compactMap { $0.analysis.misreadPoints.first },
+            limit: 5
+        )
+        let vocabularyHighlights = uniqueStrings(
+            from: sentenceCards.flatMap { card in
+                card.analysis.vocabularyInContext.map { item in
+                    let meaning = item.meaning.nonEmpty ?? "需结合上下文判断"
+                    return "\(item.term)：\(meaning)"
+                }
+            } + paragraphCards.flatMap(\.keywords),
+            limit: 6
+        )
 
         return PassageOverview(
             articleTheme: articleTheme,
@@ -516,12 +534,50 @@ enum NormalizedDocumentConverter {
         sentencesBySegment: [String: [Sentence]],
         paragraphCards: [ParagraphTeachingCard],
         sentenceCards: [ProfessorSentenceCard],
-        overview: PassageOverview?
+        overview: PassageOverview?,
+        questionLinks: [QuestionEvidenceLink]
     ) -> [OutlineNode] {
         let sentenceCardIndex = Dictionary(uniqueKeysWithValues: sentenceCards.map { ($0.sentenceID, $0) })
+        let linkedQuestionsBySegment = Dictionary(
+            grouping: questionLinks.flatMap { link in
+                link.supportParagraphIDs.map { ($0, link) }
+            },
+            by: { $0.0 }
+        )
+        let sentenceSegmentIndex = Dictionary(
+            uniqueKeysWithValues: sentencesBySegment.values
+                .flatMap { $0 }
+                .map { ($0.id, $0.segmentID) }
+        )
 
         let paragraphNodes: [OutlineNode] = paragraphCards.map { card in
             let sentences = sentencesBySegment[card.segmentID] ?? []
+            let linkedQuestions = (linkedQuestionsBySegment[card.segmentID] ?? []).map(\.1)
+            let questionNodes = linkedQuestions.enumerated().map { offset, link in
+                let localSentenceIDs = link.supportingSentenceIDs.filter {
+                    sentenceSegmentIndex[$0] == card.segmentID
+                }
+                let anchorSentenceID = localSentenceIDs.first ?? card.coreSentenceID
+                return OutlineNode(
+                    id: "question_\(card.segmentID)_\(link.id)",
+                    sourceID: sourceID,
+                    parentID: "para_\(card.segmentID)",
+                    depth: 2,
+                    order: card.paragraphIndex * 100 + offset + 20,
+                    nodeType: .questionLink,
+                    title: "题目联动｜\(teachingQuestionNodeTitle(link: link))",
+                    summary: teachingQuestionNodeSummary(link: link),
+                    anchor: OutlineAnchor(
+                        segmentID: card.segmentID,
+                        sentenceID: anchorSentenceID,
+                        page: sentences.first?.page,
+                        label: card.anchorLabel
+                    ),
+                    sourceSegmentIDs: [card.segmentID],
+                    sourceSentenceIDs: localSentenceIDs,
+                    children: []
+                )
+            }
             let supportingSentenceNodes = sentences
                 .filter { sentence in
                     sentence.id == card.coreSentenceID || sentenceCardIndex[sentence.id]?.isKeySentence == true
@@ -529,15 +585,16 @@ enum NormalizedDocumentConverter {
                 .prefix(maxOutlineSupportingSentences)
                 .enumerated()
                 .map { _, sentence in
-                    OutlineNode(
+                    let analysis = sentenceCardIndex[sentence.id]?.analysis
+                    return OutlineNode(
                         id: "support_\(sentence.id)",
                         sourceID: sourceID,
                         parentID: "para_\(card.segmentID)",
                         depth: 2,
                         order: sentence.index,
                         nodeType: .supportingSentence,
-                        title: shortFocusText(from: sentence.text),
-                        summary: sentenceCardIndex[sentence.id]?.analysis.sentenceCore ?? sentence.text,
+                        title: analysis?.sentenceCore.nonEmpty ?? shortFocusText(from: sentence.text),
+                        summary: teachingSentenceSummary(analysis: analysis, sentence: sentence.text),
                         anchor: OutlineAnchor(
                             segmentID: sentence.segmentID,
                             sentenceID: sentence.id,
@@ -550,7 +607,7 @@ enum NormalizedDocumentConverter {
                     )
                 }
 
-            let focusSummary = card.teachingFocuses.joined(separator: "；").nonEmpty ?? card.examValue
+            let focusSummary = teachingFocusSummary(card: card, linkedQuestions: linkedQuestions)
             let focusNode = OutlineNode(
                 id: "focus_\(card.segmentID)",
                 sourceID: sourceID,
@@ -558,7 +615,7 @@ enum NormalizedDocumentConverter {
                 depth: 2,
                 order: card.paragraphIndex * 10,
                 nodeType: .teachingFocus,
-                title: "教学重点",
+                title: card.teachingFocuses.first.map { "教学重点｜\($0)" } ?? "教学重点",
                 summary: focusSummary,
                 anchor: OutlineAnchor(
                     segmentID: card.segmentID,
@@ -578,7 +635,7 @@ enum NormalizedDocumentConverter {
                 depth: 1,
                 order: card.paragraphIndex,
                 nodeType: .paragraphTheme,
-                title: "第\(card.paragraphIndex + 1)段：\(card.argumentRole.displayName)",
+                title: "第\(card.paragraphIndex + 1)段｜\(card.argumentRole.displayName)",
                 summary: card.theme,
                 anchor: OutlineAnchor(
                     segmentID: card.segmentID,
@@ -588,7 +645,7 @@ enum NormalizedDocumentConverter {
                 ),
                 sourceSegmentIDs: [card.segmentID],
                 sourceSentenceIDs: sentences.map(\.id),
-                children: [focusNode] + supportingSentenceNodes
+                children: [focusNode] + questionNodes + supportingSentenceNodes
             )
         }
 
@@ -599,8 +656,11 @@ enum NormalizedDocumentConverter {
             depth: 0,
             order: 0,
             nodeType: .passageRoot,
-            title: "文章主题",
-            summary: overview?.progressionPath ?? "正文教学树",
+            title: "文章主题与问题意识",
+            summary: [overview?.articleTheme, overview?.authorCoreQuestion, overview?.progressionPath]
+                .compactMap { $0?.nonEmpty }
+                .joined(separator: "｜")
+                .nonEmpty ?? "正文教学树",
             anchor: OutlineAnchor(
                 segmentID: segments.first?.id,
                 sentenceID: segments.first.flatMap { sentencesBySegment[$0.id]?.first?.id },
@@ -720,39 +780,39 @@ enum NormalizedDocumentConverter {
         currentIndex: Int
     ) -> String {
         guard currentIndex > 0 else {
-            return "首段先搭建阅读场景，提醒学生先抓主题问题而不是急着抠细节。"
+            return "首段先把阅读问题立起来，先看作者把你带进了什么议题，再决定哪些细节值得记。"
         }
 
         switch currentRole {
         case .background:
-            return "这一段回到背景层，作用是给后文论证提供理解前提。"
+            return "这一段把讨论往背景层拉回去，作用是补足理解前提，而不是直接给新结论。"
         case .support:
-            return "这一段不是另起炉灶，而是在上一段基础上继续补足论据。"
+            return "这一段不是另起话题，而是在上一段判断上继续加理由或加限制。"
         case .objection:
-            return "这一段往往意味着真正重点出现，读题时要警惕转折后的信息。"
+            return "这一段开始出现让步或转折，真正可作答的信息通常落在转折之后。"
         case .transition:
-            return "这一段承担承上启下功能，帮助学生看清作者论证如何换挡。"
+            return "这一段在帮作者换挡，要看清讨论是从背景转到判断，还是从观点转到例证。"
         case .evidence:
-            return "这一段把抽象观点落到例证或细节，适合做定位与同义替换训练。"
+            return "这一段把上一层抽象判断落到例证或细节，做题时要把例子重新挂回它支撑的判断。"
         case .conclusion:
-            return "这一段负责收束全文，通常与主旨题、标题题和态度题高度相关。"
+            return "这一段开始收束全文，前面分散的信息会在这里并到可用于主旨和态度判断的结论上。"
         }
     }
 
     private static func examValue(for role: ParagraphArgumentRole) -> String {
         switch role {
         case .background:
-            return "常见于主旨题的铺垫背景，也可能为细节题提供前提条件。"
+            return "最常见的价值是给主旨题和细节题提供前提范围；错误选项常把背景信息硬说成作者结论。"
         case .support:
-            return "常见于细节理解题、观点支持题和同义改写定位题。"
+            return "最常对应细节理解题、观点支持题和同义改写定位题；陷阱在于只记细节，不回主判断。"
         case .objection:
-            return "常见于转折后重点、态度判断题和是非反向陷阱。"
+            return "最常对应转折后重点、态度判断题和反向陷阱；错误选项喜欢把让步内容伪装成立场。"
         case .transition:
-            return "常见于段落关系题、写作思路题和结构判断题。"
+            return "最常对应段落关系题、写作思路题和结构判断题；难点在于看不出作者讨论层级的切换。"
         case .evidence:
-            return "常见于例证作用题、数据细节题和论据定位题。"
+            return "最常对应例证作用题、数据细节题和论据定位题；命题人常把例子本身和它证明的判断混在一起。"
         case .conclusion:
-            return "常见于主旨题、标题题和作者结论态度题。"
+            return "最常对应主旨题、标题题和作者结论态度题；做题时要警惕把局部细节误提升成全文结论。"
         }
     }
 
@@ -761,29 +821,34 @@ enum NormalizedDocumentConverter {
         coreSentence: Sentence?,
         paragraphText: String
     ) -> [String] {
-        let grammarNames = detectGrammarPoints(
-            in: coreSentence?.text ?? paragraphText,
-            coreClause: extractCoreClause(from: coreSentence?.text ?? paragraphText, chunks: chunkSentence(coreSentence?.text ?? paragraphText))
-        ).map(\.name)
+        let baseSentence = coreSentence?.text ?? paragraphText
+        let chunks = chunkSentence(baseSentence)
+        let coreClause = extractCoreClause(from: baseSentence, chunks: chunks)
+        let grammarPoints = detectGrammarPoints(
+            in: baseSentence,
+            coreClause: coreClause
+        )
         var focuses: [String] = []
+
+        focuses.append("先把本段核心句的主干锁定为“\(shortSnippet(from: coreClause))”，再看其余句子如何围着这层判断补背景、补原因或补例证。")
+
+        if let firstGrammar = grammarPoints.first {
+            focuses.append("\(firstGrammar.name)是本段最该先拆开的结构，因为它直接决定修饰范围；这里一旦读偏，整段主旨就会被带偏。")
+        }
 
         switch paragraphRole {
         case .background:
-            focuses.append("先判断作者是在铺背景还是正式下判断，避免把背景信息误当主旨。")
+            focuses.append("先分清这是背景铺垫还是作者判断；如果把场景说明直接当答案，主旨题和细节题都会偏掉。")
         case .support:
-            focuses.append("本段要先抓中心句，再看其余句子如何补证，不要平均用力。")
+            focuses.append("这段是在给核心判断补理由；做题时要把细节重新挂回主判断，而不是零散记住信息点。")
         case .objection:
-            focuses.append("遇到转折词要重新定位主句，真正观点往往落在后半句。")
+            focuses.append("转折/让步段最容易误判，真正立场常落在 but / however 之后，前半句多半只是铺垫或让步。")
         case .transition:
-            focuses.append("承接段重点是看逻辑推进，而不是孤立翻译单句。")
+            focuses.append("承接段要看作者怎样换挡；它通常不是给新事实，而是在把讨论从上一层推进到下一层。")
         case .evidence:
-            focuses.append("例证段不要只记例子，要回到它到底在支撑哪一个判断。")
+            focuses.append("例证段的重点不是例子本身，而是它究竟在替哪一个判断作证；这正是阅读题最爱改写的地方。")
         case .conclusion:
-            focuses.append("结论段要和首段照应着读，常对应主旨和态度题。")
-        }
-
-        if let firstGrammar = grammarNames.first {
-            focuses.append("句法上优先处理“\(firstGrammar)”这一层，否则容易看错修饰范围。")
+            focuses.append("结论段要和首段一起看，它往往把前文分散信息收束成主旨题、标题题和态度题可直接使用的判断。")
         }
 
         return Array(focuses.prefix(3))
@@ -1077,33 +1142,29 @@ enum NormalizedDocumentConverter {
 
     private static func buildNaturalChineseMeaning(
         sentence: String,
-        paragraphCard: ParagraphTeachingCard?
+        paragraphCard: ParagraphTeachingCard?,
+        coreClause: String,
+        chunks: [String]
     ) -> String {
         let lower = sentence.lowercased()
-        let focus = shortFocusText(from: sentence)
-        var hints: [String] = []
+        let focus = shortSnippet(from: coreClause)
 
-        // Detect sentence structure patterns for more specific guidance
-        if lower.contains("not ") && (lower.contains("but ") || lower.contains("rather ")) {
-            hints.append("\u{8FD9}\u{662F}\u{201C}\u{4E0D}\u{662F}A\u{800C}\u{662F}B\u{201D}\u{7684}\u{90E8}\u{5206}\u{5426}\u{5B9A}\u{7ED3}\u{6784}")
+        if lower.hasPrefix("although") || lower.hasPrefix("though") || lower.contains(" even though ") {
+            return "这句话真正的意思是：前面先承认一种情况，但作者最后真正成立的判断落在“\(focus)”这一层。"
         }
-        if lower.contains("although") || lower.contains("though") || lower.contains("even if") {
-            hints.append("\u{5148}\u{8BA9}\u{6B65}\u{518D}\u{8F6C}\u{6298}\u{FF0C}\u{91CD}\u{70B9}\u{5728}\u{8F6C}\u{6298}\u{540E}")
+        if lower.contains("however") || lower.contains(" but ") || lower.contains(" yet ") {
+            return "这句话自然读成中文时，要把转折后的“\(focus)”当成真正重点，前面的内容更多是在铺垫或对比。"
         }
-        if lower.contains("however") || lower.contains("yet ") || lower.contains("but ") {
-            hints.append("\u{8F6C}\u{6298}\u{540E}\u{624D}\u{662F}\u{4F5C}\u{8005}\u{7684}\u{771F}\u{6B63}\u{7ACB}\u{573A}")
+        if lower.contains("because") || lower.contains("therefore") || lower.contains("thus") {
+            return "这句话是在说明因果链条：核心判断落在“\(focus)”这一块，其他语块是在交代原因、结果或推导依据。"
         }
-        if sentence.count > 120 {
-            hints.append("\u{957F}\u{53E5}\u{FF0C}\u{5148}\u{627E}\u{4E3B}\u{5E72}\u{518D}\u{8865}\u{5145}\u{7EC6}\u{8282}")
+        if chunks.count >= 3 {
+            return "这句话的自然意思不是逐词平移，而是先成立主句“\(focus)”，再把其余语块当成条件、限定或补充说明依次加回去。"
         }
-
-        let hintTag = hints.isEmpty ? "" : "\u{FF08}\(hints.joined(separator: "\u{FF0C}"))\u{FF09}"
-
         if let card = paragraphCard {
-            let roleHint = card.argumentRole.displayName
-            return "\u{8FD9}\u{53E5}\u{8BDD}\u{670D}\u{52A1}\u{4E8E}\u{672C}\u{6BB5}\u{201C}\(card.theme)\u{201D}\u{FF0C}\u{627F}\u{62C5}\(roleHint)\u{529F}\u{80FD}\u{3002}\u{6838}\u{5FC3}\u{610F}\u{601D}\u{662F}\u{56F4}\u{7ED5}\u{201C}\(focus)\u{201D}\u{63A8}\u{8FDB}\u{8BBA}\u{8BC1}\u{3002}\(hintTag)"
+            return "这句话真正在替本段说明的是：\(card.theme)；其中最该先抓住的判断落在“\(focus)”这一层。"
         }
-        return "\u{8FD9}\u{53E5}\u{8BDD}\u{7684}\u{6838}\u{5FC3}\u{5224}\u{65AD}\u{843D}\u{5728}\u{201C}\(focus)\u{201D}\u{FF0C}\u{4E0D}\u{8981}\u{5E73}\u{5747}\u{7FFB}\u{8BD1}\u{6BCF}\u{4E2A}\u{8BCD}\u{3002}\(hintTag)"
+        return "这句话真正想说的是“\(focus)”；其余成分只是帮助你把范围、条件和修饰关系补全。"
     }
 
     private static func buildMiniExercise(
@@ -1150,6 +1211,143 @@ enum NormalizedDocumentConverter {
         let supporting = chunks.filter { $0 != coreClause }
         guard !supporting.isEmpty else { return coreClause }
         return "In simpler syntax: \(coreClause), and the rest of the sentence mainly adds \(supporting.prefix(2).joined(separator: " / "))."
+    }
+
+    private static func buildSentenceCoreDescription(
+        sentence: String,
+        coreClause: String
+    ) -> String {
+        let components = extractCoreComponents(from: coreClause)
+
+        if let subject = components.subject?.nonEmpty,
+           let predicate = components.predicate?.nonEmpty {
+            if let complement = components.complement?.nonEmpty {
+                return "主语是 \(subject)，谓语核心是 \(predicate)，后面的 \(complement) 是主句要成立的核心补足信息。"
+            }
+            return "主语是 \(subject)，谓语核心是 \(predicate)。先把这层主干读稳，再回去补其他修饰。"
+        }
+
+        return "主句最核心的判断落在“\(shortSnippet(from: coreClause))”这一块，别把前后的修饰语误当成真正主干。"
+    }
+
+    private static func extractCoreComponents(
+        from clause: String
+    ) -> (subject: String?, predicate: String?, complement: String?) {
+        let rawTokens = clause
+            .replacingOccurrences(of: "—", with: " ")
+            .replacingOccurrences(of: "–", with: " ")
+            .split(whereSeparator: \.isWhitespace)
+            .map { token in
+                token.trimmingCharacters(in: CharacterSet.punctuationCharacters)
+            }
+            .filter { !$0.isEmpty }
+
+        guard rawTokens.count >= 2 else {
+            return (nil, nil, nil)
+        }
+
+        let auxiliaries: Set<String> = [
+            "am", "is", "are", "was", "were", "be", "been", "being",
+            "do", "does", "did", "have", "has", "had",
+            "can", "could", "may", "might", "must", "shall",
+            "should", "will", "would", "seem", "seems", "appears",
+            "appear", "remains", "remain", "became", "become",
+            "becomes", "means", "mean", "suggests", "suggest",
+            "shows", "show", "argues", "argue", "indicates", "indicate",
+            "helps", "help", "leads", "lead", "allows", "allow"
+        ]
+
+        let predicateIndex = rawTokens.enumerated().first { index, token in
+            guard index > 0 else { return false }
+            let lower = token.lowercased()
+            if auxiliaries.contains(lower) {
+                return true
+            }
+            if lower.hasSuffix("ed") || lower.hasSuffix("ing") {
+                return true
+            }
+            return false
+        }?.offset
+
+        guard let predicateIndex else {
+            return (nil, nil, nil)
+        }
+
+        let subject = rawTokens.prefix(predicateIndex).joined(separator: " ")
+        let predicate = rawTokens[predicateIndex]
+        let complementTokens = Array(rawTokens.dropFirst(predicateIndex + 1).prefix(8))
+        let complement = complementTokens.joined(separator: " ")
+        return (
+            subject.isEmpty ? nil : subject,
+            predicate.isEmpty ? nil : predicate,
+            complement.isEmpty ? nil : complement
+        )
+    }
+
+    private static func teachingSentenceSummary(
+        analysis: ProfessorSentenceAnalysis?,
+        sentence: String
+    ) -> String {
+        guard let analysis else { return sentence }
+
+        let items = [
+            analysis.naturalChineseMeaning.nonEmpty,
+            analysis.misreadPoints.first?.nonEmpty,
+            analysis.examRewritePoints.first?.nonEmpty
+        ]
+            .compactMap { $0 }
+
+        return items.isEmpty ? sentence : items.joined(separator: "｜")
+    }
+
+    private static func teachingQuestionNodeTitle(link: QuestionEvidenceLink) -> String {
+        if let trap = link.trapType.nonEmpty {
+            return trap
+        }
+
+        return shortSnippet(from: link.questionText)
+    }
+
+    private static func teachingQuestionNodeSummary(link: QuestionEvidenceLink) -> String {
+        var parts: [String] = []
+
+        if let question = link.questionText.nonEmpty {
+            parts.append("题干：\(question)")
+        }
+        if let evidence = link.paraphraseEvidence.first?.nonEmpty {
+            parts.append("证据：\(evidence)")
+        }
+        if let answerKey = link.answerKeySnippet?.nonEmpty {
+            parts.append("答案线索：\(answerKey)")
+        }
+
+        return uniqueStrings(from: parts, limit: 3).joined(separator: "｜")
+    }
+
+    private static func teachingFocusSummary(
+        card: ParagraphTeachingCard,
+        linkedQuestions: [QuestionEvidenceLink]
+    ) -> String {
+        var parts = card.teachingFocuses
+
+        if let blindSpot = card.studentBlindSpot?.nonEmpty {
+            parts.append("易偏点：\(blindSpot)")
+        }
+
+        if let linkedQuestion = linkedQuestions.first {
+            let evidence = linkedQuestion.paraphraseEvidence.first?.nonEmpty ?? ""
+            let trap = linkedQuestion.trapType.nonEmpty ?? ""
+            let merged = [trap, evidence].filter { !$0.isEmpty }.joined(separator: "｜")
+            if !merged.isEmpty {
+                parts.append("对应考点：\(merged)")
+            }
+        }
+
+        if parts.isEmpty {
+            parts.append(card.examValue)
+        }
+
+        return uniqueStrings(from: parts, limit: 4).joined(separator: "；")
     }
 
     private static func buildParaphraseEvidence(
@@ -1257,6 +1455,24 @@ enum NormalizedDocumentConverter {
         Array(normalizedTokens(from: text).prefix(limit))
     }
 
+    private static func uniqueStrings(from values: [String], limit: Int) -> [String] {
+        var ordered: [String] = []
+        var seen: Set<String> = []
+
+        for value in values {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let key = trimmed.lowercased()
+            guard seen.insert(key).inserted else { continue }
+            ordered.append(trimmed)
+            if ordered.count >= limit {
+                break
+            }
+        }
+
+        return ordered
+    }
+
     // MARK: - Professor-grade paragraph helpers
 
     private static func buildParagraphTheme(
@@ -1266,21 +1482,19 @@ enum NormalizedDocumentConverter {
         index: Int
     ) -> String {
         let focus = shortFocusText(from: coreSentenceText ?? text)
-        let paraNum = index + 1
-
         switch role {
         case .support:
-            return "\u{7B2C}\(paraNum)\u{6BB5}\u{627F}\u{62C5}\u{201C}\u{89C2}\u{70B9}\u{652F}\u{6491}\u{201D}\u{4F5C}\u{7528}\u{FF0C}\u{56F4}\u{7ED5}\u{201C}\(focus)\u{201D}\u{7EE7}\u{7EED}\u{63A8}\u{8FDB}\u{8BBA}\u{8BC1}\u{FF0C}\u{4E0D}\u{8981}\u{53EA}\u{770B}\u{96F6}\u{6563}\u{7EC6}\u{8282}\u{3002}"
+            return "这段真正推进的是“\(focus)”这层判断；其余句子都在为它补理由、补范围或补说明。"
         case .evidence:
-            return "\u{7B2C}\(paraNum)\u{6BB5}\u{662F}\u{4E3E}\u{8BC1}\u{6BB5}\u{FF0C}\u{7528}\u{5177}\u{4F53}\u{4E8B}\u{5B9E}\u{6216}\u{6570}\u{636E}\u{652F}\u{6491}\u{201C}\(focus)\u{201D}\u{FF0C}\u{547D}\u{9898}\u{4EBA}\u{5E38}\u{628A}\u{4F8B}\u{5B50}\u{7EC6}\u{8282}\u{5305}\u{88C5}\u{6210}\u{5E72}\u{6270}\u{9879}\u{3002}"
+            return "这段拿例子或数据把“\(focus)”落到实处，重点不是记材料本身，而是看它究竟支撑哪一个判断。"
         case .transition:
-            return "\u{7B2C}\(paraNum)\u{6BB5}\u{662F}\u{8FC7}\u{6E21}\u{201C}\(focus)\u{201D}\u{FF0C}\u{8D77}\u{627F}\u{4E0A}\u{542F}\u{4E0B}\u{4F5C}\u{7528}\u{FF0C}\u{6CE8}\u{610F}\u{8F6C}\u{6298}\u{8BCD}\u{540E}\u{624D}\u{662F}\u{771F}\u{6B63}\u{7684}\u{8BBA}\u{70B9}\u{65B9}\u{5411}\u{3002}"
+            return "这段把讨论推进到“\(focus)”这一层，关键价值在于告诉你作者的论证方向是怎样切换的。"
         case .objection:
-            return "\u{7B2C}\(paraNum)\u{6BB5}\u{662F}\u{8BA9}\u{6B65}\u{6BB5}\u{FF0C}\u{5148}\u{627F}\u{8BA4}\u{201C}\(focus)\u{201D}\u{FF0C}\u{4F46}\u{4F5C}\u{8005}\u{771F}\u{6B63}\u{60F3}\u{8BF4}\u{7684}\u{5728}\u{540E}\u{9762}\u{2014}\u{2014}\u{505A}\u{9898}\u{5207}\u{52FF}\u{628A}\u{8BA9}\u{6B65}\u{5185}\u{5BB9}\u{5F53}\u{4F5C}\u{8005}\u{89C2}\u{70B9}\u{3002}"
+            return "这段先承认一种看法，再把真正立场转到“\(focus)”上；读题时不能把让步内容错当作者结论。"
         case .conclusion:
-            return "\u{7B2C}\(paraNum)\u{6BB5}\u{662F}\u{603B}\u{7ED3}\u{FF0C}\u{56DE}\u{6536}\u{201C}\(focus)\u{201D}\u{8FD9}\u{4E00}\u{89C2}\u{70B9}\u{FF0C}\u{8003}\u{9898}\u{4E2D}\u{7684} main idea / purpose \u{9898}\u{8981}\u{5728}\u{8FD9}\u{91CC}\u{627E}\u{7EBF}\u{7D22}\u{3002}"
+            return "这段把前文分散信息收束到“\(focus)”这一结论上，是主旨题、标题题和态度题最值得回看的位置。"
         case .background:
-            return "\u{7B2C}\(paraNum)\u{6BB5}\u{63D0}\u{4F9B}\u{80CC}\u{666F}\u{FF0C}\u{56F4}\u{7ED5}\u{201C}\(focus)\u{201D}\u{94FA}\u{57AB}\u{FF0C}\u{5B83}\u{672C}\u{8EAB}\u{4E0D}\u{662F}\u{8BBA}\u{70B9}\u{FF0C}\u{4F46}\u{573A}\u{666F}\u{8BBE}\u{5B9A}\u{5F71}\u{54CD}\u{540E}\u{7EED}\u{8BBA}\u{8BC1}\u{65B9}\u{5411}\u{3002}"
+            return "这段先交代理解“\(focus)”所需的背景或问题场景；它未必直接给结论，但决定了后文该从什么角度读。"
         }
     }
 

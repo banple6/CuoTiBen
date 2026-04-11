@@ -55,17 +55,32 @@ struct AIExplainSentenceResult: Equatable {
     }
 
     init(sourceSentence: String, dictionary: [String: Any]) {
-        let rewriteExample = Self.firstString(in: dictionary, keys: ["simplified_english", "rewrite_example"])
-        let explicitExamRewritePoints = Self.stringArray(in: dictionary, keys: ["exam_rewrite_points"])
+        let hasProfessorPayload = Self.hasProfessorFieldCoverage(dictionary)
+        let rewriteExample = Self.firstString(
+            in: dictionary,
+            keys: hasProfessorPayload
+                ? ["simplified_english", "simpler_rewrite"]
+                : ["simplified_english", "simpler_rewrite", "rewrite_example"]
+        )
+        let explicitExamRewritePoints = Self.stringArray(
+            in: dictionary,
+            keys: ["exam_rewrite_points", "exam_paraphrase_points"]
+        )
 
         self.init(
             originalSentence: Self.firstString(in: dictionary, keys: ["original_sentence", "originalSentence", "sentence"]) ?? sourceSentence,
-            naturalChineseMeaning: Self.firstString(in: dictionary, keys: ["natural_chinese_meaning", "translation", "naturalChineseMeaning"]) ?? "",
-            sentenceCore: Self.firstString(in: dictionary, keys: ["sentence_core", "main_structure", "sentenceCore"]) ?? "",
+            naturalChineseMeaning: Self.firstString(
+                in: dictionary,
+                keys: hasProfessorPayload ? ["natural_chinese_meaning", "naturalChineseMeaning"] : ["natural_chinese_meaning", "translation", "naturalChineseMeaning"]
+            ) ?? "",
+            sentenceCore: Self.firstString(
+                in: dictionary,
+                keys: hasProfessorPayload ? ["sentence_core", "sentenceCore"] : ["sentence_core", "main_structure", "sentenceCore"]
+            ) ?? "",
             chunkBreakdown: Self.stringArray(in: dictionary, keys: ["chunk_breakdown", "chunks"]),
             grammarPoints: Self.grammarPoints(in: dictionary),
             vocabularyInContext: Self.vocabularyItems(in: dictionary),
-            misreadPoints: Self.stringArray(in: dictionary, keys: ["misread_points", "common_misread_points"]),
+            misreadPoints: Self.stringArray(in: dictionary, keys: ["misread_points", "common_misread_points", "common_misreadings"]),
             examRewritePoints: explicitExamRewritePoints.isEmpty
                 ? (rewriteExample.map { ["可把这句改写版当作命题同义替换的线索：\($0)"] } ?? [])
                 : explicitExamRewritePoints,
@@ -99,14 +114,54 @@ struct AIExplainSentenceResult: Equatable {
     }
 
     static func looksLikePayload(_ dictionary: [String: Any]) -> Bool {
-        [
+        let professorKeys = [
             "original_sentence",
             "natural_chinese_meaning",
             "sentence_core",
-            "translation",
-            "main_structure",
-            "rewrite_example"
-        ].contains { dictionary[$0] != nil }
+            "chunk_breakdown",
+            "grammar_points",
+            "vocabulary_in_context",
+            "contextual_vocabulary",
+            "misread_points",
+            "common_misreadings",
+            "exam_rewrite_points",
+            "exam_paraphrase_points"
+        ]
+        let legacyKeys = ["translation", "main_structure", "rewrite_example"]
+
+        let professorCount = professorKeys.reduce(into: 0) { partialResult, key in
+            if dictionary[key] != nil {
+                partialResult += 1
+            }
+        }
+
+        if professorCount >= 2 {
+            return true
+        }
+
+        return legacyKeys.contains { dictionary[$0] != nil }
+    }
+
+    private static func hasProfessorFieldCoverage(_ dictionary: [String: Any]) -> Bool {
+        let keys = [
+            "natural_chinese_meaning",
+            "sentence_core",
+            "chunk_breakdown",
+            "grammar_points",
+            "contextual_vocabulary",
+            "misread_points",
+            "common_misreadings",
+            "exam_rewrite_points",
+            "exam_paraphrase_points"
+        ]
+
+        let score = keys.reduce(into: 0) { partialResult, key in
+            if dictionary[key] != nil {
+                partialResult += 1
+            }
+        }
+
+        return score >= 2
     }
 
     private static func firstString(in dictionary: [String: Any], keys: [String]) -> String? {
@@ -157,7 +212,11 @@ struct AIExplainSentenceResult: Equatable {
     }
 
     private static func vocabularyItems(in dictionary: [String: Any]) -> [KeyTerm] {
-        guard let rawItems = (dictionary["vocabulary_in_context"] ?? dictionary["key_terms"]) as? [Any] else {
+        guard let rawItems = (
+            dictionary["vocabulary_in_context"]
+            ?? dictionary["contextual_vocabulary"]
+            ?? dictionary["key_terms"]
+        ) as? [Any] else {
             return []
         }
 
@@ -237,6 +296,7 @@ enum AIExplainSentenceServiceError: LocalizedError {
 enum AIExplainSentenceService {
     private static let baseURLStorageKey = "huiLu.aiBackendBaseURL"
     private static let defaultBaseURL = "http://47.94.227.58"
+    private static let preferredAIPort = 3000
 
     static var storedBaseURL: String {
         let stored = UserDefaults.standard.string(forKey: baseURLStorageKey) ?? ""
@@ -255,6 +315,99 @@ enum AIExplainSentenceService {
         value
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+
+    static func endpointCandidates(
+        path: String,
+        overrideBaseURL: String? = nil,
+        preferredPort: Int? = preferredAIPort
+    ) -> [URL] {
+        let normalizedBaseURL = normalizeBaseURL(overrideBaseURL ?? storedBaseURL)
+        guard !normalizedBaseURL.isEmpty else { return [] }
+
+        return candidateBaseURLs(
+            normalizedBaseURL: normalizedBaseURL,
+            preferredPort: preferredPort
+        ).compactMap { baseURLString in
+            guard let baseURL = URL(string: baseURLString) else { return nil }
+            return baseURL.appendingPathComponent(path)
+        }
+    }
+
+    static func shouldRetryEndpoint(statusCode: Int) -> Bool {
+        switch statusCode {
+        case 404, 405, 408, 421, 425, 429, 500, 502, 503, 504:
+            return true
+        default:
+            return false
+        }
+    }
+
+    static func shouldRetryEndpoint(for error: URLError) -> Bool {
+        switch error.code {
+        case .timedOut,
+             .cannotFindHost,
+             .cannotConnectToHost,
+             .networkConnectionLost,
+             .dnsLookupFailed,
+             .notConnectedToInternet,
+             .internationalRoamingOff,
+             .callIsActive,
+             .dataNotAllowed:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func candidateBaseURLs(
+        normalizedBaseURL: String,
+        preferredPort: Int?
+    ) -> [String] {
+        guard let components = URLComponents(string: normalizedBaseURL),
+              components.scheme != nil,
+              components.host != nil
+        else {
+            return [normalizedBaseURL]
+        }
+
+        var results: [String] = []
+
+        func append(_ candidate: URLComponents) {
+            guard let url = candidate.url else { return }
+            let normalized = normalizeBaseURL(url.absoluteString)
+            guard !normalized.isEmpty, !results.contains(normalized) else { return }
+            results.append(normalized)
+        }
+
+        let currentPort = components.port
+        if let preferredPort {
+            if currentPort == nil {
+                append(components)
+                var preferred = components
+                preferred.port = preferredPort
+                append(preferred)
+            } else if currentPort == preferredPort {
+                append(components)
+                var portless = components
+                portless.port = nil
+                append(portless)
+            } else {
+                var preferred = components
+                preferred.port = preferredPort
+                append(preferred)
+
+                var portless = components
+                portless.port = nil
+                append(portless)
+
+                append(components)
+            }
+        } else {
+            append(components)
+        }
+
+        return results
     }
 
     private static func decodeResponseEnvelope(
@@ -293,13 +446,12 @@ enum AIExplainSentenceService {
         for context: ExplainSentenceContext,
         baseURL overrideBaseURL: String? = nil
     ) async throws -> AIExplainSentenceResult {
-        let baseURLString = normalizeBaseURL(overrideBaseURL ?? storedBaseURL)
-        guard !baseURLString.isEmpty else {
+        let endpointURLs = endpointCandidates(
+            path: "ai/explain-sentence",
+            overrideBaseURL: overrideBaseURL
+        )
+        guard !endpointURLs.isEmpty else {
             throw AIExplainSentenceServiceError.missingBaseURL
-        }
-
-        guard let endpointURL = URL(string: "\(baseURLString)/ai/explain-sentence") else {
-            throw AIExplainSentenceServiceError.invalidBaseURL
         }
 
         // 发送前检测句子文本是否反转，如有则自动修复
@@ -323,11 +475,7 @@ enum AIExplainSentenceService {
             questionPrompt: context.questionPrompt
         )
 
-        var request = URLRequest(url: endpointURL)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 25
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(
+        let requestData = try JSONEncoder().encode(
             ExplainSentenceRequest(
                 title: validatedExplainContext.title,
                 sentence: validatedExplainContext.sentence,
@@ -338,33 +486,80 @@ enum AIExplainSentenceService {
             )
         )
 
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse else {
+        var lastError: Error?
+
+        for (index, endpointURL) in endpointURLs.enumerated() {
+            var request = URLRequest(url: endpointURL)
+            request.httpMethod = "POST"
+            request.timeoutInterval = 25
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = requestData
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    throw AIExplainSentenceServiceError.invalidServerResponse
+                }
+
+                let decoded = try decodeResponseEnvelope(
+                    from: data,
+                    sourceSentence: validatedExplainContext.sentence
+                )
+
+                if httpResponse.statusCode == 200, decoded.success, let result = decoded.data {
+                    return result
+                }
+
+                if shouldRetryEndpoint(statusCode: httpResponse.statusCode), index < endpointURLs.count - 1 {
+                    TextPipelineDiagnostics.log(
+                        "句子分析",
+                        "AI 端点不可用，尝试下一个候选地址: \(endpointURL.absoluteString) status=\(httpResponse.statusCode)",
+                        severity: .warning
+                    )
+                    lastError = AIExplainSentenceServiceError.requestFailed("HTTP \(httpResponse.statusCode)")
+                    continue
+                }
+
+                if let message = decoded.error, !message.isEmpty {
+                    throw AIExplainSentenceServiceError.requestFailed(message)
+                }
+
+                throw AIExplainSentenceServiceError.invalidServerResponse
+            } catch let error as URLError {
+                if shouldRetryEndpoint(for: error), index < endpointURLs.count - 1 {
+                    TextPipelineDiagnostics.log(
+                        "句子分析",
+                        "AI 端点连接失败，尝试下一个候选地址: \(endpointURL.absoluteString) error=\(error.localizedDescription)",
+                        severity: .warning
+                    )
+                    lastError = AIExplainSentenceServiceError.transport(error.localizedDescription)
+                    continue
+                }
+                throw AIExplainSentenceServiceError.transport(error.localizedDescription)
+            } catch let error as AIExplainSentenceServiceError {
+                if case .invalidServerResponse = error, index < endpointURLs.count - 1 {
+                    TextPipelineDiagnostics.log(
+                        "句子分析",
+                        "AI 端点响应异常，尝试下一个候选地址: \(endpointURL.absoluteString)",
+                        severity: .warning
+                    )
+                    lastError = error
+                    continue
+                }
+                throw error
+            } catch {
+                print("[AIExplainSentenceService] decode failed: \(error)")
+                if index < endpointURLs.count - 1 {
+                    lastError = error
+                    continue
+                }
                 throw AIExplainSentenceServiceError.invalidServerResponse
             }
-
-            let decoded = try decodeResponseEnvelope(
-                from: data,
-                sourceSentence: validatedExplainContext.sentence
-            )
-
-            if httpResponse.statusCode == 200, decoded.success, let result = decoded.data {
-                return result
-            }
-
-            if let message = decoded.error, !message.isEmpty {
-                throw AIExplainSentenceServiceError.requestFailed(message)
-            }
-
-            throw AIExplainSentenceServiceError.invalidServerResponse
-        } catch let error as AIExplainSentenceServiceError {
-            throw error
-        } catch let error as URLError {
-            throw AIExplainSentenceServiceError.transport(error.localizedDescription)
-        } catch {
-            print("[AIExplainSentenceService] decode failed: \(error)")
-            throw AIExplainSentenceServiceError.invalidServerResponse
         }
+
+        if let error = lastError as? AIExplainSentenceServiceError {
+            throw error
+        }
+        throw AIExplainSentenceServiceError.invalidServerResponse
     }
 }

@@ -27,7 +27,7 @@ struct SourceOutlineTab: View {
                 expandAncestors()
                 scrollToHighlightedNode(with: proxy, animated: false)
                 if jumpTargetNodeID != nil {
-                    onJumpHandled()
+                    deferJumpHandled()
                 }
             }
             .onChange(of: ancestorNodeIDs) { _ in
@@ -40,7 +40,7 @@ struct SourceOutlineTab: View {
                 guard target != nil else { return }
                 expandAncestors()
                 scrollToHighlightedNode(with: proxy, animated: true)
-                onJumpHandled()
+                deferJumpHandled()
             }
         }
     }
@@ -88,6 +88,12 @@ struct SourceOutlineTab: View {
 
         walk(nodes)
         return results
+    }
+
+    private func deferJumpHandled() {
+        DispatchQueue.main.async {
+            onJumpHandled()
+        }
     }
 }
 
@@ -158,11 +164,11 @@ private struct OutlineTreeNodeRow: View {
     }
 
     private var titleColor: Color {
-        isHighlighted ? Color.blue.opacity(0.92) : Color.black.opacity(0.82)
+        isHighlighted ? nodeAccentColor.opacity(0.96) : Color.black.opacity(0.82)
     }
 
     private var summaryColor: Color {
-        isHighlighted ? Color.black.opacity(0.7) : Color.black.opacity(0.58)
+        isHighlighted ? Color.black.opacity(0.76) : Color.black.opacity(0.58)
     }
 
     var body: some View {
@@ -266,19 +272,19 @@ private struct OutlineTreeNodeRow: View {
 
     private var anchorBadge: some View {
         HStack(spacing: 6) {
-            Image(systemName: "bookmark.fill")
+            Image(systemName: anchorIconName)
                 .font(.system(size: 10, weight: .bold))
 
             Text(node.anchor.label)
                 .lineLimit(1)
         }
         .font(.system(size: 12, weight: .semibold, design: .rounded))
-        .foregroundStyle(Color.blue.opacity(isHighlighted ? 0.9 : 0.74))
+        .foregroundStyle(nodeAccentColor.opacity(isHighlighted ? 0.96 : 0.78))
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .background(
             Capsule(style: .continuous)
-                .fill(Color.blue.opacity(isHighlighted ? 0.14 : 0.09))
+                .fill(nodeAccentColor.opacity(isHighlighted ? 0.16 : 0.09))
         )
     }
 
@@ -304,18 +310,18 @@ private struct OutlineTreeNodeRow: View {
 
     private var hierarchyLineColor: Color {
         if isHighlighted {
-            return Color.blue.opacity(0.34)
+            return nodeAccentColor.opacity(0.36)
         }
 
-        return normalizedDepth == 0 ? Color.blue.opacity(0.22) : Color.blue.opacity(0.14)
+        return normalizedDepth == 0 ? nodeAccentColor.opacity(0.24) : nodeAccentColor.opacity(0.16)
     }
 
     private var hierarchyDotColor: Color {
         if isHighlighted {
-            return Color.blue.opacity(0.82)
+            return nodeAccentColor.opacity(0.84)
         }
 
-        return normalizedDepth == 0 ? Color.blue.opacity(0.5) : Color.blue.opacity(0.34)
+        return normalizedDepth == 0 ? nodeAccentColor.opacity(0.52) : nodeAccentColor.opacity(0.36)
     }
 
     private var levelLabel: String {
@@ -323,15 +329,15 @@ private struct OutlineTreeNodeRow: View {
     }
 
     private var levelLabelColor: Color {
-        normalizedDepth == 0 ? Color.blue.opacity(0.82) : Color.black.opacity(0.58)
+        normalizedDepth == 0 ? nodeAccentColor.opacity(0.84) : nodeAccentColor.opacity(0.72)
     }
 
     private var levelLabelBackground: Color {
         if isHighlighted {
-            return Color.blue.opacity(0.16)
+            return nodeAccentColor.opacity(0.16)
         }
 
-        return normalizedDepth == 0 ? Color.blue.opacity(0.1) : Color.white.opacity(0.68)
+        return normalizedDepth == 0 ? nodeAccentColor.opacity(0.1) : nodeAccentColor.opacity(0.08)
     }
 
     private var nodeBackground: some View {
@@ -354,17 +360,76 @@ private struct OutlineTreeNodeRow: View {
 
     private var nodeFillColor: Color {
         if isHighlighted {
-            return Color.blue.opacity(normalizedDepth == 0 ? 0.14 : 0.12)
+            return nodeAccentColor.opacity(normalizedDepth == 0 ? 0.16 : 0.13)
         }
 
-        return normalizedDepth == 0 ? Color.white.opacity(0.72) : Color.white.opacity(0.58)
+        switch node.nodeType {
+        case .passageRoot:
+            return Color.white.opacity(0.76)
+        case .paragraphTheme:
+            return Color.white.opacity(0.66)
+        case .teachingFocus:
+            return Color.orange.opacity(0.06)
+        case .supportingSentence:
+            return Color.cyan.opacity(0.05)
+        case .questionLink:
+            return Color.pink.opacity(0.06)
+        case .vocabularySupport:
+            return Color.teal.opacity(0.05)
+        case .metaInstruction:
+            return Color.gray.opacity(0.06)
+        case .answerKey:
+            return Color.yellow.opacity(0.06)
+        }
     }
 
     private var nodeStrokeColor: Color {
         if isHighlighted {
-            return Color.blue.opacity(0.32)
+            return nodeAccentColor.opacity(0.34)
         }
 
-        return normalizedDepth == 0 ? Color.white.opacity(0.92) : Color.white.opacity(0.82)
+        return normalizedDepth == 0 ? nodeAccentColor.opacity(0.16) : nodeAccentColor.opacity(0.14)
+    }
+
+    private var nodeAccentColor: Color {
+        switch node.nodeType {
+        case .passageRoot:
+            return Color.blue
+        case .paragraphTheme:
+            return Color.indigo
+        case .teachingFocus:
+            return Color.orange
+        case .supportingSentence:
+            return Color.cyan
+        case .questionLink:
+            return Color.pink
+        case .vocabularySupport:
+            return Color.teal
+        case .metaInstruction:
+            return Color.gray
+        case .answerKey:
+            return Color.yellow.opacity(0.82)
+        }
+    }
+
+    private var anchorIconName: String {
+        switch node.nodeType {
+        case .questionLink:
+            return "questionmark.bubble.fill"
+        case .supportingSentence:
+            return "text.quote"
+        case .teachingFocus:
+            return "lightbulb.fill"
+        case .paragraphTheme:
+            return "bookmark.fill"
+        case .passageRoot:
+            return "book.fill"
+        case .vocabularySupport:
+            return "character.book.closed.fill"
+        case .metaInstruction:
+            return "info.circle.fill"
+        case .answerKey:
+            return "checkmark.seal.fill"
+        }
     }
 }

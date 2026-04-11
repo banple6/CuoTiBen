@@ -103,6 +103,15 @@ function normalizeString(value, fallback = "") {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
 }
 
+function firstDefined(raw, keys) {
+  for (const key of keys) {
+    if (raw?.[key] !== undefined) {
+      return raw[key];
+    }
+  }
+  return undefined;
+}
+
 function normalizePassageOverview(raw) {
   if (!raw || typeof raw !== "object") {
     return {
@@ -153,6 +162,10 @@ function normalizeSentenceAnalysis(raw, sourceSentence) {
   const evidenceType = validEvidenceTypes.includes(raw.evidence_type)
     ? raw.evidence_type
     : "supporting_evidence";
+  const rawVocabulary = firstDefined(raw, ["vocabulary_in_context", "contextual_vocabulary"]);
+  const rawMisread = firstDefined(raw, ["misread_points", "common_misreadings"]);
+  const rawRewrite = firstDefined(raw, ["exam_rewrite_points", "exam_paraphrase_points"]);
+  const rawSimplerRewrite = firstDefined(raw, ["simplified_english", "simpler_rewrite"]);
 
   return {
     sentence_ref: normalizeString(raw.sentence_ref),
@@ -167,16 +180,16 @@ function normalizeSentenceAnalysis(raw, sourceSentence) {
       }))
       .filter((item) => item.name || item.explanation)
       .slice(0, 3),
-    vocabulary_in_context: normalizeArray(raw.vocabulary_in_context)
+    vocabulary_in_context: normalizeArray(rawVocabulary)
       .map((item) => ({
         term: normalizeString(item?.term),
         meaning: normalizeString(item?.meaning)
       }))
       .filter((item) => item.term)
       .slice(0, 6),
-    misread_points: normalizeArray(raw.misread_points).map(String).filter(Boolean).slice(0, 3),
-    exam_rewrite_points: normalizeArray(raw.exam_rewrite_points).map(String).filter(Boolean).slice(0, 3),
-    simplified_english: normalizeString(raw.simplified_english),
+    misread_points: normalizeArray(rawMisread).map(String).filter(Boolean).slice(0, 3),
+    exam_rewrite_points: normalizeArray(rawRewrite).map(String).filter(Boolean).slice(0, 3),
+    simplified_english: normalizeString(rawSimplerRewrite),
     mini_exercise: normalizeString(raw.mini_exercise),
     hierarchy_rebuild: normalizeArray(raw.hierarchy_rebuild).map(String).filter(Boolean),
     syntactic_variation: normalizeString(raw.syntactic_variation),
@@ -201,6 +214,30 @@ function isShallowMisreadPoint(point) {
 function validateAnalysisQuality(result) {
   const warnings = [];
 
+  if (!result.passage_overview?.article_theme || result.passage_overview.article_theme.includes("文章主要讲了")) {
+    warnings.push("passage_overview.article_theme 太空");
+  }
+  if (!result.passage_overview?.author_core_question || result.passage_overview.author_core_question.includes("作者真正要回答的问题可以概括为")) {
+    warnings.push("passage_overview.author_core_question 太模板化");
+  }
+  if (!result.passage_overview?.progression_path || result.passage_overview.progression_path.length < 12) {
+    warnings.push("passage_overview.progression_path 不够具体");
+  }
+
+  if (result.paragraph_cards) {
+    for (const card of result.paragraph_cards) {
+      if (!card.theme || card.theme.includes("本段主要讲") || card.theme.includes("承担")) {
+        warnings.push(`[P${card.paragraph_index}] theme 太空`);
+      }
+      if ((card.teaching_focuses || []).length === 0) {
+        warnings.push(`[P${card.paragraph_index}] teaching_focuses 缺失`);
+      }
+      if (!card.student_blind_spot || card.student_blind_spot.length < 10) {
+        warnings.push(`[P${card.paragraph_index}] student_blind_spot 太弱`);
+      }
+    }
+  }
+
   if (result.sentence_analyses) {
     for (const sa of result.sentence_analyses) {
       if (isShallowSentenceCore(sa.sentence_core)) {
@@ -216,6 +253,24 @@ function validateAnalysisQuality(result) {
   }
 
   return warnings;
+}
+
+function buildAnalyzePassageRepairPrompt({ title, paragraphs, keySentences, previousResult, warnings }) {
+  return [
+    buildAnalyzePassagePrompt({ title, paragraphs, keySentences }),
+    "",
+    "上一次输出质量不够，请你在保持 JSON 结构不变的前提下，重点修复这些问题：",
+    warnings.join("；"),
+    "",
+    "额外要求：",
+    "1. paragraph_cards.theme 不要写成“本段主要讲了什么”或“第X段承担什么作用”。",
+    "2. teaching_focuses 必须写成具体教学动作，而不是抽象建议。",
+    "3. passage_overview 必须像老师带读整篇文章，而不是做摘要。",
+    "4. sentence_core 必须指出主语、谓语、核心宾补，不允许再写空泛总结。",
+    "",
+    "你上一次的 JSON 为：",
+    JSON.stringify(previousResult)
+  ].join("\n");
 }
 
 // ─── JSON 解析 ───
@@ -297,11 +352,8 @@ export async function analyzePassage({ title = "", paragraphs = [], keySentences
     titleLength: title.length
   });
 
-  const startTime = Date.now();
-  let completion;
-
-  try {
-    completion = await client.chat.completions.create({
+  const requestModel = async (prompt) => {
+    return client.chat.completions.create({
       model: modelName,
       temperature: 0.15,
       response_format: { type: "json_object" },
@@ -312,10 +364,17 @@ export async function analyzePassage({ title = "", paragraphs = [], keySentences
         },
         {
           role: "user",
-          content: buildAnalyzePassagePrompt({ title, paragraphs, keySentences })
+          content: prompt
         }
       ]
     });
+  };
+
+  const startTime = Date.now();
+  let completion;
+
+  try {
+    completion = await requestModel(buildAnalyzePassagePrompt({ title, paragraphs, keySentences }));
   } catch (error) {
     const status = typeof error?.status === "number" ? error.status : undefined;
     console.error("[ai/analyze-passage] model request failed", { status, message: error?.message });
@@ -323,22 +382,51 @@ export async function analyzePassage({ title = "", paragraphs = [], keySentences
   }
 
   const elapsed = Date.now() - startTime;
-  const content = completion.choices?.[0]?.message?.content;
-  const parsed = parseModelJson(content);
+  const normalizeResult = (parsed) => {
+    const overview = normalizePassageOverview(parsed.passage_overview);
+    const paragraphCards = normalizeArray(parsed.paragraph_cards)
+      .map(normalizeParagraphCard)
+      .filter(Boolean);
+    const sentenceAnalyses = normalizeArray(parsed.sentence_analyses)
+      .map((sa) => normalizeSentenceAnalysis(sa, sentenceTextIndex[sa?.sentence_ref]))
+      .filter(Boolean);
 
-  // 规范化
-  const overview = normalizePassageOverview(parsed.passage_overview);
-  const paragraphCards = normalizeArray(parsed.paragraph_cards)
-    .map(normalizeParagraphCard)
-    .filter(Boolean);
-  const sentenceAnalyses = normalizeArray(parsed.sentence_analyses)
-    .map((sa) => normalizeSentenceAnalysis(sa, sentenceTextIndex[sa?.sentence_ref]))
-    .filter(Boolean);
+    return {
+      passage_overview: overview,
+      paragraph_cards: paragraphCards,
+      sentence_analyses: sentenceAnalyses
+    };
+  };
 
-  // 质量检查
-  const qualityWarnings = validateAnalysisQuality({
-    sentence_analyses: sentenceAnalyses
-  });
+  let normalized = normalizeResult(parseModelJson(completion.choices?.[0]?.message?.content));
+  let qualityWarnings = validateAnalysisQuality(normalized);
+
+  if (
+    qualityWarnings.length >= 2 ||
+    normalized.paragraph_cards.length < Math.min(paragraphs.length, MAX_PARAGRAPHS) ||
+    normalized.sentence_analyses.length < Math.min(keySentences.length, MAX_KEY_SENTENCES)
+  ) {
+    console.warn("[ai/analyze-passage] quality warnings after first pass:", qualityWarnings);
+
+    try {
+      const repairedCompletion = await requestModel(buildAnalyzePassageRepairPrompt({
+        title,
+        paragraphs,
+        keySentences,
+        previousResult: normalized,
+        warnings: qualityWarnings
+      }));
+      const repaired = normalizeResult(parseModelJson(repairedCompletion.choices?.[0]?.message?.content));
+      const repairedWarnings = validateAnalysisQuality(repaired);
+
+      if (repairedWarnings.length <= qualityWarnings.length) {
+        normalized = repaired;
+        qualityWarnings = repairedWarnings;
+      }
+    } catch (error) {
+      console.warn("[ai/analyze-passage] repair pass failed:", error?.message || error);
+    }
+  }
 
   if (qualityWarnings.length > 0) {
     console.warn("[ai/analyze-passage] quality warnings:", qualityWarnings);
@@ -352,9 +440,9 @@ export async function analyzePassage({ title = "", paragraphs = [], keySentences
   });
 
   return {
-    passage_overview: overview,
-    paragraph_cards: paragraphCards,
-    sentence_analyses: sentenceAnalyses,
+    passage_overview: normalized.passage_overview,
+    paragraph_cards: normalized.paragraph_cards,
+    sentence_analyses: normalized.sentence_analyses,
     quality_warnings: qualityWarnings,
     model_name: modelName,
     elapsed_ms: elapsed

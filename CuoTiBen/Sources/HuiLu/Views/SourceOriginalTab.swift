@@ -31,14 +31,14 @@ struct SourceOriginalTab: View {
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.88)) {
                     proxy.scrollTo(target, anchor: .center)
                 }
-                onJumpHandled()
+                deferJumpHandled()
             }
             .onChange(of: jumpTargetSegmentID) { target in
                 guard jumpTargetSentenceID == nil, let target else { return }
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.88)) {
                     proxy.scrollTo(target, anchor: .top)
                 }
-                onJumpHandled()
+                deferJumpHandled()
             }
         }
     }
@@ -68,7 +68,13 @@ struct SourceOriginalTab: View {
             action()
         }
 
-        onJumpHandled()
+        deferJumpHandled()
+    }
+
+    private func deferJumpHandled() {
+        DispatchQueue.main.async {
+            onJumpHandled()
+        }
     }
 }
 

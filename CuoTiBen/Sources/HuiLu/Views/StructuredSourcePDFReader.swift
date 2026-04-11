@@ -127,14 +127,14 @@ extension StructuredSourcePDFReader {
                 if jumpToken != lastJumpToken {
                     navigateToSentence(id: jumpTargetSentenceID, in: pdfView, animated: true)
                     lastJumpToken = jumpToken
-                    onJumpHandled()
+                    deferJumpHandled()
                 }
             } else if let jumpTargetSegmentID {
                 let jumpToken = "segment:\(jumpTargetSegmentID)"
                 if jumpToken != lastJumpToken {
                     navigateToSegment(id: jumpTargetSegmentID, in: pdfView, animated: true)
                     lastJumpToken = jumpToken
-                    onJumpHandled()
+                    deferJumpHandled()
                 }
             } else {
                 lastJumpToken = nil
@@ -190,6 +190,12 @@ extension StructuredSourcePDFReader {
             if let nearest, abs(nearest.value.primaryRect.midY - pagePoint.y) < 28,
                let sentence = bundle.sentence(id: nearest.key) {
                 onSentenceTap(sentence)
+            }
+        }
+
+        private func deferJumpHandled() {
+            DispatchQueue.main.async { [onJumpHandled] in
+                onJumpHandled()
             }
         }
 

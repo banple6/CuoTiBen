@@ -114,12 +114,11 @@ enum ProfessorAnalysisService {
         title: String,
         overrideBaseURL: String? = nil
     ) async throws -> StructuredSourceBundle {
-
-        let baseURLString = AIExplainSentenceService.normalizeBaseURL(
-            overrideBaseURL ?? AIExplainSentenceService.storedBaseURL
+        let endpointURLs = AIExplainSentenceService.endpointCandidates(
+            path: "ai/analyze-passage",
+            overrideBaseURL: overrideBaseURL
         )
-        guard !baseURLString.isEmpty else { throw AnalysisError.missingBaseURL }
-        guard let baseURL = URL(string: baseURLString) else { throw AnalysisError.invalidBaseURL }
+        guard !endpointURLs.isEmpty else { throw AnalysisError.missingBaseURL }
 
         // 从 bundle 构建请求
         let paragraphInputs = bundle.segments.enumerated().map { idx, segment in
@@ -141,32 +140,87 @@ enum ProfessorAnalysisService {
             key_sentences: keySentenceInputs
         )
 
-        // 发送 HTTP 请求
-        let url = baseURL.appendingPathComponent("/ai/analyze-passage")
-        var request = URLRequest(url: url, timeoutInterval: 90)
-        request.httpMethod = "POST"
-        request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(requestBody)
+        let requestData = try JSONEncoder().encode(requestBody)
+        var payload: AnalyzePassageData?
+        var lastError: Error?
 
-        let (data, httpResponse) = try await URLSession.shared.data(for: request)
+        for (index, url) in endpointURLs.enumerated() {
+            var request = URLRequest(url: url, timeoutInterval: 90)
+            request.httpMethod = "POST"
+            request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+            request.httpBody = requestData
 
-        guard let http = httpResponse as? HTTPURLResponse else {
-            throw AnalysisError.invalidServerResponse
+            do {
+                let (data, httpResponse) = try await URLSession.shared.data(for: request)
+
+                guard let http = httpResponse as? HTTPURLResponse else {
+                    throw AnalysisError.invalidServerResponse
+                }
+
+                if !(200 ..< 300).contains(http.statusCode) {
+                    let bodySnippet = String(data: data.prefix(500), encoding: .utf8) ?? ""
+                    TextPipelineDiagnostics.log(
+                        "AI",
+                        "[AI][ProfessorAnalysis] 后端返回 HTTP \(http.statusCode): \(bodySnippet)",
+                        severity: .error
+                    )
+
+                    if AIExplainSentenceService.shouldRetryEndpoint(statusCode: http.statusCode), index < endpointURLs.count - 1 {
+                        TextPipelineDiagnostics.log(
+                            "AI",
+                            "[AI][ProfessorAnalysis] 端点不可用，尝试下一个候选地址: \(url.absoluteString)",
+                            severity: .warning
+                        )
+                        lastError = AnalysisError.requestFailed("HTTP \(http.statusCode)")
+                        continue
+                    }
+
+                    throw AnalysisError.requestFailed("HTTP \(http.statusCode)")
+                }
+
+                let response = try JSONDecoder().decode(AnalyzePassageResponse.self, from: data)
+
+                guard let data = response.data else {
+                    throw AnalysisError.noContent
+                }
+
+                payload = data
+                break
+            } catch let error as URLError {
+                if AIExplainSentenceService.shouldRetryEndpoint(for: error), index < endpointURLs.count - 1 {
+                    TextPipelineDiagnostics.log(
+                        "AI",
+                        "[AI][ProfessorAnalysis] 端点连接失败，尝试下一个候选地址: \(url.absoluteString) error=\(error.localizedDescription)",
+                        severity: .warning
+                    )
+                    lastError = AnalysisError.requestFailed(error.localizedDescription)
+                    continue
+                }
+                throw AnalysisError.requestFailed(error.localizedDescription)
+            } catch let error as AnalysisError {
+                if case .invalidServerResponse = error, index < endpointURLs.count - 1 {
+                    TextPipelineDiagnostics.log(
+                        "AI",
+                        "[AI][ProfessorAnalysis] 端点响应异常，尝试下一个候选地址: \(url.absoluteString)",
+                        severity: .warning
+                    )
+                    lastError = error
+                    continue
+                }
+                throw error
+            } catch {
+                if index < endpointURLs.count - 1 {
+                    lastError = error
+                    continue
+                }
+                throw AnalysisError.invalidServerResponse
+            }
         }
 
-        guard (200 ..< 300).contains(http.statusCode) else {
-            let bodySnippet = String(data: data.prefix(500), encoding: .utf8) ?? ""
-            TextPipelineDiagnostics.log(
-                "AI",
-                "[AI][ProfessorAnalysis] 后端返回 HTTP \(http.statusCode): \(bodySnippet)",
-                severity: .error
-            )
-            throw AnalysisError.requestFailed("HTTP \(http.statusCode)")
-        }
-
-        let response = try JSONDecoder().decode(AnalyzePassageResponse.self, from: data)
-
-        guard let payload = response.data else {
+        guard let payload else {
+            if let error = lastError as? AnalysisError {
+                throw error
+            }
             throw AnalysisError.noContent
         }
 
@@ -194,7 +248,8 @@ enum ProfessorAnalysisService {
         let aiSentenceCards = convertSentenceCards(
             payload.sentence_analyses ?? [],
             existingCards: bundle.professorSentenceCards,
-            sentences: bundle.sentences
+            sentences: bundle.sentences,
+            segments: bundle.segments
         )
 
         return bundle.enrichedWithAIAnalysis(
@@ -292,14 +347,14 @@ enum ProfessorAnalysisService {
     private static func convertSentenceCards(
         _ dtos: [SentenceAnalysisDTO],
         existingCards: [ProfessorSentenceCard],
-        sentences: [Sentence]
+        sentences: [Sentence],
+        segments: [Segment]
     ) -> [ProfessorSentenceCard] {
-        // 构建 ref → sentence 映射
         let sentencesBySegment = Dictionary(grouping: sentences, by: { $0.segmentID })
-        let segments = Array(Set(sentences.map(\.segmentID))).sorted()
 
         var refToSentences: [String: Sentence] = [:]
-        for (segIdx, segmentID) in segments.enumerated() {
+        for (segIdx, segment) in segments.enumerated() {
+            let segmentID = segment.id
             for sentence in sentencesBySegment[segmentID] ?? [] {
                 let ref = "S_\(segIdx)_\(sentence.localIndex)"
                 refToSentences[ref] = sentence
