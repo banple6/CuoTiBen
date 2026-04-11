@@ -1,6 +1,6 @@
 # 慧录 / CuoTiBen 开发记录
 
-截至 `2026-04-10`，这个项目已经从最初的 SwiftUI 原型推进到了一个可运行的英语学习工作台，主链路包括：
+截至 `2026-04-11`，这个项目已经从最初的 SwiftUI 原型推进到了一个可运行的英语学习工作台，主链路包括：
 
 - 英语资料导入、OCR、结构化理解与大纲树
 - 原始 PDF / 阅读版 PDF 双模式阅读
@@ -19,6 +19,7 @@
 - 笔记工作台已完成一轮 `Digital Archivist` 重构，并在本轮进一步切到 **single persistent paper-first workspace**
 - 最新一轮完成了 **PencilKit 手写墨迹底层稳定化 + 自由画布文本对象系统 + 完整手写工具面板**
 - 文本对象系统已进一步收口到 **Canvas object shell + UITextView input core + transient frame / commit on end** 的稳定交互架构
+- 最新一轮已吸收 **Saber 的移动端画布组织** 与 **Xournal++ 的专业画布内核**，把笔记页进一步收口到 **Paper / Ink / Object / Overlay** 分层与 **Selection / Viewport / Tool / History** 四控制器结构
 - 文本解析链路已新增 **质量诊断日志 + OCR 方向校正 + 反转英文自动修复**
 - `PP-StructureV3` 主链路已新增 **请求级日志 + 失败分类 + 可见回退 Debug 徽标**
 
@@ -71,6 +72,7 @@
   - `TextPipelineValidator.swift` 继续负责反转文本检测、质量评估和诊断日志。
 - `Models/`
   - 除原有 `Source / Segment / Sentence / OutlineNode` 外，已新增 `NormalizedDocumentModels.swift` 用于接收后端归一化文档。
+  - `NoteModels.swift` 现在同时承载 `NoteDocument / NotePage / CanvasLayer / CanvasElement / CanvasViewportState / NotePaperConfiguration`，笔记数据模型已经从 block-first 过渡到 page-first。
 - `ViewModels/`
   - 当前以 `AppViewModel`、`NotesHomeViewModel`、`NoteWorkspaceViewModel`、`ArchivistWorkspaceViewModel` 等为主。
   - `AppViewModel` 现在还维护解析阶段状态和 `ParseSessionInfo`，用于记录 PP 成功/失败、回退来源、统计指标和失败分类。
@@ -130,6 +132,10 @@
 - 笔记模块已形成两种主场景，并具备完整编辑链：
   - iPhone：单栏列表 -> 详情 -> 工作台
   - iPad：双栏笔记中心 + 独立深度编辑工作台
+- 笔记画布当前已进一步切到 controller-first 架构：
+  - `CanvasSelectionController / CanvasViewportController / CanvasToolController / CanvasHistoryController`
+  - `NotebookPageCanvasView` 已拆为 `PaperLayerView / BackgroundReferenceLayerView / CanvasObjectLayerView / CanvasOverlayLayerView`
+  - `PKCanvasView` 被约束为纯 `InkCanvasHost`，不再继续承担对象系统职责
 - 当前主界面正在向统一的“纸张隐喻 + 档案工作台 + 学术阅读台”设计语言收敛：
   - 首页正从玻璃卡片过渡到桌面/便签式 dashboard
   - 知识库正过渡到文件夹/练习册式资料柜
@@ -349,6 +355,11 @@
   - 新增 `NotebookPageCanvasView`，改成整页稿纸滚动画布，支持手写与正文共处
   - 新增 `ReferencePanel`，可在右侧面板查看结构树 / 原文 / 导图，并直接把原文摘录插入当前笔记
   - iPad 笔记态会自动隐藏底部 `BottomGlassTabBar`，让中央纸页成为绝对主视觉
+  - 这一轮进一步引入通用对象交互：
+    - `CanvasSelectionController` 统一维护选中对象、主选中、选区边界、交互模式与当前 handle
+    - `CanvasViewportController` 统一维护缩放、偏移、可见区、fit mode 与手势策略
+    - `CanvasOverlayLayerView` 在对象层之上渲染选择框、四角缩放点、对齐参考线、缩放 HUD 与对象操作菜单
+    - `CanvasHistoryController` 已从对象级 CRUD 扩展到移动、缩放、重排、纸张配置变更等命令
 
 ### 11. 手写工具系统与墨迹稳定化 (2026-04-06)
 
@@ -439,7 +450,73 @@
   - TEXT 模式下点击纸面空白可创建对象
   - SELECT 模式下保留对象选中与操作，不再因工具切换丢失文本对象上下文
 
-### 13. 文本管线诊断与反转修复 (2026-04-09)
+### 13. 画布控制器与 Overlay 分层 (2026-04-11)
+
+**核心目标**: 不再把 `NotebookPageCanvasView` 当成“能画、能选、能缩放、能保存”的巨型视图，而是把选择、视口、工具、历史和叠加交互拆成明确控制器与层次。
+
+#### 参考来源与取舍
+- 借鉴 `Saber`：
+  - `page-first` 编辑流
+  - `canvas / gesture / editor` 分离
+  - 纸张模板作为页面配置的一部分
+  - 移动端友好的 zoom HUD 与 page-level autosave 体验
+- 借鉴 `Xournal++`：
+  - `Page / Layer / Element` 的数据承重方式
+  - `ToolHandler` 风格的集中工具分发
+  - `UndoRedoController` 风格的命令式历史
+  - 选择工具作为一等工具
+  - 视口缩放和平移与绘制逻辑解耦
+
+#### 新增控制器
+- `CanvasSelectionController`
+  - 维护 `selectedObjectIDs / primarySelectionID / selectionBounds / activeHandle / interactionMode / selectionKind`
+  - 统一接管 `TextObject / ImageObject / QuoteObject / KnowledgeCardObject / LinkPreviewObject / InkSelection`
+- `CanvasViewportController`
+  - 维护 `zoomScale / contentOffset / visibleRect / fitMode / pageInsets`
+  - 同时显式维护 `minimumZoomScale / maximumZoomScale / gesturePolicy / zoomHUDLabel`
+- `CanvasToolController`
+  - 统一把工作区工具解析为 `pen / pencil / ballpoint / highlighter / eraser / lasso / text / select`
+- `CanvasHistoryController`
+  - 命令已扩展为 `Insert / Delete / Move / Resize / UpdateStyle / Reorder / InsertInkStroke / DeleteInkSelection / UpdatePaperConfig`
+
+#### 页面分层
+- `NotebookPageCanvasView` 当前已按实际运行职责拆为：
+  - `PaperLayerView`
+  - `BackgroundReferenceLayerView`
+  - `NotebookScrollHost` 内的 `PKCanvasView` 纯墨迹宿主
+  - `CanvasObjectLayerView`
+  - `CanvasOverlayLayerView`
+- 其中 `PKCanvasView` 只负责 ink，不再继续承载对象命中、对象菜单和对象框选逻辑。
+
+#### 通用对象交互
+- 非文本对象已统一接入选择框与四角缩放点：
+  - `ImageObject`
+  - `QuoteObject`
+  - `KnowledgeCardObject`
+  - `LinkPreviewObject`
+- SELECT 模式下可直接点选对象、拖动对象、统一缩放，并通过 Overlay 菜单执行删除等操作。
+- 文本对象保留原有专用输入容器，但选中态与历史系统已经接入统一画布控制器。
+
+#### 纸张系统升级
+- `NotePaperStyle` 已扩展到：
+  - `plain`
+  - `lined`
+  - `grid`
+  - `dotted`
+  - `cornell`
+  - `readingStudy`
+  - `wrongAnswer`
+- `PaperLayerView` 会按页面纸张配置绘制不同模板，用于英语精读、错题整理和课堂摘录场景。
+
+#### 保存策略升级
+- 已从“主要依赖定时脏标记”升级到事件驱动保存：
+  - 墨迹变化时 debounce save
+  - 对象拖动/缩放结束时 save
+  - 文本编辑结束时 save
+  - 页面退出时 save
+  - App 进入后台或 inactive 时 save
+
+### 14. 文本管线诊断与反转修复 (2026-04-09)
 
 **核心目标**: 避免 OCR / 解析 / 句子讲解链路中出现整句英文反转、页面方向识别错误、问题难以定位的情况。
 
@@ -1159,6 +1236,39 @@ rm -rf /tmp/CuoTiBen*
 - 完成真实工程构建验证：
   - `xcodebuild ... build` 结果为 `BUILD SUCCEEDED`
 
+### 2026-04-11
+
+- 完成笔记画布上层架构第二轮收口，目标不再是“继续堆对象类型”，而是把控制器、视口和叠加交互分开：
+  - `CanvasSelectionController` 新增对象多态选中、主选中、选区边界、当前交互 handle 与对象类型判定
+  - `CanvasViewportController` 新增缩放范围、手势策略、zoom HUD 和可见区状态
+  - `CanvasToolController` 把工作区工具解析为统一画布工具语义
+- 完成 `NotebookPageCanvasView` 的上层分层改造：
+  - `PaperLayerView` 负责纸张模板
+  - `BackgroundReferenceLayerView` 负责来源提示与参考语境
+  - `NotebookScrollHost` 内的 `PKCanvasView` 回归纯墨迹宿主
+  - `CanvasObjectLayerView` 负责对象显示
+  - `CanvasOverlayLayerView` 负责选择框、缩放点、对齐参考线、对象菜单和缩放 HUD
+- 完成非文本对象的统一选择与缩放基础能力：
+  - `ImageObject / QuoteObject / KnowledgeCardObject / LinkPreviewObject` 已能在 SELECT 模式下统一选中、移动、缩放
+  - 文本对象继续保留专用输入容器，但统一接入选择控制器和命令式历史
+- 完成命令式历史增强：
+  - `InsertCanvasObjectAction`
+  - `DeleteCanvasObjectAction`
+  - `MoveCanvasObjectAction`
+  - `ResizeCanvasObjectAction`
+  - `UpdateCanvasObjectStyleAction`
+  - `ReorderCanvasObjectAction`
+  - `InsertInkStrokeAction`
+  - `DeleteInkSelectionAction`
+  - `UpdatePaperConfigAction`
+- 完成纸张模板升级：
+  - 新增 `cornell / readingStudy / wrongAnswer` 三种学习型模板
+  - 页面高度与稿纸线距现在直接受 `NotePaperConfiguration` 驱动
+- 完成事件驱动保存补强：
+  - 对象变换结束后调度 autosave
+  - 墨迹变化时 debounce autosave
+  - `NotebookWorkspaceView` 监听 `scenePhase`，在进入后台或 inactive 时立即保存
+
 ### 2026-04-06
 
 - 完成手写墨迹底层稳定化（**核心修复**）：
@@ -1416,9 +1526,9 @@ rm -rf /tmp/CuoTiBen*
 2. 将节点、句子、单词、卡片、笔记进一步串成完整学习记录，并补更多知识点联动。
 3. 补更稳定的后端部署与 HTTPS 接入。
 4. 继续清理 `._*` 副文件和外置盘 Xcode 环境带来的潜在问题。
-5. 文本对象进阶：旋转、多选、对齐参考线、富文本按字符编辑。
-6. 墨迹选区进阶：选区框可视化、选区移动、选区缩放 handles。
+5. 通用对象 Inspector：让 `Image / Quote / KnowledgeCard / LinkPreview` 共享同一套属性面板、锁定/显隐/层级设置。
+6. 墨迹选区进阶：补真正的 `InkSelectionObject` 运行时、多对象框选、批量对齐与选区 handles。
 
 ---
 
-文档更新时间：`2026-04-08`
+文档更新时间：`2026-04-11`

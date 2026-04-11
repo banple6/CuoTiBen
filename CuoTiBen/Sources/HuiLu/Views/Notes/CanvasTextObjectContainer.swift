@@ -9,6 +9,7 @@ struct CanvasTextObjectContainer: View {
     let obj: CanvasTextObject
     let isSelected: Bool
     let isEditing: Bool
+    let allowsTransforms: Bool
     let pageWidth: CGFloat
     let pageHeight: CGFloat
     let onTextChange: (String) -> Void
@@ -65,7 +66,7 @@ struct CanvasTextObjectContainer: View {
                     .gesture(
                         DragGesture(minimumDistance: 0)
                             .onChanged { value in
-                                guard isSelected else { return }
+                                guard isSelected, allowsTransforms else { return }
                                 let distance = max(abs(value.translation.width), abs(value.translation.height))
                                 if distance > 4 {
                                     if !isDragging {
@@ -98,7 +99,7 @@ struct CanvasTextObjectContainer: View {
                     height: draftHeight,
                     isEditing: isEditing,
                     onResizeChanged: { corner, value in
-                        guard !isEditing else { return }
+                        guard !isEditing, allowsTransforms else { return }
                         if !isResizing {
                             isResizing = true
                             resizeStartRect = CGRect(x: draftX, y: draftY, width: draftWidth, height: draftHeight)
@@ -118,7 +119,7 @@ struct CanvasTextObjectContainer: View {
                         draftHeight = clampedRect.height
                     },
                     onResizeEnded: { corner, value in
-                        guard !isEditing else { return }
+                        guard !isEditing, allowsTransforms else { return }
                         let baseRect = resizeStartRect ?? CGRect(x: draftX, y: draftY, width: draftWidth, height: draftHeight)
                         let nextRect = corner.apply(
                             delta: value.translation,
@@ -219,7 +220,9 @@ struct CanvasTextObjectContainer: View {
 
         if isSelected && !isEditing && interval < 0.4 {
             lastTapTime = .distantPast
-            onStartEditing()
+            if allowsTransforms {
+                onStartEditing()
+            }
         } else if !isSelected {
             onSelect()
         }

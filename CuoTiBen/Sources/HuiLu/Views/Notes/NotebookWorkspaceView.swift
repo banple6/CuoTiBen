@@ -51,6 +51,7 @@ private enum WS {
 
 struct NotebookWorkspaceView: View {
     @EnvironmentObject private var appViewModel: AppViewModel
+    @Environment(\.scenePhase) private var scenePhase
 
     let screenModel: NotesHomeViewModel
     @Binding var selectedTab: NotesHomeTab
@@ -167,7 +168,16 @@ struct NotebookWorkspaceView: View {
                 if newTool != .select, case .inkSelection = editorSelection {
                     editorSelection = .none
                 }
+
+                if newTool != .select {
+                    noteVM?.clearCanvasSelection()
+                }
+
+                noteVM?.syncCanvasTool(workspaceTool: newTool, inkState: inkToolState)
             }
+        }
+        .onChange(of: inkToolState) { newValue in
+            noteVM?.syncCanvasTool(workspaceTool: activeTool, inkState: newValue)
         }
         .onChange(of: editorSelection) { newSel in
             // Synchronous — onChange runs after body re-render, safe to modify @State here
@@ -181,6 +191,13 @@ struct NotebookWorkspaceView: View {
             case .none, .inkSelection:
                 inspectorBlock = nil
                 showTextStylePopover = false
+            }
+            noteVM?.syncCanvasSelection(newSel)
+        }
+        .onChange(of: scenePhase) { newPhase in
+            guard newPhase == .background || newPhase == .inactive else { return }
+            if let noteVM {
+                _ = noteVM.save(using: appViewModel)
             }
         }
     }
@@ -236,10 +253,7 @@ struct NotebookWorkspaceView: View {
         let noteID = vm.note.id
 
         // Build the latest note state from the VM
-        var latestNote = vm.note
-        latestNote.title = vm.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        latestNote.blocks = vm.blocks
-        latestNote.textObjects = vm.textObjects
+        let latestNote = vm.persistableNoteSnapshot()
 
         if noteID == draftNoteID {
             // This was a draft
@@ -1074,6 +1088,7 @@ struct NotebookWorkspaceView: View {
             NotebookPageCanvasHost(
                 note: note,
                 appViewModel: appViewModel,
+                activeTool: activeTool,
                 inkToolState: $inkToolState,
                 isTextMode: isTextMode,
                 isSelectMode: isSelectMode,
@@ -1211,7 +1226,7 @@ struct NotebookWorkspaceView: View {
 // MARK: - Workspace Tool
 // ═══════════════════════════════════════════════════════════════
 
-private enum WorkspaceTool: String, CaseIterable, Identifiable {
+enum WorkspaceTool: String, CaseIterable, Identifiable {
     case pen, pencil, ballpoint, highlighter, eraser, text, select
     var id: String { rawValue }
 
@@ -1263,6 +1278,7 @@ private enum InkWidthPreset: String, CaseIterable, Identifiable {
 private struct NotebookPageCanvasHost: View {
     let note: Note
     let appViewModel: AppViewModel
+    let activeTool: WorkspaceTool
     @Binding var inkToolState: NoteInkToolState
     let isTextMode: Bool
     let isSelectMode: Bool
@@ -1280,6 +1296,7 @@ private struct NotebookPageCanvasHost: View {
 
     init(note: Note,
          appViewModel: AppViewModel,
+         activeTool: WorkspaceTool,
          inkToolState: Binding<NoteInkToolState>,
          isTextMode: Bool,
          isSelectMode: Bool,
@@ -1292,6 +1309,7 @@ private struct NotebookPageCanvasHost: View {
     {
         self.note = note
         self.appViewModel = appViewModel
+        self.activeTool = activeTool
         self._inkToolState = inkToolState
         self.isTextMode = isTextMode
         self.isSelectMode = isSelectMode
@@ -1319,6 +1337,8 @@ private struct NotebookPageCanvasHost: View {
         )
         .onAppear {
             vm.reload(using: appViewModel)
+            vm.syncCanvasTool(workspaceTool: activeTool, inkState: inkToolState)
+            vm.syncCanvasSelection(editorSelection)
             activeVM = vm
         }
         .onDisappear {

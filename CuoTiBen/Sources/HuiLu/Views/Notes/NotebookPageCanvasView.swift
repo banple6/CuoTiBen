@@ -64,13 +64,15 @@ struct NotebookPageCanvasView: View {
 
     var body: some View {
         GeometryReader { geo in
+            let paper = vm.paperConfiguration
             let pageWidth = min(max(geo.size.width - 40, 820), 1280)
-            let baseH = max(PT.lineSpacing * CGFloat(max(pageCount, 1)) * 30,
+            let baseH = max(paper.lineSpacing * CGFloat(max(pageCount, 1)) * 30,
                             geo.size.height - 20)
-            let pageH = min(max(baseH, contentHeight + 300), Self.maxPageHeight)
+            let pageH = min(max(max(baseH, paper.size.height), contentHeight + 300), Self.maxPageHeight)
 
             NotebookScrollHost(
                 initialInkData: initialInkData,
+                viewportController: vm.viewportController,
                 inkToolState: $inkToolState,
                 pageWidth: pageWidth,
                 pageHeight: pageH,
@@ -82,29 +84,32 @@ struct NotebookPageCanvasView: View {
                 inkActionBridge: inkActionBridge,
                 onInkChanged: {
                     vm.markInkDirty()
+                    vm.scheduleAutosave(using: appViewModel, bridge: inkActionBridge)
                 }
             ) {
                 ZStack(alignment: .topLeading) {
-                    PaperBackground(pageWidth: pageWidth, pageHeight: pageH)
+                    PaperLayerView(pageWidth: pageWidth, pageHeight: pageH, paper: paper)
 
-                    UserContentLayer(
+                    BackgroundReferenceLayerView(vm: vm, pageWidth: pageWidth)
+
+                    CanvasObjectLayerView(
                         vm: vm,
+                        pageWidth: pageWidth,
+                        pageHeight: pageH,
+                        appViewModel: appViewModel,
+                        isTextMode: isTextMode,
+                        isSelectMode: isSelectMode,
                         isTextObjectInteractionMode: isTextObjectInteractionMode,
                         editorSelection: $editorSelection,
                         onHeightChange: { h in
                             DispatchQueue.main.async { contentHeight = h }
                         }
                     )
-                    .frame(width: pageWidth - PT.leading - PT.trailing)
-                    .padding(.leading, PT.leading)
-                    .padding(.trailing, PT.trailing)
-                    .padding(.top, PT.topInset)
 
-                    // Free-form text objects layer — sits above legacy content, below ink
-                    CanvasTextObjectsLayer(
+                    CanvasOverlayLayerView(
                         vm: vm,
-                        isTextToolActive: isTextMode,
-                        canManipulateTextObjects: isTextObjectInteractionMode,
+                        appViewModel: appViewModel,
+                        isSelectMode: isSelectMode,
                         editorSelection: $editorSelection,
                         pageWidth: pageWidth,
                         pageHeight: pageH
@@ -161,6 +166,7 @@ struct NotebookPageCanvasView: View {
 
 struct NotebookScrollHost<Paper: View>: UIViewControllerRepresentable {
     let initialInkData: Data
+    let viewportController: CanvasViewportController
     @Binding var inkToolState: NoteInkToolState
     let pageWidth: CGFloat
     let pageHeight: CGFloat
@@ -181,6 +187,7 @@ struct NotebookScrollHost<Paper: View>: UIViewControllerRepresentable {
         c.parent = self
 
         c.vc = vc
+        vc.scrollView.delegate = c
 
         // Paper host
         let paperHost = UIHostingController(rootView: AnyView(paperContent()))
@@ -223,6 +230,8 @@ struct NotebookScrollHost<Paper: View>: UIViewControllerRepresentable {
         vc.contentView.frame = CGRect(origin: .zero, size: sz)
         paperHost.view.frame = CGRect(origin: .zero, size: sz)
         canvas.frame = CGRect(origin: .zero, size: sz)
+        vc.applyViewportPolicy(viewportController)
+        c.syncViewport(using: vc.scrollView)
 
         // Debug
         // print("[INK] makeUIVC: canvas.frame=\\(canvas.frame), policy=\\(canvas.drawingPolicy.rawValue), interaction=\\(canvas.isUserInteractionEnabled)")
@@ -268,23 +277,19 @@ struct NotebookScrollHost<Paper: View>: UIViewControllerRepresentable {
         // In ink mode: canvas is enabled, pencil draws, finger is ignored by .pencilOnly
         c.canvas?.isUserInteractionEnabled = !isTextMode
 
-        // In text mode: require 2-finger pan for scrolling, so single finger
-        // can drag / resize text objects without the scroll view stealing the gesture.
-        vc.scrollView.panGestureRecognizer.minimumNumberOfTouches = isTextObjectInteractionMode ? 2 : 1
-        // canCancelContentTouches stays true (default) so 2-finger scroll works.
-        // Single-finger drags are safe because minimumNumberOfTouches = 2 prevents
-        // the scroll view from recognizing single-finger pan.
+        vc.applyViewportPolicy(viewportController)
         vc.scrollView.isTextMode = isTextObjectInteractionMode
         vc.isTextMode = isTextObjectInteractionMode
 
         // NOTE: No drawing data sync here.
         // PKCanvasView is the sole source of truth for ink while the page is open.
         // Ink is synced to the data model only on save via syncInkFromBridge().
+        c.syncViewport(using: vc.scrollView)
     }
 
     // MARK: Coordinator
 
-    final class Coordinator: NSObject, PKCanvasViewDelegate, UIPencilInteractionDelegate {
+    final class Coordinator: NSObject, PKCanvasViewDelegate, UIPencilInteractionDelegate, UIScrollViewDelegate {
         var parent: NotebookScrollHost!
         weak var vc: NotebookScrollVC?
         var paperHost: UIHostingController<AnyView>?
@@ -306,6 +311,35 @@ struct NotebookScrollHost<Paper: View>: UIViewControllerRepresentable {
             }
             debounce = item
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: item)
+        }
+
+        func syncViewport(using scrollView: UIScrollView) {
+            let zoom = max(scrollView.zoomScale, 0.001)
+            let visibleRect = CGRect(
+                x: scrollView.contentOffset.x / zoom,
+                y: scrollView.contentOffset.y / zoom,
+                width: scrollView.bounds.width / zoom,
+                height: scrollView.bounds.height / zoom
+            )
+            let fitMode: CanvasViewportFitMode = abs(zoom - scrollView.minimumZoomScale) < 0.02 ? .fitWidth : .free
+            parent.viewportController.update(
+                zoomScale: zoom,
+                contentOffset: scrollView.contentOffset,
+                visibleRect: visibleRect,
+                fitMode: fitMode
+            )
+        }
+
+        func viewForZooming(in scrollView: UIScrollView) -> UIView? {
+            vc?.contentView
+        }
+
+        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            syncViewport(using: scrollView)
+        }
+
+        func scrollViewDidZoom(_ scrollView: UIScrollView) {
+            syncViewport(using: scrollView)
         }
 
         func canvasViewDidBeginUsingTool(_ cv: PKCanvasView) {
@@ -399,7 +433,10 @@ final class NotebookScrollVC: UIViewController, UIGestureRecognizerDelegate {
         scrollView.showsVerticalScrollIndicator = true
         scrollView.showsHorizontalScrollIndicator = false
         scrollView.alwaysBounceVertical = true
+        scrollView.bouncesZoom = true
         scrollView.delaysContentTouches = false
+        scrollView.minimumZoomScale = 0.75
+        scrollView.maximumZoomScale = 3.0
 
         // CRITICAL: Only finger (direct touch) can pan the scroll view.
         // Pencil (stylus) pan gestures are NOT claimed by the scroll view,
@@ -429,6 +466,18 @@ final class NotebookScrollVC: UIViewController, UIGestureRecognizerDelegate {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         scrollView.frame = view.bounds
+    }
+
+    func applyViewportPolicy(_ controller: CanvasViewportController) {
+        scrollView.minimumZoomScale = controller.minimumZoomScale
+        scrollView.maximumZoomScale = controller.maximumZoomScale
+
+        switch controller.gesturePolicy {
+        case .standard, .selectionAware:
+            scrollView.panGestureRecognizer.minimumNumberOfTouches = 1
+        case .textEditing:
+            scrollView.panGestureRecognizer.minimumNumberOfTouches = 2
+        }
     }
 
     // MARK: - Dismiss keyboard on blank-area tap
@@ -464,24 +513,779 @@ final class NotebookScrollVC: UIViewController, UIGestureRecognizerDelegate {
 private struct PaperBackground: View {
     let pageWidth: CGFloat
     let pageHeight: CGFloat
+    let paper: NotePaperConfiguration
 
     var body: some View {
         Canvas { ctx, size in
-            var y = PT.topInset
-            while y < size.height - 28 {
-                ctx.stroke(
-                    Path { p in p.move(to: .init(x: 0, y: y)); p.addLine(to: .init(x: size.width, y: y)) },
-                    with: .color(PT.ruleColor), lineWidth: 0.5
-                )
-                y += PT.lineSpacing
+            switch paper.style {
+            case .plain:
+                drawMarginGuide(in: &ctx, size: size)
+            case .lined:
+                drawLinedPaper(in: &ctx, size: size)
+            case .grid:
+                drawGridPaper(in: &ctx, size: size)
+            case .dotted:
+                drawDottedPaper(in: &ctx, size: size)
+            case .cornell:
+                drawCornellTemplate(in: &ctx, size: size)
+            case .readingStudy:
+                drawReadingStudyTemplate(in: &ctx, size: size)
+            case .wrongAnswer:
+                drawWrongAnswerTemplate(in: &ctx, size: size)
             }
-            ctx.stroke(
-                Path { p in p.move(to: .init(x: PT.marginX, y: 18)); p.addLine(to: .init(x: PT.marginX, y: size.height - 18)) },
-                with: .color(PT.marginColor), lineWidth: 1.2
-            )
         }
         .frame(width: pageWidth, height: pageHeight)
         .allowsHitTesting(false)
+    }
+
+    private var spacing: CGFloat {
+        max(paper.lineSpacing, 24)
+    }
+
+    private var marginLeading: CGFloat {
+        max(paper.marginInsets.leading, PT.leading)
+    }
+
+    private func drawLinedPaper(in ctx: inout GraphicsContext, size: CGSize) {
+        drawHorizontalRules(in: &ctx, size: size, startY: paper.marginInsets.top, spacing: spacing)
+        drawMarginGuide(in: &ctx, size: size)
+    }
+
+    private func drawGridPaper(in ctx: inout GraphicsContext, size: CGSize) {
+        drawHorizontalRules(in: &ctx, size: size, startY: paper.marginInsets.top, spacing: spacing)
+        var x = marginLeading
+        while x < size.width - paper.marginInsets.trailing {
+            ctx.stroke(
+                Path { path in
+                    path.move(to: CGPoint(x: x, y: paper.marginInsets.top))
+                    path.addLine(to: CGPoint(x: x, y: size.height - paper.marginInsets.bottom))
+                },
+                with: .color(PT.ruleColor.opacity(0.8)),
+                lineWidth: 0.45
+            )
+            x += spacing
+        }
+        drawMarginGuide(in: &ctx, size: size)
+    }
+
+    private func drawDottedPaper(in ctx: inout GraphicsContext, size: CGSize) {
+        var y = paper.marginInsets.top
+        while y < size.height - paper.marginInsets.bottom {
+            var x = marginLeading
+            while x < size.width - paper.marginInsets.trailing {
+                let dot = CGRect(x: x - 0.6, y: y - 0.6, width: 1.2, height: 1.2)
+                ctx.fill(Path(ellipseIn: dot), with: .color(PT.ruleColor.opacity(0.75)))
+                x += spacing
+            }
+            y += spacing
+        }
+        drawMarginGuide(in: &ctx, size: size)
+    }
+
+    private func drawCornellTemplate(in ctx: inout GraphicsContext, size: CGSize) {
+        let cueColumnWidth = max(160, size.width * 0.2)
+        let summaryHeight = max(160, size.height * 0.16)
+        let contentTop = paper.marginInsets.top + 18
+        let summaryTop = size.height - summaryHeight - paper.marginInsets.bottom
+
+        drawHorizontalRules(in: &ctx, size: size, startY: contentTop, spacing: spacing, endY: summaryTop - 16)
+
+        ctx.stroke(
+            Path(CGRect(
+                x: paper.marginInsets.leading,
+                y: contentTop,
+                width: cueColumnWidth,
+                height: summaryTop - contentTop
+            )),
+            with: .color(PT.marginColor.opacity(0.9)),
+            lineWidth: 1
+        )
+        ctx.stroke(
+            Path { path in
+                path.move(to: CGPoint(x: paper.marginInsets.leading + cueColumnWidth + 18, y: contentTop))
+                path.addLine(to: CGPoint(x: paper.marginInsets.leading + cueColumnWidth + 18, y: summaryTop))
+            },
+            with: .color(PT.marginColor.opacity(0.9)),
+            lineWidth: 1
+        )
+        ctx.stroke(
+            Path { path in
+                path.move(to: CGPoint(x: paper.marginInsets.leading, y: summaryTop))
+                path.addLine(to: CGPoint(x: size.width - paper.marginInsets.trailing, y: summaryTop))
+            },
+            with: .color(PT.accent.opacity(0.25)),
+            lineWidth: 1.2
+        )
+    }
+
+    private func drawReadingStudyTemplate(in ctx: inout GraphicsContext, size: CGSize) {
+        let headerHeight = max(96, spacing * 2.4)
+        let vocabColumnWidth = max(220, size.width * 0.22)
+        let bodyTop = paper.marginInsets.top + headerHeight
+
+        ctx.stroke(
+            Path(CGRect(
+                x: paper.marginInsets.leading,
+                y: paper.marginInsets.top,
+                width: size.width - paper.marginInsets.leading - paper.marginInsets.trailing,
+                height: headerHeight - 20
+            )),
+            with: .color(PT.accent.opacity(0.18)),
+            lineWidth: 1
+        )
+        drawHorizontalRules(in: &ctx, size: size, startY: bodyTop, spacing: spacing)
+        ctx.stroke(
+            Path { path in
+                let splitX = size.width - paper.marginInsets.trailing - vocabColumnWidth
+                path.move(to: CGPoint(x: splitX, y: bodyTop))
+                path.addLine(to: CGPoint(x: splitX, y: size.height - paper.marginInsets.bottom))
+            },
+            with: .color(PT.accent.opacity(0.22)),
+            lineWidth: 1
+        )
+        drawMarginGuide(in: &ctx, size: size)
+    }
+
+    private func drawWrongAnswerTemplate(in ctx: inout GraphicsContext, size: CGSize) {
+        let headerHeight = max(110, spacing * 2.8)
+        let sectionGap: CGFloat = 18
+        let bodyTop = paper.marginInsets.top + headerHeight
+        let availableHeight = size.height - bodyTop - paper.marginInsets.bottom
+        let sectionHeight = max(120, (availableHeight - sectionGap * 2) / 3)
+
+        for index in 0..<3 {
+            let y = bodyTop + CGFloat(index) * (sectionHeight + sectionGap)
+            let rect = CGRect(
+                x: paper.marginInsets.leading,
+                y: y,
+                width: size.width - paper.marginInsets.leading - paper.marginInsets.trailing,
+                height: sectionHeight
+            )
+            ctx.stroke(
+                RoundedRectangle(cornerRadius: 10, style: .continuous).path(in: rect),
+                with: .color(PT.accent.opacity(index == 0 ? 0.22 : 0.16)),
+                style: StrokeStyle(lineWidth: 1, dash: index == 1 ? [6, 4] : [])
+            )
+        }
+
+        ctx.stroke(
+            Path(CGRect(
+                x: paper.marginInsets.leading,
+                y: paper.marginInsets.top,
+                width: size.width - paper.marginInsets.leading - paper.marginInsets.trailing,
+                height: headerHeight - 24
+            )),
+            with: .color(PT.marginColor.opacity(0.85)),
+            lineWidth: 1
+        )
+    }
+
+    private func drawHorizontalRules(
+        in ctx: inout GraphicsContext,
+        size: CGSize,
+        startY: CGFloat,
+        spacing: CGFloat,
+        endY: CGFloat? = nil
+    ) {
+        var y = startY
+        let lastY = endY ?? (size.height - paper.marginInsets.bottom)
+        while y < lastY {
+            ctx.stroke(
+                Path { path in
+                    path.move(to: CGPoint(x: 0, y: y))
+                    path.addLine(to: CGPoint(x: size.width, y: y))
+                },
+                with: .color(PT.ruleColor),
+                lineWidth: 0.5
+            )
+            y += spacing
+        }
+    }
+
+    private func drawMarginGuide(in ctx: inout GraphicsContext, size: CGSize) {
+        ctx.stroke(
+            Path { path in
+                path.move(to: CGPoint(x: marginLeading, y: 18))
+                path.addLine(to: CGPoint(x: marginLeading, y: size.height - 18))
+            },
+            with: .color(PT.marginColor),
+            lineWidth: 1.2
+        )
+    }
+}
+
+private struct PaperLayerView: View {
+    let pageWidth: CGFloat
+    let pageHeight: CGFloat
+    let paper: NotePaperConfiguration
+
+    var body: some View {
+        PaperBackground(pageWidth: pageWidth, pageHeight: pageHeight, paper: paper)
+    }
+}
+
+private struct BackgroundReferenceLayerView: View {
+    @ObservedObject var vm: NoteWorkspaceViewModel
+    let pageWidth: CGFloat
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if !vm.sourceHint.isEmpty {
+                Text(vm.sourceHint)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(PT.muted.opacity(0.7))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(Color.white.opacity(0.55))
+                    )
+                    .padding(.leading, PT.leading)
+                    .padding(.top, 18)
+            }
+            Spacer()
+        }
+        .frame(maxWidth: pageWidth, maxHeight: .infinity, alignment: .topLeading)
+        .allowsHitTesting(false)
+    }
+}
+
+private struct CanvasObjectLayerView: View {
+    @ObservedObject var vm: NoteWorkspaceViewModel
+    let pageWidth: CGFloat
+    let pageHeight: CGFloat
+    let appViewModel: AppViewModel
+    let isTextMode: Bool
+    let isSelectMode: Bool
+    let isTextObjectInteractionMode: Bool
+    @Binding var editorSelection: EditorSelection
+    var onHeightChange: (CGFloat) -> Void
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            UserContentLayer(
+                vm: vm,
+                isTextObjectInteractionMode: isTextObjectInteractionMode,
+                editorSelection: $editorSelection,
+                onHeightChange: onHeightChange
+            )
+            .frame(width: pageWidth - PT.leading - PT.trailing)
+            .padding(.leading, PT.leading)
+            .padding(.trailing, PT.trailing)
+            .padding(.top, PT.topInset)
+
+            CanvasStaticObjectLayer(
+                vm: vm,
+                isSelectMode: isSelectMode,
+                editorSelection: $editorSelection,
+                pageWidth: pageWidth,
+                pageHeight: pageHeight
+            )
+
+            CanvasTextObjectsLayer(
+                vm: vm,
+                appViewModel: appViewModel,
+                isTextToolActive: isTextMode,
+                canManipulateTextObjects: isTextObjectInteractionMode || isSelectMode,
+                editorSelection: $editorSelection,
+                pageWidth: pageWidth,
+                pageHeight: pageHeight
+            )
+        }
+    }
+}
+
+private struct CanvasStaticObjectLayer: View {
+    @ObservedObject var vm: NoteWorkspaceViewModel
+    let isSelectMode: Bool
+    @Binding var editorSelection: EditorSelection
+    let pageWidth: CGFloat
+    let pageHeight: CGFloat
+
+    private var visibleElements: [CanvasElement] {
+        vm.canvasObjectElements
+            .filter { element in
+                guard element.isVisibleObject else { return false }
+                switch element.kind {
+                case .imageObject, .knowledgeCardObject, .linkPreviewObject:
+                    return true
+                case .quoteObject:
+                    return element.isFloatingObject
+                case .textObject, .inkStroke, .inkSelectionObject:
+                    return false
+                }
+            }
+            .sorted { lhs, rhs in
+                if lhs.resolvedZIndex != rhs.resolvedZIndex {
+                    return lhs.resolvedZIndex < rhs.resolvedZIndex
+                }
+                return lhs.metadata.createdAt < rhs.metadata.createdAt
+            }
+    }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(visibleElements) { element in
+                CanvasStaticObjectCard(
+                    element: element,
+                    isSelected: vm.selectionController.contains(element.id)
+                )
+                    .frame(
+                        width: max(element.effectiveFrame.width, 80),
+                        height: max(element.effectiveFrame.height, 60)
+                    )
+                    .position(
+                        x: element.effectiveFrame.midX,
+                        y: element.effectiveFrame.midY
+                    )
+                    .rotationEffect(.degrees(Double(element.rotation)))
+                    .zIndex(Double(element.resolvedZIndex))
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        guard isSelectMode else { return }
+                        editorSelection = .none
+                        vm.selectCanvasObject(id: element.id)
+                    }
+            }
+        }
+        .frame(width: pageWidth, height: pageHeight)
+        .allowsHitTesting(isSelectMode)
+    }
+}
+
+private struct CanvasStaticObjectCard: View {
+    let element: CanvasElement
+    let isSelected: Bool
+
+    var body: some View {
+        switch element.kind {
+        case .imageObject:
+            imageCard
+        case .knowledgeCardObject:
+            knowledgeCard
+        case .linkPreviewObject:
+            linkPreviewCard
+        case .quoteObject:
+            floatingQuoteCard
+        case .textObject, .inkStroke, .inkSelectionObject:
+            EmptyView()
+        }
+    }
+
+    private var imageCard: some View {
+        let caption = element.imageObject?.caption?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return VStack(alignment: .leading, spacing: 8) {
+            Group {
+                if let data = element.imageObject?.imageData,
+                   let image = UIImage(data: data) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color.white.opacity(0.72))
+                        VStack(spacing: 8) {
+                            Image(systemName: "photo")
+                                .font(.system(size: 22, weight: .semibold))
+                                .foregroundStyle(PT.accent.opacity(0.8))
+                            Text(element.imageObject?.remoteURL?.nonEmpty ?? "图片对象")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(PT.muted)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 12)
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            if let caption, !caption.isEmpty {
+                Text(caption)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(PT.ink.opacity(0.82))
+                    .lineLimit(2)
+            }
+        }
+        .padding(10)
+        .background(cardBackground)
+    }
+
+    private var knowledgeCard: some View {
+        let payload = element.knowledgeCardObject
+        let linkedCount = payload?.linkedKnowledgePointIDs.count ?? 0
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "rectangle.stack.badge.person.crop")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(PT.accent)
+                Text("知识卡")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(PT.accent)
+                Spacer(minLength: 0)
+                if linkedCount > 0 {
+                    Text("\(linkedCount) 关联")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(PT.muted)
+                }
+            }
+
+            Text(payload?.title.nonEmpty ?? "未命名知识卡")
+                .font(.system(size: 16, weight: .semibold, design: .serif))
+                .foregroundStyle(PT.ink)
+                .lineLimit(2)
+
+            Text(payload?.summary.nonEmpty ?? "补充概念、例句或解题逻辑。")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(PT.ink.opacity(0.76))
+                .lineSpacing(4)
+                .lineLimit(5)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(cardBackground)
+    }
+
+    private var linkPreviewCard: some View {
+        let payload = element.linkPreviewObject
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "link")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(PT.accent)
+                Text(payload?.title.nonEmpty ?? "链接卡片")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(PT.ink)
+                    .lineLimit(1)
+            }
+
+            Text(payload?.url.nonEmpty ?? "未提供 URL")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(PT.accent.opacity(0.84))
+                .lineLimit(1)
+
+            if let summary = payload?.summary?.nonEmpty {
+                Text(summary)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(PT.muted)
+                    .lineSpacing(3)
+                    .lineLimit(4)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(cardBackground)
+    }
+
+    private var floatingQuoteCard: some View {
+        let payload = element.quoteObject
+        let font = BlockStyleMapping.font(
+            for: payload?.textStyle ?? .classicSerif,
+            kind: .quote,
+            size: payload?.fontSizePreset ?? .medium
+        )
+        let color = BlockStyleMapping.color(for: payload?.textColor ?? .inkBlack)
+        return HStack(alignment: .top, spacing: 12) {
+            RoundedRectangle(cornerRadius: 1.5)
+                .fill(PT.quoteBar)
+                .frame(width: 3)
+            Text(payload?.text ?? "")
+                .font(font)
+                .italic()
+                .foregroundStyle(color.opacity(0.88))
+                .lineSpacing(5)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(cardBackground)
+    }
+
+    private var cardBackground: some View {
+        RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .fill(Color.white.opacity(0.84))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(isSelected ? PT.accent.opacity(0.85) : PT.divider, lineWidth: isSelected ? 1.5 : 0.8)
+            )
+            .shadow(color: .black.opacity(0.04), radius: 12, y: 6)
+    }
+}
+
+private struct CanvasOverlayLayerView: View {
+    @ObservedObject var vm: NoteWorkspaceViewModel
+    let appViewModel: AppViewModel
+    let isSelectMode: Bool
+    @Binding var editorSelection: EditorSelection
+    let pageWidth: CGFloat
+    let pageHeight: CGFloat
+
+    @State private var draftFrame: CGRect?
+    @State private var dragStartFrame: CGRect?
+    @State private var resizeStartFrame: CGRect?
+
+    private var selectedElement: CanvasElement? {
+        vm.primarySelectedCanvasElement
+    }
+
+    private var isInteractiveObjectSelected: Bool {
+        guard let selectedElement else { return false }
+        return isSelectMode && selectedElement.kind != .textObject
+    }
+
+    private var liveSelectionFrame: CGRect? {
+        draftFrame ?? selectedElement?.effectiveFrame
+    }
+
+    private var showsVerticalGuide: Bool {
+        guard let frame = liveSelectionFrame else { return false }
+        return abs(frame.midX - (pageWidth / 2)) < 6
+    }
+
+    private var showsHorizontalGuide: Bool {
+        guard let frame = liveSelectionFrame else { return false }
+        return abs(frame.midY - (pageHeight / 2)) < 6
+    }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            Color.clear
+                .frame(width: pageWidth, height: pageHeight)
+                .contentShape(Rectangle())
+                .allowsHitTesting(false)
+
+            zoomHUD
+
+            if showsVerticalGuide {
+                Rectangle()
+                    .fill(PT.accent.opacity(0.18))
+                    .frame(width: 1, height: pageHeight)
+                    .position(x: pageWidth / 2, y: pageHeight / 2)
+                    .allowsHitTesting(false)
+            }
+
+            if showsHorizontalGuide {
+                Rectangle()
+                    .fill(PT.accent.opacity(0.18))
+                    .frame(width: pageWidth, height: 1)
+                    .position(x: pageWidth / 2, y: pageHeight / 2)
+                    .allowsHitTesting(false)
+            }
+
+            if let selectedElement, let frame = liveSelectionFrame, isInteractiveObjectSelected {
+                selectionOverlay(for: selectedElement, frame: frame)
+            }
+        }
+        .frame(width: pageWidth, height: pageHeight)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private var zoomHUD: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "plus.magnifyingglass")
+                .font(.system(size: 11, weight: .semibold))
+            Text(vm.viewportController.zoomHUDLabel)
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+        }
+        .foregroundStyle(PT.ink.opacity(0.82))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.white.opacity(0.75))
+                .overlay(
+                    Capsule(style: .continuous)
+                        .stroke(PT.divider, lineWidth: 0.8)
+                )
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+        .padding(.top, 18)
+        .padding(.trailing, 18)
+        .allowsHitTesting(false)
+    }
+
+    @ViewBuilder
+    private func selectionOverlay(for element: CanvasElement, frame: CGRect) -> some View {
+        ZStack(alignment: .topLeading) {
+            Rectangle()
+                .fill(Color.clear)
+                .frame(width: frame.width, height: frame.height)
+                .contentShape(Rectangle())
+                .position(x: frame.midX, y: frame.midY)
+                .highPriorityGesture(moveGesture(for: element, frame: frame))
+
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(PT.accent, style: StrokeStyle(lineWidth: 1.5, dash: [8, 4]))
+                .frame(width: frame.width, height: frame.height)
+                .position(x: frame.midX, y: frame.midY)
+                .allowsHitTesting(false)
+
+            ForEach(CanvasTransformHandle.allCases.filter { $0 != .move }) { handle in
+                if let corner = handle.resizeCorner {
+                    TextObjectResizeHandle()
+                        .position(handlePosition(for: corner, frame: frame))
+                        .highPriorityGesture(resizeGesture(for: element, handle: handle, frame: frame))
+                }
+            }
+
+            objectMenu(for: element, frame: frame)
+        }
+    }
+
+    private func objectMenu(for element: CanvasElement, frame: CGRect) -> some View {
+        HStack(spacing: 8) {
+            Text((vm.selectionController.selectionKind ?? .mixed).label)
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(PT.accent)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(Color.white.opacity(0.9))
+                )
+
+            Button {
+                vm.selectionController.showsInspector.toggle()
+            } label: {
+                Image(systemName: vm.selectionController.showsInspector ? "sidebar.right" : "slider.horizontal.3")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(PT.ink)
+                    .frame(width: 28, height: 28)
+                    .background(Circle().fill(Color.white.opacity(0.92)))
+            }
+            .buttonStyle(.plain)
+
+            Button(role: .destructive) {
+                vm.deleteCanvasObject(id: element.id)
+                vm.scheduleAutosave(using: appViewModel, delayNanoseconds: 150_000_000)
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.red.opacity(0.88))
+                    .frame(width: 28, height: 28)
+                    .background(Circle().fill(Color.white.opacity(0.92)))
+            }
+            .buttonStyle(.plain)
+        }
+        .position(
+            x: min(max(frame.midX, 120), pageWidth - 120),
+            y: max(frame.minY - 26, 24)
+        )
+    }
+
+    private func moveGesture(for element: CanvasElement, frame: CGRect) -> some Gesture {
+        DragGesture(minimumDistance: 1)
+            .onChanged { value in
+                if dragStartFrame == nil {
+                    dragStartFrame = frame
+                    vm.beginCanvasInteraction(handle: .move, mode: .moving)
+                }
+                let base = dragStartFrame ?? frame
+                let next = clamp(frame: base.offsetBy(dx: value.translation.width, dy: value.translation.height), minimumSize: minimumSize(for: element))
+                draftFrame = next
+                vm.updateCanvasSelectionPreview(next)
+            }
+            .onEnded { value in
+                let base = dragStartFrame ?? frame
+                let next = clamp(frame: base.offsetBy(dx: value.translation.width, dy: value.translation.height), minimumSize: minimumSize(for: element))
+                draftFrame = nil
+                dragStartFrame = nil
+                vm.moveCanvasObject(id: element.id, to: next.origin)
+                vm.endCanvasInteraction()
+                vm.scheduleAutosave(using: appViewModel, delayNanoseconds: 150_000_000)
+            }
+    }
+
+    private func resizeGesture(for element: CanvasElement, handle: CanvasTransformHandle, frame: CGRect) -> some Gesture {
+        DragGesture(minimumDistance: 1)
+            .onChanged { value in
+                guard let corner = handle.resizeCorner else { return }
+                if resizeStartFrame == nil {
+                    resizeStartFrame = frame
+                    vm.beginCanvasInteraction(handle: handle, mode: .resizing)
+                }
+                let base = resizeStartFrame ?? frame
+                let minimumSize = minimumSize(for: element)
+                let next = clamp(
+                    frame: corner.apply(
+                        delta: value.translation,
+                        origin: base.origin,
+                        size: base.size,
+                        minW: minimumSize.width,
+                        minH: minimumSize.height
+                    ),
+                    minimumSize: minimumSize
+                )
+                draftFrame = next
+                vm.updateCanvasSelectionPreview(next)
+            }
+            .onEnded { value in
+                guard let corner = handle.resizeCorner else { return }
+                let base = resizeStartFrame ?? frame
+                let minimumSize = minimumSize(for: element)
+                let next = clamp(
+                    frame: corner.apply(
+                        delta: value.translation,
+                        origin: base.origin,
+                        size: base.size,
+                        minW: minimumSize.width,
+                        minH: minimumSize.height
+                    ),
+                    minimumSize: minimumSize
+                )
+                draftFrame = nil
+                resizeStartFrame = nil
+                vm.resizeCanvasObject(id: element.id, to: next)
+                vm.endCanvasInteraction()
+                vm.scheduleAutosave(using: appViewModel, delayNanoseconds: 150_000_000)
+            }
+    }
+
+    private func handlePosition(for corner: ResizeCorner, frame: CGRect) -> CGPoint {
+        CGPoint(
+            x: frame.midX + corner.xOffsetFromCenter(frame.width),
+            y: frame.midY + corner.yOffsetFromCenter(frame.height)
+        )
+    }
+
+    private func minimumSize(for element: CanvasElement) -> CGSize {
+        switch element.kind {
+        case .imageObject:
+            return CGSize(width: 140, height: 110)
+        case .knowledgeCardObject:
+            return CGSize(width: 220, height: 140)
+        case .quoteObject:
+            return CGSize(width: 220, height: 80)
+        case .linkPreviewObject:
+            return CGSize(width: 220, height: 100)
+        case .textObject:
+            return CGSize(width: 160, height: 60)
+        case .inkStroke, .inkSelectionObject:
+            return CGSize(width: 80, height: 80)
+        }
+    }
+
+    private func clamp(frame: CGRect, minimumSize: CGSize) -> CGRect {
+        let width = min(max(frame.width, minimumSize.width), pageWidth)
+        let height = min(max(frame.height, minimumSize.height), pageHeight)
+        let x = max(0, min(frame.origin.x, pageWidth - width))
+        let y = max(0, min(frame.origin.y, pageHeight - height))
+        return CGRect(x: x, y: y, width: width, height: height)
+    }
+
+    private var accessibilityLabel: String {
+        switch editorSelection {
+        case .none:
+            return "画布覆盖交互层"
+        case .textBlock:
+            return "文本块交互层"
+        case .textObject:
+            return "文本对象交互层"
+        case .inkSelection:
+            return "墨迹选区交互层"
+        }
     }
 }
 
@@ -605,6 +1409,7 @@ private struct UserContentLayer: View {
                 .onTapGesture {
                     DispatchQueue.main.async {
                         focusedBlockID = nil
+                        vm.clearCanvasSelection()
                         if case .textBlock = editorSelection {
                             editorSelection = .none
                             vm.editingTextBlockID = nil

@@ -3,6 +3,7 @@ import UIKit
 
 struct CanvasTextObjectsLayer: View {
     @ObservedObject var vm: NoteWorkspaceViewModel
+    let appViewModel: AppViewModel
     let isTextToolActive: Bool
     let canManipulateTextObjects: Bool
     @Binding var editorSelection: EditorSelection
@@ -70,11 +71,12 @@ struct CanvasTextObjectsLayer: View {
                     .allowsHitTesting(canManipulateTextObjects)
             }
 
-            ForEach(vm.textObjects.sorted(by: { $0.zIndex < $1.zIndex })) { obj in
+            ForEach(vm.textObjects.filter { !$0.isHidden }.sorted(by: { $0.zIndex < $1.zIndex })) { obj in
                 CanvasTextObjectContainer(
                     obj: obj,
                     isSelected: isSelected(obj.id),
                     isEditing: isEditing(obj.id),
+                    allowsTransforms: !obj.isLocked,
                     pageWidth: pageWidth,
                     pageHeight: pageHeight,
                     onTextChange: { vm.updateTextObject(id: obj.id, text: $0) },
@@ -87,6 +89,7 @@ struct CanvasTextObjectsLayer: View {
                         editorSelection = .textObject(obj.id)
                     },
                     onStartEditing: {
+                        guard !obj.isLocked else { return }
                         editingObjectID = obj.id
                         editorSelection = .textObject(obj.id)
                     },
@@ -94,9 +97,11 @@ struct CanvasTextObjectsLayer: View {
                         guard editingObjectID == obj.id else { return }
                         editingObjectID = nil
                         lastEditDismissTime = Date()
+                        vm.scheduleAutosave(using: appViewModel)
                     },
                     onCommitMove: { newPosition in
                         vm.moveTextObject(id: obj.id, to: newPosition)
+                        vm.scheduleAutosave(using: appViewModel)
                     },
                     onCommitResize: { newX, newY, newWidth, newHeight in
                         vm.resizeTextObject(
@@ -106,6 +111,7 @@ struct CanvasTextObjectsLayer: View {
                             width: newWidth,
                             height: newHeight
                         )
+                        vm.scheduleAutosave(using: appViewModel)
                     }
                 )
                 .zIndex(isSelected(obj.id) || isEditing(obj.id) ? 10_000 : Double(obj.zIndex))
