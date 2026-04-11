@@ -343,6 +343,15 @@ enum AIExplainSentenceService {
         }
     }
 
+    static func shouldRetrySameEndpoint(statusCode: Int) -> Bool {
+        switch statusCode {
+        case 408, 421, 425, 429, 500, 502, 503, 504:
+            return true
+        default:
+            return false
+        }
+    }
+
     static func shouldRetryEndpoint(for error: URLError) -> Bool {
         switch error.code {
         case .timedOut,
@@ -354,6 +363,19 @@ enum AIExplainSentenceService {
              .internationalRoamingOff,
              .callIsActive,
              .dataNotAllowed:
+            return true
+        default:
+            return false
+        }
+    }
+
+    static func shouldRetrySameEndpoint(for error: URLError) -> Bool {
+        switch error.code {
+        case .timedOut,
+             .cannotConnectToHost,
+             .networkConnectionLost,
+             .dnsLookupFailed,
+             .notConnectedToInternet:
             return true
         default:
             return false
@@ -383,16 +405,17 @@ enum AIExplainSentenceService {
         let currentPort = components.port
         if let preferredPort {
             if currentPort == nil {
-                append(components)
                 var preferred = components
                 preferred.port = preferredPort
                 append(preferred)
+                append(components)
             } else if currentPort == preferredPort {
                 append(components)
                 var portless = components
                 portless.port = nil
                 append(portless)
             } else {
+                append(components)
                 var preferred = components
                 preferred.port = preferredPort
                 append(preferred)
@@ -400,14 +423,17 @@ enum AIExplainSentenceService {
                 var portless = components
                 portless.port = nil
                 append(portless)
-
-                append(components)
             }
         } else {
             append(components)
         }
 
         return results
+    }
+
+    static func retryDelayNanoseconds(for attemptIndex: Int) -> UInt64 {
+        let clamped = min(max(attemptIndex, 0), 2)
+        return UInt64(350_000_000 * (clamped + 1))
     }
 
     private static func decodeResponseEnvelope(
@@ -489,71 +515,101 @@ enum AIExplainSentenceService {
         var lastError: Error?
 
         for (index, endpointURL) in endpointURLs.enumerated() {
-            var request = URLRequest(url: endpointURL)
-            request.httpMethod = "POST"
-            request.timeoutInterval = 25
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = requestData
+            for attempt in 0..<2 {
+                var request = URLRequest(url: endpointURL)
+                request.httpMethod = "POST"
+                request.timeoutInterval = 25
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.httpBody = requestData
 
-            do {
-                let (data, response) = try await URLSession.shared.data(for: request)
-                guard let httpResponse = response as? HTTPURLResponse else {
+                do {
+                    try Task.checkCancellation()
+                    let (data, response) = try await URLSession.shared.data(for: request)
+                    guard let httpResponse = response as? HTTPURLResponse else {
+                        throw AIExplainSentenceServiceError.invalidServerResponse
+                    }
+
+                    let decoded = try decodeResponseEnvelope(
+                        from: data,
+                        sourceSentence: validatedExplainContext.sentence
+                    )
+
+                    if httpResponse.statusCode == 200, decoded.success, let result = decoded.data {
+                        return result
+                    }
+
+                    if shouldRetrySameEndpoint(statusCode: httpResponse.statusCode), attempt == 0 {
+                        TextPipelineDiagnostics.log(
+                            "句子分析",
+                            "AI 端点瞬时失败，准备重试: \(endpointURL.absoluteString) status=\(httpResponse.statusCode)",
+                            severity: .warning
+                        )
+                        try await Task.sleep(nanoseconds: retryDelayNanoseconds(for: attempt))
+                        continue
+                    }
+
+                    if shouldRetryEndpoint(statusCode: httpResponse.statusCode), index < endpointURLs.count - 1 {
+                        let nextURL = endpointURLs[index + 1].absoluteString
+                        TextPipelineDiagnostics.log(
+                            "句子分析",
+                            "AI 端点不可用，切换候选地址: \(endpointURL.absoluteString) -> \(nextURL) status=\(httpResponse.statusCode)",
+                            severity: .warning
+                        )
+                        lastError = AIExplainSentenceServiceError.requestFailed("HTTP \(httpResponse.statusCode)")
+                        break
+                    }
+
+                    if let message = decoded.error, !message.isEmpty {
+                        throw AIExplainSentenceServiceError.requestFailed(message)
+                    }
+
+                    throw AIExplainSentenceServiceError.invalidServerResponse
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch let error as URLError {
+                    if error.code == .cancelled || Task.isCancelled {
+                        throw CancellationError()
+                    }
+                    if shouldRetrySameEndpoint(for: error), attempt == 0 {
+                        TextPipelineDiagnostics.log(
+                            "句子分析",
+                            "AI 端点连接瞬断，准备重试: \(endpointURL.absoluteString) error=\(error.localizedDescription)",
+                            severity: .warning
+                        )
+                        try await Task.sleep(nanoseconds: retryDelayNanoseconds(for: attempt))
+                        continue
+                    }
+                    if shouldRetryEndpoint(for: error), index < endpointURLs.count - 1 {
+                        let nextURL = endpointURLs[index + 1].absoluteString
+                        TextPipelineDiagnostics.log(
+                            "句子分析",
+                            "AI 端点连接失败，切换候选地址: \(endpointURL.absoluteString) -> \(nextURL) error=\(error.localizedDescription)",
+                            severity: .warning
+                        )
+                        lastError = AIExplainSentenceServiceError.transport(error.localizedDescription)
+                        break
+                    }
+                    throw AIExplainSentenceServiceError.transport(error.localizedDescription)
+                } catch let error as AIExplainSentenceServiceError {
+                    if case .invalidServerResponse = error, index < endpointURLs.count - 1 {
+                        let nextURL = endpointURLs[index + 1].absoluteString
+                        TextPipelineDiagnostics.log(
+                            "句子分析",
+                            "AI 端点响应异常，切换候选地址: \(endpointURL.absoluteString) -> \(nextURL)",
+                            severity: .warning
+                        )
+                        lastError = error
+                        break
+                    }
+                    throw error
+                } catch {
+                    print("[AIExplainSentenceService] decode failed: \(error)")
+                    if index < endpointURLs.count - 1 {
+                        lastError = error
+                        break
+                    }
                     throw AIExplainSentenceServiceError.invalidServerResponse
                 }
-
-                let decoded = try decodeResponseEnvelope(
-                    from: data,
-                    sourceSentence: validatedExplainContext.sentence
-                )
-
-                if httpResponse.statusCode == 200, decoded.success, let result = decoded.data {
-                    return result
-                }
-
-                if shouldRetryEndpoint(statusCode: httpResponse.statusCode), index < endpointURLs.count - 1 {
-                    TextPipelineDiagnostics.log(
-                        "句子分析",
-                        "AI 端点不可用，尝试下一个候选地址: \(endpointURL.absoluteString) status=\(httpResponse.statusCode)",
-                        severity: .warning
-                    )
-                    lastError = AIExplainSentenceServiceError.requestFailed("HTTP \(httpResponse.statusCode)")
-                    continue
-                }
-
-                if let message = decoded.error, !message.isEmpty {
-                    throw AIExplainSentenceServiceError.requestFailed(message)
-                }
-
-                throw AIExplainSentenceServiceError.invalidServerResponse
-            } catch let error as URLError {
-                if shouldRetryEndpoint(for: error), index < endpointURLs.count - 1 {
-                    TextPipelineDiagnostics.log(
-                        "句子分析",
-                        "AI 端点连接失败，尝试下一个候选地址: \(endpointURL.absoluteString) error=\(error.localizedDescription)",
-                        severity: .warning
-                    )
-                    lastError = AIExplainSentenceServiceError.transport(error.localizedDescription)
-                    continue
-                }
-                throw AIExplainSentenceServiceError.transport(error.localizedDescription)
-            } catch let error as AIExplainSentenceServiceError {
-                if case .invalidServerResponse = error, index < endpointURLs.count - 1 {
-                    TextPipelineDiagnostics.log(
-                        "句子分析",
-                        "AI 端点响应异常，尝试下一个候选地址: \(endpointURL.absoluteString)",
-                        severity: .warning
-                    )
-                    lastError = error
-                    continue
-                }
-                throw error
-            } catch {
-                print("[AIExplainSentenceService] decode failed: \(error)")
-                if index < endpointURLs.count - 1 {
-                    lastError = error
-                    continue
-                }
-                throw AIExplainSentenceServiceError.invalidServerResponse
             }
         }
 

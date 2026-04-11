@@ -145,75 +145,109 @@ enum ProfessorAnalysisService {
         var lastError: Error?
 
         for (index, url) in endpointURLs.enumerated() {
-            var request = URLRequest(url: url, timeoutInterval: 90)
-            request.httpMethod = "POST"
-            request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
-            request.httpBody = requestData
+            for attempt in 0..<2 {
+                var request = URLRequest(url: url, timeoutInterval: 90)
+                request.httpMethod = "POST"
+                request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+                request.httpBody = requestData
 
-            do {
-                let (data, httpResponse) = try await URLSession.shared.data(for: request)
+                do {
+                    try Task.checkCancellation()
+                    let (data, httpResponse) = try await URLSession.shared.data(for: request)
 
-                guard let http = httpResponse as? HTTPURLResponse else {
-                    throw AnalysisError.invalidServerResponse
-                }
-
-                if !(200 ..< 300).contains(http.statusCode) {
-                    let bodySnippet = String(data: data.prefix(500), encoding: .utf8) ?? ""
-                    TextPipelineDiagnostics.log(
-                        "AI",
-                        "[AI][ProfessorAnalysis] 后端返回 HTTP \(http.statusCode): \(bodySnippet)",
-                        severity: .error
-                    )
-
-                    if AIExplainSentenceService.shouldRetryEndpoint(statusCode: http.statusCode), index < endpointURLs.count - 1 {
-                        TextPipelineDiagnostics.log(
-                            "AI",
-                            "[AI][ProfessorAnalysis] 端点不可用，尝试下一个候选地址: \(url.absoluteString)",
-                            severity: .warning
-                        )
-                        lastError = AnalysisError.requestFailed("HTTP \(http.statusCode)")
-                        continue
+                    guard let http = httpResponse as? HTTPURLResponse else {
+                        throw AnalysisError.invalidServerResponse
                     }
 
-                    throw AnalysisError.requestFailed("HTTP \(http.statusCode)")
+                    if !(200 ..< 300).contains(http.statusCode) {
+                        let bodySnippet = String(data: data.prefix(500), encoding: .utf8) ?? ""
+                        TextPipelineDiagnostics.log(
+                            "AI",
+                            "[AI][ProfessorAnalysis] 后端返回 HTTP \(http.statusCode): \(bodySnippet)",
+                            severity: .error
+                        )
+
+                        if AIExplainSentenceService.shouldRetrySameEndpoint(statusCode: http.statusCode), attempt == 0 {
+                            TextPipelineDiagnostics.log(
+                                "AI",
+                                "[AI][ProfessorAnalysis] 端点瞬时失败，准备重试: \(url.absoluteString) status=\(http.statusCode)",
+                                severity: .warning
+                            )
+                            try await Task.sleep(nanoseconds: AIExplainSentenceService.retryDelayNanoseconds(for: attempt))
+                            continue
+                        }
+
+                        if AIExplainSentenceService.shouldRetryEndpoint(statusCode: http.statusCode), index < endpointURLs.count - 1 {
+                            let nextURL = endpointURLs[index + 1].absoluteString
+                            TextPipelineDiagnostics.log(
+                                "AI",
+                                "[AI][ProfessorAnalysis] 切换候选地址: \(url.absoluteString) -> \(nextURL) status=\(http.statusCode)",
+                                severity: .warning
+                            )
+                            lastError = AnalysisError.requestFailed("HTTP \(http.statusCode)")
+                            break
+                        }
+
+                        throw AnalysisError.requestFailed("HTTP \(http.statusCode)")
+                    }
+
+                    let response = try JSONDecoder().decode(AnalyzePassageResponse.self, from: data)
+
+                    guard let data = response.data else {
+                        throw AnalysisError.noContent
+                    }
+
+                    payload = data
+                    break
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch let error as URLError {
+                    if error.code == .cancelled || Task.isCancelled {
+                        throw CancellationError()
+                    }
+                    if AIExplainSentenceService.shouldRetrySameEndpoint(for: error), attempt == 0 {
+                        TextPipelineDiagnostics.log(
+                            "AI",
+                            "[AI][ProfessorAnalysis] 端点连接瞬断，准备重试: \(url.absoluteString) error=\(error.localizedDescription)",
+                            severity: .warning
+                        )
+                        try await Task.sleep(nanoseconds: AIExplainSentenceService.retryDelayNanoseconds(for: attempt))
+                        continue
+                    }
+                    if AIExplainSentenceService.shouldRetryEndpoint(for: error), index < endpointURLs.count - 1 {
+                        let nextURL = endpointURLs[index + 1].absoluteString
+                        TextPipelineDiagnostics.log(
+                            "AI",
+                            "[AI][ProfessorAnalysis] 端点连接失败，切换候选地址: \(url.absoluteString) -> \(nextURL) error=\(error.localizedDescription)",
+                            severity: .warning
+                        )
+                        lastError = AnalysisError.requestFailed(error.localizedDescription)
+                        break
+                    }
+                    throw AnalysisError.requestFailed(error.localizedDescription)
+                } catch let error as AnalysisError {
+                    if case .invalidServerResponse = error, index < endpointURLs.count - 1 {
+                        let nextURL = endpointURLs[index + 1].absoluteString
+                        TextPipelineDiagnostics.log(
+                            "AI",
+                            "[AI][ProfessorAnalysis] 端点响应异常，切换候选地址: \(url.absoluteString) -> \(nextURL)",
+                            severity: .warning
+                        )
+                        lastError = error
+                        break
+                    }
+                    throw error
+                } catch {
+                    if index < endpointURLs.count - 1 {
+                        lastError = error
+                        break
+                    }
+                    throw AnalysisError.invalidServerResponse
                 }
+            }
 
-                let response = try JSONDecoder().decode(AnalyzePassageResponse.self, from: data)
-
-                guard let data = response.data else {
-                    throw AnalysisError.noContent
-                }
-
-                payload = data
+            if payload != nil {
                 break
-            } catch let error as URLError {
-                if AIExplainSentenceService.shouldRetryEndpoint(for: error), index < endpointURLs.count - 1 {
-                    TextPipelineDiagnostics.log(
-                        "AI",
-                        "[AI][ProfessorAnalysis] 端点连接失败，尝试下一个候选地址: \(url.absoluteString) error=\(error.localizedDescription)",
-                        severity: .warning
-                    )
-                    lastError = AnalysisError.requestFailed(error.localizedDescription)
-                    continue
-                }
-                throw AnalysisError.requestFailed(error.localizedDescription)
-            } catch let error as AnalysisError {
-                if case .invalidServerResponse = error, index < endpointURLs.count - 1 {
-                    TextPipelineDiagnostics.log(
-                        "AI",
-                        "[AI][ProfessorAnalysis] 端点响应异常，尝试下一个候选地址: \(url.absoluteString)",
-                        severity: .warning
-                    )
-                    lastError = error
-                    continue
-                }
-                throw error
-            } catch {
-                if index < endpointURLs.count - 1 {
-                    lastError = error
-                    continue
-                }
-                throw AnalysisError.invalidServerResponse
             }
         }
 

@@ -59,6 +59,7 @@ struct SentenceExplainDetailSheet: View {
     @State private var actionNote: String?
     @State private var activeRelatedNote: Note?
     @State private var activeKnowledgePoint: KnowledgePoint?
+    @State private var explanationTask: Task<Void, Never>?
 
     init(document: SourceDocument, sentence: Sentence) {
         self.document = document
@@ -180,11 +181,16 @@ struct SentenceExplainDetailSheet: View {
                 .environmentObject(viewModel)
             }
         }
-        .task(id: activeSentence.id) {
-            await loadExplanation()
+        .onAppear {
+            scheduleExplanationLoad(force: result == nil)
         }
         .onChange(of: activeSentence.id) { _ in
             actionNote = nil
+            scheduleExplanationLoad(force: true)
+        }
+        .onDisappear {
+            explanationTask?.cancel()
+            explanationTask = nil
         }
     }
 
@@ -424,7 +430,7 @@ struct SentenceExplainDetailSheet: View {
                     .foregroundStyle(Color.black.opacity(0.62))
 
                 Button("重新获取") {
-                    Task { await loadExplanation() }
+                    scheduleExplanationLoad(force: true)
                 }
                 .font(.system(size: 14, weight: .semibold))
                 .buttonStyle(.plain)
@@ -477,18 +483,48 @@ struct SentenceExplainDetailSheet: View {
         .padding(.bottom, layout.usesPadPresentation ? 10 : 0)
     }
 
-    private func loadExplanation() async {
-        guard !isLoading else { return }
-        isLoading = true
-        errorMessage = nil
-        defer { isLoading = false }
+    private func scheduleExplanationLoad(force: Bool) {
+        let sentence = activeSentence
+        if !force, isLoading || result != nil {
+            return
+        }
+
+        explanationTask?.cancel()
+        explanationTask = Task {
+            await loadExplanation(for: sentence)
+        }
+    }
+
+    private func loadExplanation(for sentence: Sentence) async {
+        await MainActor.run {
+            guard activeSentence.id == sentence.id else { return }
+            isLoading = true
+            errorMessage = nil
+            result = nil
+        }
 
         do {
-            let context = viewModel.explainSentenceContext(for: activeSentence, in: document)
-            result = try await AIExplainSentenceService.fetchExplanation(for: context)
+            let context = viewModel.explainSentenceContext(for: sentence, in: document)
+            let fetched = try await AIExplainSentenceService.fetchExplanation(for: context)
+            try Task.checkCancellation()
+
+            await MainActor.run {
+                guard activeSentence.id == sentence.id else { return }
+                result = fetched
+                isLoading = false
+            }
+        } catch is CancellationError {
+            await MainActor.run {
+                guard activeSentence.id == sentence.id else { return }
+                isLoading = false
+            }
         } catch {
-            result = nil
-            errorMessage = error.localizedDescription
+            await MainActor.run {
+                guard activeSentence.id == sentence.id else { return }
+                result = nil
+                errorMessage = error.localizedDescription
+                isLoading = false
+            }
         }
     }
 

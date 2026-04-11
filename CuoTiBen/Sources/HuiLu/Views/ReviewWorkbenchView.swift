@@ -1302,6 +1302,7 @@ private struct ReviewWorkbenchSentencePanel: View {
     @State private var showsContext = false
     @State private var noteSeed: NoteEditorSeed?
     @State private var actionNote: String?
+    @State private var explanationTask: Task<Void, Never>?
 
     private var breadcrumb: SentenceBreadcrumb {
         viewModel.sentenceBreadcrumb(for: sentence, in: document)
@@ -1352,11 +1353,16 @@ private struct ReviewWorkbenchSentencePanel: View {
             NoteEditorSheet(seed: seed)
                 .environmentObject(viewModel)
         }
-        .task(id: sentence.id) {
-            await loadExplanation()
+        .onAppear {
+            scheduleExplanationLoad(force: result == nil)
         }
         .onChange(of: sentence.id) { _ in
             actionNote = nil
+            scheduleExplanationLoad(force: true)
+        }
+        .onDisappear {
+            explanationTask?.cancel()
+            explanationTask = nil
         }
     }
 
@@ -1455,7 +1461,7 @@ private struct ReviewWorkbenchSentencePanel: View {
                     .foregroundStyle(Color.black.opacity(0.62))
 
                 Button("重新获取") {
-                    Task { await loadExplanation() }
+                    scheduleExplanationLoad(force: true)
                 }
                 .font(.system(size: 14, weight: .semibold))
                 .buttonStyle(.plain)
@@ -1537,18 +1543,48 @@ private struct ReviewWorkbenchSentencePanel: View {
         }
     }
 
-    private func loadExplanation() async {
-        guard !isLoading else { return }
-        isLoading = true
-        errorMessage = nil
-        defer { isLoading = false }
+    private func scheduleExplanationLoad(force: Bool) {
+        if !force, isLoading || result != nil {
+            return
+        }
+
+        let currentSentence = sentence
+        explanationTask?.cancel()
+        explanationTask = Task {
+            await loadExplanation(for: currentSentence)
+        }
+    }
+
+    private func loadExplanation(for currentSentence: Sentence) async {
+        await MainActor.run {
+            guard sentence.id == currentSentence.id else { return }
+            isLoading = true
+            errorMessage = nil
+            result = nil
+        }
 
         do {
-            let context = viewModel.explainSentenceContext(for: sentence, in: document)
-            result = try await AIExplainSentenceService.fetchExplanation(for: context)
+            let context = viewModel.explainSentenceContext(for: currentSentence, in: document)
+            let fetched = try await AIExplainSentenceService.fetchExplanation(for: context)
+            try Task.checkCancellation()
+
+            await MainActor.run {
+                guard sentence.id == currentSentence.id else { return }
+                result = fetched
+                isLoading = false
+            }
+        } catch is CancellationError {
+            await MainActor.run {
+                guard sentence.id == currentSentence.id else { return }
+                isLoading = false
+            }
         } catch {
-            result = nil
-            errorMessage = error.localizedDescription
+            await MainActor.run {
+                guard sentence.id == currentSentence.id else { return }
+                result = nil
+                errorMessage = error.localizedDescription
+                isLoading = false
+            }
         }
     }
 }
