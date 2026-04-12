@@ -537,10 +537,10 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
         let normalizedLegacyMeaning = trimmedOrEmpty(naturalChineseMeaning)
         self.faithfulTranslation = !normalizedFaithfulTranslation.isEmpty
             ? normalizedFaithfulTranslation
-            : normalizedLegacyMeaning
+            : ""
         self.teachingInterpretation = !normalizedTeachingInterpretation.isEmpty
             ? normalizedTeachingInterpretation
-            : (!normalizedLegacyMeaning.isEmpty ? normalizedLegacyMeaning : normalizedFaithfulTranslation)
+            : (!normalizedLegacyMeaning.isEmpty ? normalizedLegacyMeaning : "")
         self.naturalChineseMeaning = !normalizedLegacyMeaning.isEmpty
             ? normalizedLegacyMeaning
             : (!self.teachingInterpretation.isEmpty ? self.teachingInterpretation : self.faithfulTranslation)
@@ -573,10 +573,10 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
         let decodedTeachingInterpretation = try container.decodeIfPresent(String.self, forKey: .teachingInterpretation) ?? ""
         let decodedLegacyMeaning = try container.decodeIfPresent(String.self, forKey: .naturalChineseMeaning) ?? ""
         faithfulTranslation = trimmedOrEmpty(decodedFaithfulTranslation).isEmpty
-            ? decodedLegacyMeaning
+            ? ""
             : decodedFaithfulTranslation
         teachingInterpretation = trimmedOrEmpty(decodedTeachingInterpretation).isEmpty
-            ? (trimmedOrEmpty(decodedLegacyMeaning).isEmpty ? faithfulTranslation : decodedLegacyMeaning)
+            ? (trimmedOrEmpty(decodedLegacyMeaning).isEmpty ? "" : decodedLegacyMeaning)
             : decodedTeachingInterpretation
         naturalChineseMeaning = trimmedOrEmpty(decodedLegacyMeaning).isEmpty ? teachingInterpretation : decodedLegacyMeaning
         sentenceCore = try container.decode(String.self, forKey: .sentenceCore)
@@ -615,19 +615,21 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
     }
 
     var renderedFaithfulTranslation: String {
-        let explicit = trimmedOrEmpty(faithfulTranslation)
+        let explicit = purifiedChineseExplanation(faithfulTranslation)
         if !explicit.isEmpty { return explicit }
-        let legacy = trimmedOrEmpty(naturalChineseMeaning)
-        if !legacy.isEmpty { return legacy }
-        return trimmedOrEmpty(teachingInterpretation)
+        let legacy = purifiedChineseExplanation(naturalChineseMeaning)
+        if !legacy.isEmpty && purifiedChineseExplanation(teachingInterpretation).isEmpty {
+            return legacy
+        }
+        return ""
     }
 
     var renderedTeachingInterpretation: String {
-        let explicit = trimmedOrEmpty(teachingInterpretation)
+        let explicit = purifiedChineseExplanation(teachingInterpretation)
         if !explicit.isEmpty { return explicit }
-        let legacy = trimmedOrEmpty(naturalChineseMeaning)
+        let legacy = purifiedChineseExplanation(naturalChineseMeaning)
         if !legacy.isEmpty { return legacy }
-        return trimmedOrEmpty(faithfulTranslation)
+        return ""
     }
 
     var renderedChunkLayers: [String] {
@@ -755,6 +757,28 @@ private enum PedagogicalTextKind {
 
 private func trimmedOrEmpty(_ value: String) -> String {
     value.trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private func isChineseDominant(_ value: String) -> Bool {
+    let trimmed = trimmedOrEmpty(value)
+    guard !trimmed.isEmpty else { return false }
+
+    let chineseCount = trimmed.unicodeScalars.filter { scalar in
+        scalar.value >= 0x4E00 && scalar.value <= 0x9FFF
+    }.count
+    let latinCount = trimmed.unicodeScalars.filter { scalar in
+        (scalar.value >= 0x41 && scalar.value <= 0x5A) ||
+        (scalar.value >= 0x61 && scalar.value <= 0x7A)
+    }.count
+
+    if chineseCount == 0 { return false }
+    return chineseCount >= max(8, latinCount * 2)
+}
+
+private func purifiedChineseExplanation(_ value: String) -> String {
+    let trimmed = trimmedOrEmpty(value)
+    guard !trimmed.isEmpty else { return "" }
+    return isChineseDominant(trimmed) ? trimmed : ""
 }
 
 private func pedagogicalList(_ preferred: [String], fallback: [String], limit: Int = 6) -> [String] {
@@ -1520,9 +1544,10 @@ struct StructuredSourceBundle: Equatable {
 
         let parts = [
             trimmedOrEmpty(analysis.renderedSentenceFunction),
-            trimmedOrEmpty(analysis.renderedChunkLayers.first ?? ""),
+            trimmedOrEmpty(analysis.renderedSentenceCore),
             trimmedOrEmpty(analysis.renderedMisreadingTraps.first ?? ""),
-            trimmedOrEmpty(analysis.renderedExamParaphraseRoutes.first ?? "")
+            trimmedOrEmpty(analysis.renderedExamParaphraseRoutes.first ?? ""),
+            trimmedOrEmpty(analysis.renderedChunkLayers.first ?? "")
         ].compactMap { $0 }.filter { !$0.isEmpty }
 
         return parts.isEmpty ? sentence.text : parts.joined(separator: "｜")

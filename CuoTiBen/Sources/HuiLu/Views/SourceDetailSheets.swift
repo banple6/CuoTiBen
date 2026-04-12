@@ -1396,35 +1396,50 @@ struct ProfessorTeachingStatusHeader: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: compact ? 10 : 14) {
-            HStack(spacing: 8) {
-                statusChip(text: snapshot.currentMode, tone: .node)
-                statusChip(text: snapshot.currentSentenceAnchor, tone: .sentence)
+            HStack(alignment: .top, spacing: 10) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("教学状态")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.black.opacity(0.45))
+                        .tracking(0.8)
+                    Text(snapshot.documentTitle)
+                        .font(compact ? .system(size: 14, weight: .semibold, design: .serif) : .system(size: 15, weight: .semibold, design: .serif))
+                        .foregroundStyle(Color.black.opacity(0.62))
+                        .lineLimit(2)
+                }
+
                 Spacer(minLength: 0)
+
+                statusChip(text: snapshot.currentMode, tone: .node)
             }
 
-            Text(snapshot.documentTitle)
-                .font(compact ? .system(size: 19, weight: .bold, design: .serif) : .system(size: 24, weight: .bold, design: .serif))
-                .foregroundStyle(Color.black.opacity(0.82))
-                .lineLimit(compact ? 2 : 1)
+            statusRow(
+                label: "当前锚点",
+                primaryChip: (snapshot.currentSentenceAnchor, .sentence),
+                secondaryChip: (snapshot.currentParagraphRole, .structure)
+            )
 
-            Text(snapshot.currentSentenceFunction)
-                .font(compact ? .system(size: 15, weight: .semibold) : .system(size: 17, weight: .semibold))
-                .foregroundStyle(Color.black.opacity(0.74))
-                .lineSpacing(4)
-                .fixedSize(horizontal: false, vertical: true)
+            statusField(
+                label: "当前句定位",
+                content: snapshot.currentSentenceFunction,
+                tone: .node
+            )
 
-            if compact {
-                VStack(alignment: .leading, spacing: 8) {
-                    statusChip(text: snapshot.currentParagraphRole, tone: .structure)
-                    statusChip(text: snapshot.currentTeachingFocus, tone: .teaching)
-                }
-            } else {
-                HStack(spacing: 8) {
-                    statusChip(text: snapshot.currentParagraphRole, tone: .structure)
-                    statusChip(text: snapshot.currentTeachingFocus, tone: .teaching)
-                }
-            }
+            statusField(
+                label: "当前教学焦点",
+                content: snapshot.currentTeachingFocus,
+                tone: .teaching
+            )
         }
+        .padding(compact ? 14 : 18)
+        .background(
+            RoundedRectangle(cornerRadius: compact ? 18 : 22, style: .continuous)
+                .fill(Color.white.opacity(0.72))
+                .overlay(
+                    RoundedRectangle(cornerRadius: compact ? 18 : 22, style: .continuous)
+                        .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                )
+        )
     }
 
     private func statusChip(text: String, tone: ExplainHighlightTone) -> some View {
@@ -1437,6 +1452,57 @@ struct ProfessorTeachingStatusHeader: View {
                 Capsule(style: .continuous)
                     .fill(tone.softFill)
             )
+    }
+
+    @ViewBuilder
+    private func statusRow(
+        label: String,
+        primaryChip: (String, ExplainHighlightTone),
+        secondaryChip: (String, ExplainHighlightTone)?
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(label)
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.black.opacity(0.42))
+                .tracking(0.5)
+
+            if compact {
+                VStack(alignment: .leading, spacing: 8) {
+                    statusChip(text: primaryChip.0, tone: primaryChip.1)
+                    if let secondaryChip {
+                        statusChip(text: secondaryChip.0, tone: secondaryChip.1)
+                    }
+                }
+            } else {
+                HStack(spacing: 8) {
+                    statusChip(text: primaryChip.0, tone: primaryChip.1)
+                    if let secondaryChip {
+                        statusChip(text: secondaryChip.0, tone: secondaryChip.1)
+                    }
+                }
+            }
+        }
+    }
+
+    private func statusField(label: String, content: String, tone: ExplainHighlightTone) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(label)
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.black.opacity(0.42))
+                .tracking(0.5)
+
+            Text(content)
+                .font(compact ? .system(size: 14, weight: .semibold) : .system(size: 16, weight: .semibold))
+                .foregroundStyle(Color.black.opacity(0.78))
+                .lineSpacing(4)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(tone.softFill)
+                )
+        }
     }
 }
 

@@ -516,8 +516,8 @@ enum NormalizedDocumentConverter {
 
         let openingTheme = paragraphCards.first?.theme.nonEmpty ?? title.nonEmpty ?? "文章核心议题"
         let landingTheme = paragraphCards.last?.theme.nonEmpty ?? openingTheme
-        let articleTheme = "这篇文章真正要读懂的，不是零散细节，而是作者围绕“\(openingTheme)”这个问题，最后把判断落到“\(landingTheme)”上。"
-        let authorCoreQuestion = "作者真正关心的不是材料本身，而是：面对“\(shortFocusText(from: title.nonEmpty ?? openingTheme))”这个议题，哪些内容只是铺垫，哪些才是最后应当抓住的判断。"
+        let articleTheme = "通篇真正要抓的，不是零散材料，而是作者如何把“\(openingTheme)”一路推进到“\(landingTheme)”这个判断。"
+        let authorCoreQuestion = "作者真正追问的是：围绕“\(shortFocusText(from: title.nonEmpty ?? openingTheme))”这个议题，哪些内容只是铺垫，哪些才是最后必须站住的判断。"
         let progressionPath = paragraphCards
             .map { card in
                 "第\(card.paragraphIndex + 1)段用\(card.argumentRole.displayName)处理“\(shortFocusText(from: card.theme))”"
@@ -840,14 +840,14 @@ enum NormalizedDocumentConverter {
         currentIndex: Int
     ) -> String {
         guard currentIndex > 0 else {
-            return "首段先把阅读问题立起来，先看作者把你带进了什么议题，再决定哪些细节值得记。"
+            return "首段先把题眼立出来。先看作者把讨论放进了什么问题里，再决定哪些细节值得记。"
         }
 
         switch currentRole {
         case .background:
-            return "这一段是在补前提。先把背景读清，再判断后面哪些话才是作者真正要押的判断。"
+            return "这一段在补前提。先把背景读清，再分辨后面哪些话才是真正要成立的判断。"
         case .support:
-            return "这一段没有换话题，而是在上一段判断上继续补理由、补范围或补限定。"
+            return "这一段没有换题，而是在上一层判断上继续补理由、补范围或补限定。"
         case .objection:
             return "这一段开始让步或转折。做题时不要停在前半句，真正能作答的信息通常在转折后。"
         case .transition:
@@ -855,7 +855,7 @@ enum NormalizedDocumentConverter {
         case .evidence:
             return "这一段把前面的判断落到例子或细节上。不要只记材料本身，要把它重新挂回它支撑的判断。"
         case .conclusion:
-            return "这一段开始收束全文。前面分散的信息会在这里并成可用于主旨题和态度题的结论。"
+            return "这一段开始收束全文。前面分散的信息会在这里并成主旨题和态度题可直接用的结论。"
         }
     }
 
@@ -890,17 +890,17 @@ enum NormalizedDocumentConverter {
         )
         var focuses: [String] = []
 
-        focuses.append("先把本段核心句的主干锁定为“\(shortSnippet(from: coreClause))”，再看其余句子是补背景、补原因，还是拿例子来支撑这层判断。")
+        focuses.append("先把本段核心句稳稳落在“\(shortSnippet(from: coreClause))”这一主干上，再看其余句子是在补背景、补原因，还是在替它举证。")
 
         if let firstGrammar = grammarPoints.first {
-            focuses.append("这段最该先拆开的结构是\(firstGrammar.name)。这里一旦看错修饰范围，整段主旨就会跟着偏。")
+            focuses.append("这段最该先拆开的结构是\(firstGrammar.name)。这里一旦把修饰范围挂错，整段主旨就会跟着偏。")
         }
 
         switch paragraphRole {
         case .background:
-            focuses.append("先分清这是背景铺垫还是作者判断。若把场景说明直接当答案，主旨题和细节题都会偏。")
+            focuses.append("先分清这里是在铺背景，还是已经进入作者判断。若把场景说明直接当答案，主旨题和细节题都会偏。")
         case .support:
-            focuses.append("这段是在给核心判断补理由。做题时要把细节重新挂回主判断，而不是零散记信息点。")
+            focuses.append("这段是在替核心判断补理由。做题时要把细节重新挂回主判断，而不是零散记信息点。")
         case .objection:
             focuses.append("转折/让步段最容易误判。真正立场常落在 but / however 之后，前半句多半只是铺垫。")
         case .transition:
@@ -1394,12 +1394,12 @@ enum NormalizedDocumentConverter {
     ) -> String {
         let focus = shortSnippet(from: coreClause)
         if let theme = paragraphTheme?.nonEmpty {
-            return "这句话可以直译成：围绕“\(shortFocusText(from: theme))”这个话题，真正成立的内容落在“\(focus)”这一层。"
+            return ""
         }
-        if let firstChunk = chunks.first, firstChunk != coreClause {
-            return "这句话可以理解成：先交代“\(shortSnippet(from: firstChunk))”，再把真正要表达的内容落到“\(focus)”上。"
+        if let firstChunk = chunks.first, firstChunk != coreClause, firstChunk.count < 20, focus.count < 32 {
+            return "句意接近于：先说“\(shortSnippet(from: firstChunk))”，再落到“\(focus)”。"
         }
-        return "这句话的直接意思是：\(focus)。"
+        return ""
     }
 
     private static func buildTeachingInterpretation(
@@ -1412,21 +1412,21 @@ enum NormalizedDocumentConverter {
         let focus = shortSnippet(from: coreClause)
 
         if lower.hasPrefix("although") || lower.hasPrefix("though") || lower.contains(" even though ") {
-            return "这句话在带你做一件事：前面先承认一种情况，但作者真正要你收住的判断落在“\(focus)”这一层。"
+            return "这句话先让你看到一种已知情况，但作者真正要你收住的判断落在“\(focus)”这一层。"
         }
         if lower.contains("however") || lower.contains(" but ") || lower.contains(" yet ") {
-            return "这句话要从转折后开始抓重点。前面的内容更多是在铺垫或对比，真正要记住的是“\(focus)”。"
+            return "这句话要从转折后开始抓重点。前面的内容更多是在铺垫或对比，真正该记住的是“\(focus)”。"
         }
         if lower.contains("because") || lower.contains("therefore") || lower.contains("thus") {
             return "这句话在交代因果链条。核心判断落在“\(focus)”这一块，其余语块是在说明原因、结果或推导依据。"
         }
         if chunks.count >= 3 {
-            return "这句话不能平着翻。先把主句“\(focus)”读稳，再把其余语块当成条件、限定或补充说明一层层加回去。"
+            return "这句话不能平着读。先把主句“\(focus)”读稳，再把其余语块当成条件、限定或补充说明一层层加回去。"
         }
         if let card = paragraphCard {
             return "放在本段里，这句话主要承担“\(card.argumentRole.displayName)”的作用；真正要先读懂的是“\(focus)”这一层。"
         }
-        return "这句话真正想说的是“\(focus)”。其余成分只是把范围、条件和修饰关系补全。"
+        return "这句话真正要你抓的是“\(focus)”。其余成分是在把范围、条件和修饰关系补全。"
     }
 
     private static func buildMiniExercise(
@@ -1618,7 +1618,7 @@ enum NormalizedDocumentConverter {
     private static func likelyQuestionType(for role: ParagraphArgumentRole) -> String {
         switch role {
         case .background:
-            return "细节前提题：先看背景限定范围，别把背景说明直接拔高成作者结论。"
+            return "细节前提题：先看背景怎样限定范围，别把背景说明直接拔高成作者结论。"
         case .support:
             return "细节定位题：看这一段怎样替主判断补理由，同义改写常落在这里。"
         case .objection:
@@ -1626,7 +1626,7 @@ enum NormalizedDocumentConverter {
         case .transition:
             return "段落关系题：判断作者怎样换挡、怎样推进论证。"
         case .evidence:
-            return "例证作用题：问这个例子或数据究竟证明了什么。"
+            return "例证作用题：问这个例子或数据究竟在证明什么。"
         case .conclusion:
             return "主旨/标题题：看最后一段怎样回收前文判断并落到结论。"
         }
@@ -1641,17 +1641,17 @@ enum NormalizedDocumentConverter {
         let overlapTerms = overlappingTerms(questionText, supportSentences.map(\.text).joined(separator: " "))
 
         if !overlapTerms.isEmpty {
-            evidence.append("题干与原文围绕 \(overlapTerms.prefix(4).joined(separator: " / ")) 这一组关键词做同义定位。")
+            evidence.append("题干和原文都围绕 \(overlapTerms.prefix(4).joined(separator: " / ")) 这组词做同义定位。")
         }
         if let firstCard = supportCards.first {
             evidence.append("先回到“\(firstCard.theme)”这一段，再判断题干究竟在问细节、态度还是作用。")
         }
         if let firstSentence = supportSentences.first {
-            evidence.append("最直接的证据句是：\(shortFocusText(from: firstSentence.text)).")
+            evidence.append("最直接的证据句落在“\(shortFocusText(from: firstSentence.text))”这一层。")
         }
 
         if evidence.isEmpty {
-            evidence.append("先按关键词回原文定位，再看题干是否偷换了范围、态度或因果关系。")
+            evidence.append("先按关键词回原文定位，再看题干有没有偷换范围、态度或因果关系。")
         }
 
         return Array(evidence.prefix(3))
@@ -1770,7 +1770,7 @@ enum NormalizedDocumentConverter {
         case .evidence:
             return "这段拿例子或数据把“\(focus)”落到实处。重点不是记材料本身，而是看它到底支撑哪一个判断。"
         case .transition:
-            return "这段把讨论推到“\(focus)”这一层，关键价值在于告诉你论证方向是怎样切换的。"
+            return "这段把讨论推到“\(focus)”这一层，关键价值在于告诉你论证方向怎样切换。"
         case .objection:
             return "这段先承认一种看法，再把真正立场转到“\(focus)”上；读题时不要把让步内容错当作者结论。"
         case .conclusion:

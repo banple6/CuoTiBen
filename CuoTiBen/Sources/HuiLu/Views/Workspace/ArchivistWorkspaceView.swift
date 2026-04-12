@@ -425,7 +425,7 @@ private struct ArchivistContextAssistant: View {
             }
 
             if let node {
-                ContextAnalysisCard(title: "Navigator", tapeColor: ArchivistColors.blueWash, offset: CGSize(width: -4, height: 0)) {
+                ContextAnalysisCard(title: "当前教学节点", tapeColor: ArchivistColors.blueWash, offset: CGSize(width: -4, height: 0)) {
                     Text(node.title)
                         .font(.system(size: 18, weight: .semibold, design: .serif))
                         .foregroundStyle(ArchivistColors.mutedInk)
@@ -437,19 +437,19 @@ private struct ArchivistContextAssistant: View {
             }
 
             if isLoading {
-                ContextAnalysisCard(title: "Analysis", tapeColor: ArchivistColors.yellowWash, offset: CGSize(width: 6, height: -4)) {
-                    ProgressView("Loading contextual analysis…")
+                ContextAnalysisCard(title: "教授式解析", tapeColor: ArchivistColors.yellowWash, offset: CGSize(width: 6, height: -4)) {
+                    ProgressView("正在更新当前句的教授式解析…")
                         .font(ArchivistTypography.annotation)
                         .tint(ArchivistColors.primaryInk)
                 }
             } else if let errorMessage {
-                ContextAnalysisCard(title: "Analysis", tapeColor: ArchivistColors.pinkWash, offset: CGSize(width: 8, height: -6)) {
+                ContextAnalysisCard(title: "教授式解析", tapeColor: ArchivistColors.pinkWash, offset: CGSize(width: 8, height: -6)) {
                     Text(errorMessage)
                         .font(ArchivistTypography.annotation)
                         .foregroundStyle(ArchivistColors.mutedInk)
                 }
             } else if let analysis {
-                ContextAnalysisCard(title: "Professor Analysis", tapeColor: ArchivistColors.yellowWash, offset: CGSize(width: 6, height: -4)) {
+                ContextAnalysisCard(title: "教授式解析", tapeColor: ArchivistColors.yellowWash, offset: CGSize(width: 6, height: -4)) {
                     ScrollView(showsIndicators: false) {
                         ProfessorAnalysisPanel(
                             analysis: analysis,

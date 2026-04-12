@@ -816,6 +816,8 @@ final class AppViewModel: ObservableObject {
               let segment = bundle.segment(id: sentence.segmentID) else {
             return ExplainSentenceContext(
                 title: document.title,
+                sentenceID: sentence.id,
+                anchorLabel: sentence.anchorLabel,
                 sentence: sentence.text,
                 context: sentence.text,
                 paragraphTheme: "",
@@ -835,6 +837,8 @@ final class AppViewModel: ObservableObject {
 
         return ExplainSentenceContext(
             title: document.title,
+            sentenceID: sentence.id,
+            anchorLabel: sentence.anchorLabel,
             sentence: sentence.text,
             context: context.isEmpty ? segment.text : context,
             paragraphTheme: paragraphCard?.theme ?? "",
@@ -1401,6 +1405,8 @@ final class AppViewModel: ObservableObject {
 
         return ExplainSentenceContext(
             title: sourceTitle,
+            sentenceID: nil,
+            anchorLabel: nil,
             sentence: sentence,
             context: context,
             paragraphTheme: "",

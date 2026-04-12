@@ -6,7 +6,12 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
     let document: SourceDocument
     let bundle: StructuredSourceBundle
 
-    @Published var selectedSentenceID: String?
+    @Published var selectedSentenceID: String? {
+        didSet {
+            guard selectedSentenceID != oldValue else { return }
+            handleSelectedSentenceChange()
+        }
+    }
     @Published var selectedNodeID: String?
     @Published var analysisResult: AIExplainSentenceResult?
     @Published var isLoadingAnalysis = false
@@ -14,6 +19,7 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
 
     /// 当前分析任务，用于取消
     private var analysisTask: Task<Void, Never>?
+    private var currentAnalysisIdentity: SentenceAnalysisIdentity?
 
     init(document: SourceDocument, bundle: StructuredSourceBundle) {
         self.document = document
@@ -26,6 +32,8 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
             selectedNodeID = firstNode.id
             selectedSentenceID = firstNode.primarySentenceID ?? firstNode.anchor.sentenceID
         }
+
+        handleSelectedSentenceChange()
     }
 
     var selectedSentence: Sentence? {
@@ -55,8 +63,18 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
 
     var effectiveAnalysis: ProfessorSentenceAnalysis? {
         let bundled = bundle.sentenceCard(id: selectedSentenceID)?.analysis
-        if let remote = analysisResult?.localFallbackAnalysis {
-            return remote.mergingFallback(bundled)
+        if let sentence = selectedSentence,
+           let remote = analysisResult,
+           isResultVisible(remote, for: sentence) {
+            let remoteAnalysis = remote.localFallbackAnalysis
+            return remoteAnalysis.mergingFallback(bundled)
+        }
+        if analysisResult != nil {
+            TextPipelineDiagnostics.log(
+                "句子分析",
+                "检测到不匹配的分析结果，已回退到本地教学卡 doc=\(document.id)",
+                severity: .warning
+            )
         }
         return bundled
     }
@@ -135,22 +153,25 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
         // 取消之前的分析请求
         analysisTask?.cancel()
 
-        // 捕获当前 sentenceID 以检测竞态
-        let targetSentenceID = selectedSentenceID
-
         guard let sentence = selectedSentence else {
+            currentAnalysisIdentity = nil
             analysisResult = nil
+            analysisError = nil
+            isLoadingAnalysis = false
             return
         }
 
-        isLoadingAnalysis = true
-        analysisError = nil
+        let targetIdentity = SentenceAnalysisIdentity(
+            sentenceID: sentence.id,
+            sentenceText: sentence.text,
+            anchorLabel: sentence.anchorLabel
+        )
+        currentAnalysisIdentity = targetIdentity
         let currentDocument = document
 
         let task = Task { @MainActor [weak self] in
             defer {
-                // 仅当仍是同一请求时重置 loading
-                if self?.selectedSentenceID == targetSentenceID {
+                if self?.matchesCurrentSelection(identity: targetIdentity) == true {
                     self?.isLoadingAnalysis = false
                 }
             }
@@ -175,22 +196,90 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
 
                 try Task.checkCancellation()
 
-                // 竞态检查：sentence 是否已变更
-                guard self?.selectedSentenceID == targetSentenceID else { return }
+                guard let self else { return }
 
-                self?.analysisResult = result
-                self?.analysisError = nil
+                guard self.matchesCurrentSelection(identity: targetIdentity) else {
+                    TextPipelineDiagnostics.log(
+                        "句子分析",
+                        "分析结果返回时选中句已变化，静默丢弃 sentence=\(targetIdentity.sourceSentenceID)",
+                        severity: .warning
+                    )
+                    return
+                }
+
+                let warnings = AnalysisConsistencyGuard.warnings(
+                    identity: targetIdentity,
+                    sentenceText: sentence.text,
+                    analysis: result
+                )
+                guard warnings.isEmpty else {
+                    TextPipelineDiagnostics.log(
+                        "句子分析",
+                        "分析结果身份或内容不一致，静默丢弃：\(warnings.joined(separator: "；")) sentence=\(targetIdentity.sourceSentenceID)",
+                        severity: .warning
+                    )
+                    self.analysisResult = nil
+                    self.analysisError = nil
+                    return
+                }
+
+                self.analysisResult = result
+                self.analysisError = nil
             } catch is CancellationError {
                 // 被取消，不更新状态
             } catch {
-                guard self?.selectedSentenceID == targetSentenceID else { return }
-                self?.analysisError = "解析失败：\(error.localizedDescription)"
-                self?.analysisResult = nil
+                guard let self, self.matchesCurrentSelection(identity: targetIdentity) else { return }
+                self.analysisError = "解析失败：\(error.localizedDescription)"
+                self.analysisResult = nil
             }
         }
 
         analysisTask = task
         await task.value
+    }
+
+    private func handleSelectedSentenceChange() {
+        analysisTask?.cancel()
+        analysisTask = nil
+        analysisResult = nil
+        analysisError = nil
+
+        if let sentence = selectedSentence {
+            currentAnalysisIdentity = SentenceAnalysisIdentity(
+                sentenceID: sentence.id,
+                sentenceText: sentence.text,
+                anchorLabel: sentence.anchorLabel
+            )
+            isLoadingAnalysis = true
+        } else {
+            currentAnalysisIdentity = nil
+            isLoadingAnalysis = false
+        }
+    }
+
+    private func matchesCurrentSelection(identity: SentenceAnalysisIdentity) -> Bool {
+        guard let sentence = selectedSentence else { return false }
+        let currentIdentity = SentenceAnalysisIdentity(
+            sentenceID: sentence.id,
+            sentenceText: sentence.text,
+            anchorLabel: sentence.anchorLabel
+        )
+        return currentIdentity == identity
+    }
+
+    private func isResultVisible(_ result: AIExplainSentenceResult, for sentence: Sentence) -> Bool {
+        guard let identity = result.analysisIdentity else { return false }
+        let expectedIdentity = SentenceAnalysisIdentity(
+            sentenceID: sentence.id,
+            sentenceText: sentence.text,
+            anchorLabel: sentence.anchorLabel
+        )
+        return identity == expectedIdentity &&
+            AnalysisConsistencyGuard.warnings(
+                identity: expectedIdentity,
+                sentenceText: sentence.text,
+                analysis: result
+            ).isEmpty
     }
 }
 

@@ -80,8 +80,8 @@ struct EditorialPaperCanvas<AnalysisContent: View>: View {
 
     private var metadataTags: [String] {
         [
-            headerSnapshot.currentSentenceAnchor,
-            headerSnapshot.currentParagraphRole,
+            document.documentType.displayName,
+            "\(max(document.pageCount, bundle.source.pageCount)) 页",
             "\(bundle.professorSentenceCards.count) 句重点句"
         ]
     }

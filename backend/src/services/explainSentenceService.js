@@ -47,6 +47,7 @@ export function buildExplainSentencePrompt({ title, sentence, context, paragraph
     "输出标准：",
     "1. 输出优先级必须体现：句子定位 → 句子主干 → 语块切分 → 关键语法点 → 学生易错点 → 出题改写点 → 简化英文改写 → 微练习。",
     "2. faithful_translation 必须是忠实翻译；teaching_interpretation 才负责老师口吻的解释，两者不能混写。",
+    "2.1 faithful_translation 和 teaching_interpretation 都必须以中文为主；除专门术语、原句片段、语法标签外，不允许出现整段英文说明。",
     "3. core_skeleton 必须直接说清主句主干，不能写成“本句讲了什么”或“先抓主干”。",
     "4. chunk_layers 不是机械切分，必须说明每一块的功能和挂接对象。",
     "5. grammar_focus 只保留最关键的 1-3 个语法点，而且必须说明它在这句里具体起什么作用，以及为什么做题时重要。",
@@ -324,7 +325,7 @@ function normalizeExplainResult(raw, sourceSentence, paragraph_role = "") {
     chunk_layers: chunkLayers,
     grammar_focus: grammarFocus,
     faithful_translation: faithfulTranslation,
-    teaching_interpretation: teachingInterpretation || faithfulTranslation,
+    teaching_interpretation: teachingInterpretation,
     natural_chinese_meaning: teachingInterpretation || faithfulTranslation,
     sentence_core: sentenceCore,
     evidence_type: evidenceType,
@@ -353,6 +354,17 @@ function normalizeExplainResult(raw, sourceSentence, paragraph_role = "") {
 
 function tokenizeEnglishWords(text) {
   return (text.match(/[A-Za-z][A-Za-z'-]*/g) || []).map((token) => token.trim()).filter(Boolean);
+}
+
+function isChineseDominantText(text) {
+  const normalized = typeof text === "string" ? text.trim() : "";
+  if (!normalized) return false;
+
+  const chineseCount = (normalized.match(/[\u4e00-\u9fff]/g) || []).length;
+  const latinCount = (normalized.match(/[A-Za-z]/g) || []).length;
+
+  if (chineseCount === 0) return false;
+  return chineseCount >= Math.max(8, latinCount * 2);
 }
 
 const explainStopwords = new Set([
@@ -681,21 +693,8 @@ function normalizeGrammarFocus(raw, fallbackSentence) {
   return buildFallbackGrammarFocus(fallbackSentence);
 }
 
-function buildFallbackFaithfulTranslation({ sentence, paragraph_theme = "" }) {
-  const chunks = splitSentenceIntoChunks(sentence);
-  const coreClause = extractCoreClause(sentence, chunks);
-  const focus = coreClause.replace(/\s+/g, " ").trim();
-
-  if (paragraph_theme.trim()) {
-    return `句子的基本意思是：围绕“${paragraph_theme.trim()}”这个话题，真正成立的内容落在“${focus}”这一层。`;
-  }
-
-  if (chunks.length >= 2) {
-    const prefix = chunks[0] === coreClause ? "" : `前面先交代“${chunks[0]}”，`;
-    return `句子的基本意思是：${prefix}真正要表达的是“${focus}”。`;
-  }
-
-  return `句子的基本意思是：${focus}。`;
+function buildFallbackFaithfulTranslation() {
+  return "";
 }
 
 function buildFallbackTeachingInterpretation({ sentence, paragraph_theme = "", paragraph_role = "" }) {
@@ -853,8 +852,98 @@ function validateExplainResultQuality(result, sourceSentence) {
   if ((result.exam_paraphrase_routes || []).every((item) => isShallowText(item, ["可能考同义替换", "常见同义替换"]))) {
     warnings.push("exam_paraphrase_routes 太泛");
   }
+  if (result.faithful_translation && !isChineseDominantText(result.faithful_translation)) {
+    warnings.push("faithful_translation 中文纯度不足");
+  }
+  if (result.teaching_interpretation && !isChineseDominantText(result.teaching_interpretation)) {
+    warnings.push("teaching_interpretation 中文纯度不足");
+  }
 
   return warnings;
+}
+
+function extractAnalysisKeywords(result) {
+  const pieces = [
+    result.original_sentence,
+    result.sentence_core,
+    result.core_skeleton?.subject,
+    result.core_skeleton?.predicate,
+    result.core_skeleton?.complement_or_object,
+    ...(result.chunk_layers || []).map((item) => item?.text || ""),
+    ...(result.vocabulary_in_context || []).map((item) => item?.term || "")
+  ];
+
+  const keywords = pieces
+    .flatMap((piece) => tokenizeEnglishWords(piece || ""))
+    .map((token) => token.toLowerCase())
+    .filter((token) => token.length >= 3 && !explainStopwords.has(token));
+
+  return [...new Set(keywords)];
+}
+
+function keywordOverlapScore(sourceSentence, result) {
+  const sourceTokens = [...new Set(
+    tokenizeEnglishWords(sourceSentence)
+      .map((token) => token.toLowerCase())
+      .filter((token) => token.length >= 3 && !explainStopwords.has(token))
+  )];
+
+  if (sourceTokens.length === 0) return 1;
+
+  const analysisTokens = extractAnalysisKeywords(result);
+  if (analysisTokens.length === 0) return 0;
+
+  const sourceSet = new Set(sourceTokens);
+  const overlapCount = analysisTokens.filter((token) => sourceSet.has(token)).length;
+  return overlapCount / sourceTokens.length;
+}
+
+function grammarFocusLooksMismatched(item, sentence) {
+  const phenomenon = String(item?.phenomenon || "").trim();
+  const lower = sentence.toLowerCase();
+
+  if (!phenomenon) return false;
+  if (phenomenon.includes("被动") && !/\b(am|is|are|was|were|be|been|being)\s+\w+ed\b/.test(lower)) {
+    return true;
+  }
+  if ((phenomenon.includes("定语从句") || phenomenon.includes("后置修饰")) && !/\b(which|that|who|whom|whose|where|when)\b/.test(lower)) {
+    return true;
+  }
+  if (phenomenon.includes("非谓语") && !(/\bto\s+[a-z]+\b/.test(lower) || /\b[a-z]+ing\b/.test(lower))) {
+    return true;
+  }
+  if (phenomenon.includes("否定") && !(lower.includes(" not ") || lower.includes("never") || lower.includes("hardly") || lower.includes("no "))) {
+    return true;
+  }
+  return false;
+}
+
+function validateExplainResultConsistency(result, sourceSentence) {
+  const warnings = [];
+  let critical = false;
+
+  const normalizedSource = sourceSentence.replace(/\s+/g, " ").trim().toLowerCase();
+  const normalizedReturned = String(result.original_sentence || "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (normalizedReturned && normalizedReturned !== normalizedSource) {
+    warnings.push("original_sentence 与源句不一致");
+    critical = true;
+  }
+
+  const overlap = keywordOverlapScore(sourceSentence, result);
+  if (overlap < 0.12) {
+    warnings.push(`关键词重叠过低(${overlap.toFixed(2)})`);
+    if (overlap < 0.08) {
+      critical = true;
+    }
+  }
+
+  const mismatchedGrammarCount = (result.grammar_focus || []).filter((item) => grammarFocusLooksMismatched(item, sourceSentence)).length;
+  if (mismatchedGrammarCount >= 2 || ((result.grammar_focus || []).length > 0 && mismatchedGrammarCount === result.grammar_focus.length)) {
+    warnings.push("grammar_focus 与源句结构不符");
+    critical = true;
+  }
+
+  return { warnings, critical };
 }
 
 function buildExplainSentenceRepairPrompt({
@@ -1083,6 +1172,8 @@ export async function explainSentence({
   const content = completion.choices?.[0]?.message?.content;
   let normalized = normalizeExplainResult(parseModelJson(content), sentence, paragraph_role);
   let qualityWarnings = validateExplainResultQuality(normalized, sentence);
+  let consistency = validateExplainResultConsistency(normalized, sentence);
+  qualityWarnings = [...qualityWarnings, ...consistency.warnings];
 
   if (qualityWarnings.length >= 2) {
     console.warn("[ai/explain-sentence] quality warnings after first pass", qualityWarnings);
@@ -1100,15 +1191,28 @@ export async function explainSentence({
       }));
       const repairedContent = repairedCompletion.choices?.[0]?.message?.content;
       const repairedNormalized = normalizeExplainResult(parseModelJson(repairedContent), sentence, paragraph_role);
-      const repairedWarnings = validateExplainResultQuality(repairedNormalized, sentence);
+      const repairedConsistency = validateExplainResultConsistency(repairedNormalized, sentence);
+      const repairedWarnings = [
+        ...validateExplainResultQuality(repairedNormalized, sentence),
+        ...repairedConsistency.warnings
+      ];
 
       if (repairedWarnings.length <= qualityWarnings.length) {
         normalized = repairedNormalized;
         qualityWarnings = repairedWarnings;
+        consistency = repairedConsistency;
       }
     } catch (error) {
       console.warn("[ai/explain-sentence] repair pass failed", error?.message || error);
     }
+  }
+
+  if (consistency.critical) {
+    console.warn("[ai/explain-sentence] consistency validation failed", consistency.warnings);
+    throw new AppError("句子分析与源句不一致，已拒绝返回该结果。", {
+      statusCode: 502,
+      code: "MODEL_INCONSISTENT_SENTENCE"
+    });
   }
 
   if (qualityWarnings.length > 0) {

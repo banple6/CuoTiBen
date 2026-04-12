@@ -2,11 +2,106 @@ import Foundation
 
 struct ExplainSentenceContext: Equatable {
     let title: String
+    let sentenceID: String?
+    let anchorLabel: String?
     let sentence: String
     let context: String
     let paragraphTheme: String
     let paragraphRole: String
     let questionPrompt: String
+}
+
+struct SentenceAnalysisIdentity: Equatable, Hashable {
+    let sourceSentenceID: String
+    let sourceSentenceTextHash: String
+    let sourceAnchorLabel: String
+
+    init(sentenceID: String, sentenceText: String, anchorLabel: String) {
+        self.sourceSentenceID = sentenceID
+        self.sourceSentenceTextHash = Self.hash(sentenceText)
+        self.sourceAnchorLabel = anchorLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func hash(_ text: String) -> String {
+        let normalized = text
+            .lowercased()
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        var hash: UInt64 = 0xcbf29ce484222325
+        let prime: UInt64 = 0x100000001b3
+        for byte in normalized.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* prime
+        }
+        return String(hash, radix: 16)
+    }
+}
+
+enum AnalysisConsistencyGuard {
+    static func visibleKeywordOverlap(
+        sentenceText: String,
+        analysis: AIExplainSentenceResult
+    ) -> Double {
+        let sourceTokens = normalizedTokenSet(from: sentenceText)
+        guard !sourceTokens.isEmpty else { return 1 }
+
+        var analysisTokens = normalizedTokenSet(from: analysis.originalSentence)
+        analysisTokens.formUnion(normalizedTokenSet(from: analysis.renderedSentenceCore))
+        analysisTokens.formUnion(normalizedTokenSet(from: analysis.chunkLayers.map(\.text).joined(separator: " ")))
+        analysisTokens.formUnion(normalizedTokenSet(from: analysis.vocabularyInContext.map(\.term).joined(separator: " ")))
+
+        guard !analysisTokens.isEmpty else { return 0 }
+        let overlapCount = sourceTokens.intersection(analysisTokens).count
+        return Double(overlapCount) / Double(max(sourceTokens.count, 1))
+    }
+
+    static func warnings(
+        identity: SentenceAnalysisIdentity,
+        sentenceText: String,
+        analysis: AIExplainSentenceResult
+    ) -> [String] {
+        var warnings: [String] = []
+
+        if let payloadIdentity = analysis.analysisIdentity {
+            if payloadIdentity.sourceSentenceID != identity.sourceSentenceID {
+                warnings.append("sourceSentenceID 不匹配")
+            }
+            if payloadIdentity.sourceSentenceTextHash != SentenceAnalysisIdentity(
+                sentenceID: identity.sourceSentenceID,
+                sentenceText: sentenceText,
+                anchorLabel: identity.sourceAnchorLabel
+            ).sourceSentenceTextHash {
+                warnings.append("sourceSentenceTextHash 不匹配")
+            }
+            if payloadIdentity.sourceAnchorLabel != identity.sourceAnchorLabel.trimmingCharacters(in: .whitespacesAndNewlines) {
+                warnings.append("sourceAnchorLabel 不匹配")
+            }
+        }
+
+        let overlap = visibleKeywordOverlap(sentenceText: sentenceText, analysis: analysis)
+        if overlap < 0.12 {
+            warnings.append("可见关键词重叠过低(\(String(format: "%.2f", overlap)))")
+        }
+
+        return warnings
+    }
+
+    static func normalizedTokenSet(from text: String) -> Set<String> {
+        let separators = CharacterSet.letters.inverted
+        let tokens = text
+            .lowercased()
+            .components(separatedBy: separators)
+            .filter { !$0.isEmpty && $0.count >= 2 && !stopwords.contains($0) }
+        return Set(tokens)
+    }
+
+    private static let stopwords: Set<String> = [
+        "the", "and", "for", "with", "that", "this", "from", "into", "their", "there",
+        "have", "been", "being", "which", "while", "about", "would", "could", "should",
+        "because", "through", "after", "before", "where", "when", "they", "them", "were",
+        "your", "than", "then", "such", "very", "more", "most"
+    ]
 }
 
 struct AIExplainSentenceResult: Equatable {
@@ -18,6 +113,7 @@ struct AIExplainSentenceResult: Equatable {
 
     let originalSentence: String
     let evidenceType: String?
+    let analysisIdentity: SentenceAnalysisIdentity?
     let sentenceFunction: String
     let coreSkeleton: CoreSkeleton?
     let chunkLayers: [ChunkLayer]
@@ -43,6 +139,7 @@ struct AIExplainSentenceResult: Equatable {
     init(
         originalSentence: String,
         evidenceType: String?,
+        analysisIdentity: SentenceAnalysisIdentity?,
         sentenceFunction: String,
         coreSkeleton: CoreSkeleton?,
         chunkLayers: [ChunkLayer],
@@ -67,6 +164,7 @@ struct AIExplainSentenceResult: Equatable {
     ) {
         self.originalSentence = originalSentence
         self.evidenceType = evidenceType
+        self.analysisIdentity = analysisIdentity
         self.sentenceFunction = sentenceFunction
         self.coreSkeleton = coreSkeleton
         self.chunkLayers = chunkLayers
@@ -119,7 +217,7 @@ struct AIExplainSentenceResult: Equatable {
             in: dictionary,
             keys: hasProfessorPayload
                 ? ["faithful_translation", "faithfulTranslation", "translation"]
-                : ["faithful_translation", "translation", "natural_chinese_meaning", "naturalChineseMeaning"]
+                : ["faithful_translation", "translation"]
         ) ?? ""
         let teachingInterpretation = Self.firstString(
             in: dictionary,
@@ -137,11 +235,12 @@ struct AIExplainSentenceResult: Equatable {
         self.init(
             originalSentence: Self.firstString(in: dictionary, keys: ["original_sentence", "originalSentence", "sentence"]) ?? sourceSentence,
             evidenceType: evidenceType,
+            analysisIdentity: nil,
             sentenceFunction: sentenceFunction,
             coreSkeleton: Self.coreSkeleton(in: dictionary, fallbackSentenceCore: sentenceCore),
             chunkLayers: Self.chunkLayers(in: dictionary, fallbackChunks: chunkBreakdown),
             grammarFocus: Self.grammarFocus(in: dictionary, fallbackGrammarPoints: grammarPoints),
-            faithfulTranslation: Self.nonEmpty(faithfulTranslation) ?? naturalChineseMeaning,
+            faithfulTranslation: Self.nonEmpty(faithfulTranslation) ?? "",
             teachingInterpretation: Self.nonEmpty(teachingInterpretation) ?? naturalChineseMeaning,
             naturalChineseMeaning: naturalChineseMeaning,
             sentenceCore: sentenceCore,
@@ -196,6 +295,35 @@ struct AIExplainSentenceResult: Equatable {
             hierarchyRebuild: hierarchyRebuild,
             syntacticVariation: syntacticVariation,
             evidenceType: evidenceType
+        )
+    }
+
+    func attachingIdentity(_ identity: SentenceAnalysisIdentity) -> AIExplainSentenceResult {
+        AIExplainSentenceResult(
+            originalSentence: originalSentence,
+            evidenceType: evidenceType,
+            analysisIdentity: identity,
+            sentenceFunction: sentenceFunction,
+            coreSkeleton: coreSkeleton,
+            chunkLayers: chunkLayers,
+            grammarFocus: grammarFocus,
+            faithfulTranslation: faithfulTranslation,
+            teachingInterpretation: teachingInterpretation,
+            naturalChineseMeaning: naturalChineseMeaning,
+            sentenceCore: sentenceCore,
+            chunkBreakdown: chunkBreakdown,
+            grammarPoints: grammarPoints,
+            vocabularyInContext: vocabularyInContext,
+            misreadPoints: misreadPoints,
+            examRewritePoints: examRewritePoints,
+            misreadingTraps: misreadingTraps,
+            examParaphraseRoutes: examParaphraseRoutes,
+            simplifiedEnglish: simplifiedEnglish,
+            simplerRewrite: simplerRewrite,
+            miniExercise: miniExercise,
+            miniCheck: miniCheck,
+            hierarchyRebuild: hierarchyRebuild,
+            syntacticVariation: syntacticVariation
         )
     }
 
@@ -687,6 +815,8 @@ enum AIExplainSentenceService {
 
         let validatedExplainContext = ExplainSentenceContext(
             title: context.title,
+            sentenceID: context.sentenceID,
+            anchorLabel: context.anchorLabel,
             sentence: validatedSentence,
             context: validatedContext,
             paragraphTheme: context.paragraphTheme,
@@ -754,10 +884,35 @@ enum AIExplainSentenceService {
                         )
                     }
 
-                    let decoded = try decodeResponseEnvelope(
+                    var decoded = try decodeResponseEnvelope(
                         from: data,
                         sourceSentence: validatedExplainContext.sentence
                     )
+
+                    if let identity = currentIdentity(for: validatedExplainContext),
+                       let payload = decoded.data {
+                        let attached = payload.attachingIdentity(identity)
+                        let warnings = AnalysisConsistencyGuard.warnings(
+                            identity: identity,
+                            sentenceText: validatedExplainContext.sentence,
+                            analysis: attached
+                        )
+
+                        if !warnings.isEmpty {
+                            TextPipelineDiagnostics.log(
+                                "句子分析",
+                                "丢弃不一致分析结果：\(warnings.joined(separator: "；")) sentence=\(identity.sourceSentenceID)",
+                                severity: .warning
+                            )
+                            throw AIExplainSentenceServiceError.requestFailed("返回结果与当前句不一致")
+                        }
+
+                        decoded = ExplainSentenceResponseEnvelope(
+                            success: decoded.success,
+                            data: attached,
+                            error: decoded.error
+                        )
+                    }
 
                     if decoded.success, let result = decoded.data {
                         return result
@@ -821,5 +976,20 @@ enum AIExplainSentenceService {
             throw error
         }
         throw AIExplainSentenceServiceError.invalidServerResponse
+    }
+
+    private static func currentIdentity(for context: ExplainSentenceContext) -> SentenceAnalysisIdentity? {
+        guard let sentenceID = context.sentenceID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !sentenceID.isEmpty,
+              let anchorLabel = context.anchorLabel?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !anchorLabel.isEmpty else {
+            return nil
+        }
+
+        return SentenceAnalysisIdentity(
+            sentenceID: sentenceID,
+            sentenceText: context.sentence,
+            anchorLabel: anchorLabel
+        )
     }
 }
