@@ -15,6 +15,7 @@ import time
 import uuid
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import JSONResponse
 
 from app import config
 from app.models.normalized_document import DocumentParseResponse
@@ -23,6 +24,15 @@ from app.services.normalizer import normalize
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _json_response(payload: DocumentParseResponse) -> JSONResponse:
+    if hasattr(payload, "model_dump"):
+        content = payload.model_dump(exclude_none=True)
+    else:
+        content = payload.dict(exclude_none=True)
+    content["schema_version"] = config.SCHEMA_VERSION
+    return JSONResponse(content=content)
 
 
 # ── 质量拒绝原因码 ──
@@ -84,7 +94,7 @@ async def parse_document(
                 "[PP-REQ] RESULT doc_id=%s  quality_reason=%s  elapsed=%dms",
                 doc_id, QualityReason.EMPTY_RAW_RESULT, elapsed_ms,
             )
-            return DocumentParseResponse(
+            return _json_response(DocumentParseResponse(
                 schema_version=config.SCHEMA_VERSION,
                 success=False,
                 job_id=doc_id,
@@ -92,7 +102,7 @@ async def parse_document(
                 document=None,
                 error="AI Studio 返回空结果",
                 quality_reason=QualityReason.EMPTY_RAW_RESULT,
-            )
+            ))
 
         # 2) 归一化
         document = normalize(
@@ -130,7 +140,7 @@ async def parse_document(
                 "[PP-REQ] QUALITY_REJECTED doc_id=%s  reason=%s  raw_keys=%s  elapsed=%dms",
                 doc_id, quality_reason, raw_top_keys, elapsed_ms,
             )
-            return DocumentParseResponse(
+            return _json_response(DocumentParseResponse(
                 schema_version=config.SCHEMA_VERSION,
                 success=False,
                 job_id=doc_id,
@@ -138,7 +148,7 @@ async def parse_document(
                 document=document,
                 error=f"归一化结果异常: blocks=0 (raw_keys={raw_top_keys})",
                 quality_reason=quality_reason,
-            )
+            ))
 
         if len(document.paragraphs) == 0:
             quality_reason = QualityReason.EMPTY_PARAGRAPHS
@@ -156,7 +166,7 @@ async def parse_document(
                 len(document.blocks), len(document.paragraphs),
             )
 
-        return DocumentParseResponse(
+        return _json_response(DocumentParseResponse(
             schema_version=config.SCHEMA_VERSION,
             success=True,
             job_id=doc_id,
@@ -164,7 +174,7 @@ async def parse_document(
             document=document,
             error=None,
             quality_reason=quality_reason,
-        )
+        ))
 
     except AIStudioError as e:
         elapsed_ms = int((time.monotonic() - t0) * 1000)
@@ -172,7 +182,7 @@ async def parse_document(
             "[PP-REQ] AI_STUDIO_ERROR doc_id=%s  error=%s  elapsed=%dms",
             doc_id, e, elapsed_ms,
         )
-        return DocumentParseResponse(
+        return _json_response(DocumentParseResponse(
             schema_version=config.SCHEMA_VERSION,
             success=False,
             job_id=doc_id,
@@ -180,14 +190,14 @@ async def parse_document(
             document=None,
             error=f"AI Studio 错误: {e}",
             quality_reason=None,
-        )
+        ))
     except Exception as e:
         elapsed_ms = int((time.monotonic() - t0) * 1000)
         logger.exception(
             "[PP-REQ] SERVER_ERROR doc_id=%s  error=%s  elapsed=%dms",
             doc_id, e, elapsed_ms,
         )
-        return DocumentParseResponse(
+        return _json_response(DocumentParseResponse(
             schema_version=config.SCHEMA_VERSION,
             success=False,
             job_id=doc_id,
@@ -195,7 +205,7 @@ async def parse_document(
             document=None,
             error=f"服务器内部错误: {type(e).__name__}",
             quality_reason=None,
-        )
+        ))
 
 
 @router.get(
@@ -208,11 +218,11 @@ async def get_parse_status(job_id: str):
     当前采用同步模式，此端点返回 completed 或 not_found。
     预留给将来的异步队列模式。
     """
-    return DocumentParseResponse(
+    return _json_response(DocumentParseResponse(
         schema_version=config.SCHEMA_VERSION,
         success=False,
         job_id=job_id,
         status="completed",
         document=None,
         error="当前为同步模式，文档已在 POST 响应中返回",
-    )
+    ))
