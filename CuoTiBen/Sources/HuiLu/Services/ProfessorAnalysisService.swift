@@ -68,6 +68,8 @@ enum ProfessorAnalysisService {
         let core_skeleton: ProfessorCoreSkeleton?
         let chunk_layers: [ProfessorChunkLayer]?
         let grammar_focus: [ProfessorGrammarFocus]?
+        let faithful_translation: String?
+        let teaching_interpretation: String?
         let natural_chinese_meaning: String?
         let sentence_core: String?
         let chunk_breakdown: [String]?
@@ -417,6 +419,8 @@ enum ProfessorAnalysisService {
                 coreSkeleton: dto.core_skeleton,
                 chunkLayers: dto.chunk_layers ?? [],
                 grammarFocus: dto.grammar_focus ?? [],
+                faithfulTranslation: dto.faithful_translation ?? dto.natural_chinese_meaning ?? "",
+                teachingInterpretation: dto.teaching_interpretation ?? dto.natural_chinese_meaning ?? "",
                 naturalChineseMeaning: dto.natural_chinese_meaning ?? "",
                 sentenceCore: dto.sentence_core ?? "",
                 chunkBreakdown: dto.chunk_breakdown ?? [],

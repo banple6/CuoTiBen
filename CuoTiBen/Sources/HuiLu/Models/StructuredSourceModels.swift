@@ -454,6 +454,8 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
     let coreSkeleton: ProfessorCoreSkeleton?
     let chunkLayers: [ProfessorChunkLayer]
     let grammarFocus: [ProfessorGrammarFocus]
+    let faithfulTranslation: String
+    let teachingInterpretation: String
     let naturalChineseMeaning: String
     let sentenceCore: String
     let chunkBreakdown: [String]
@@ -478,6 +480,8 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
         case coreSkeleton = "core_skeleton"
         case chunkLayers = "chunk_layers"
         case grammarFocus = "grammar_focus"
+        case faithfulTranslation = "faithful_translation"
+        case teachingInterpretation = "teaching_interpretation"
         case naturalChineseMeaning = "natural_chinese_meaning"
         case sentenceCore = "sentence_core"
         case chunkBreakdown = "chunk_breakdown"
@@ -503,6 +507,8 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
         coreSkeleton: ProfessorCoreSkeleton? = nil,
         chunkLayers: [ProfessorChunkLayer] = [],
         grammarFocus: [ProfessorGrammarFocus] = [],
+        faithfulTranslation: String = "",
+        teachingInterpretation: String = "",
         naturalChineseMeaning: String,
         sentenceCore: String,
         chunkBreakdown: [String],
@@ -526,7 +532,18 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
         self.coreSkeleton = coreSkeleton
         self.chunkLayers = chunkLayers
         self.grammarFocus = grammarFocus
-        self.naturalChineseMeaning = naturalChineseMeaning
+        let normalizedFaithfulTranslation = trimmedOrEmpty(faithfulTranslation)
+        let normalizedTeachingInterpretation = trimmedOrEmpty(teachingInterpretation)
+        let normalizedLegacyMeaning = trimmedOrEmpty(naturalChineseMeaning)
+        self.faithfulTranslation = !normalizedFaithfulTranslation.isEmpty
+            ? normalizedFaithfulTranslation
+            : normalizedLegacyMeaning
+        self.teachingInterpretation = !normalizedTeachingInterpretation.isEmpty
+            ? normalizedTeachingInterpretation
+            : (!normalizedLegacyMeaning.isEmpty ? normalizedLegacyMeaning : normalizedFaithfulTranslation)
+        self.naturalChineseMeaning = !normalizedLegacyMeaning.isEmpty
+            ? normalizedLegacyMeaning
+            : (!self.teachingInterpretation.isEmpty ? self.teachingInterpretation : self.faithfulTranslation)
         self.sentenceCore = sentenceCore
         self.chunkBreakdown = chunkBreakdown
         self.grammarPoints = grammarPoints
@@ -552,7 +569,16 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
         coreSkeleton = try container.decodeIfPresent(ProfessorCoreSkeleton.self, forKey: .coreSkeleton)
         chunkLayers = try container.decodeIfPresent([ProfessorChunkLayer].self, forKey: .chunkLayers) ?? []
         grammarFocus = try container.decodeIfPresent([ProfessorGrammarFocus].self, forKey: .grammarFocus) ?? []
-        naturalChineseMeaning = try container.decode(String.self, forKey: .naturalChineseMeaning)
+        let decodedFaithfulTranslation = try container.decodeIfPresent(String.self, forKey: .faithfulTranslation) ?? ""
+        let decodedTeachingInterpretation = try container.decodeIfPresent(String.self, forKey: .teachingInterpretation) ?? ""
+        let decodedLegacyMeaning = try container.decodeIfPresent(String.self, forKey: .naturalChineseMeaning) ?? ""
+        faithfulTranslation = trimmedOrEmpty(decodedFaithfulTranslation).isEmpty
+            ? decodedLegacyMeaning
+            : decodedFaithfulTranslation
+        teachingInterpretation = trimmedOrEmpty(decodedTeachingInterpretation).isEmpty
+            ? (trimmedOrEmpty(decodedLegacyMeaning).isEmpty ? faithfulTranslation : decodedLegacyMeaning)
+            : decodedTeachingInterpretation
+        naturalChineseMeaning = trimmedOrEmpty(decodedLegacyMeaning).isEmpty ? teachingInterpretation : decodedLegacyMeaning
         sentenceCore = try container.decode(String.self, forKey: .sentenceCore)
         chunkBreakdown = try container.decode([String].self, forKey: .chunkBreakdown)
         grammarPoints = try container.decode([ProfessorGrammarPoint].self, forKey: .grammarPoints)
@@ -586,6 +612,22 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
             if !rendered.isEmpty { return rendered }
         }
         return sentenceCore
+    }
+
+    var renderedFaithfulTranslation: String {
+        let explicit = trimmedOrEmpty(faithfulTranslation)
+        if !explicit.isEmpty { return explicit }
+        let legacy = trimmedOrEmpty(naturalChineseMeaning)
+        if !legacy.isEmpty { return legacy }
+        return trimmedOrEmpty(teachingInterpretation)
+    }
+
+    var renderedTeachingInterpretation: String {
+        let explicit = trimmedOrEmpty(teachingInterpretation)
+        if !explicit.isEmpty { return explicit }
+        let legacy = trimmedOrEmpty(naturalChineseMeaning)
+        if !legacy.isEmpty { return legacy }
+        return trimmedOrEmpty(faithfulTranslation)
     }
 
     var renderedChunkLayers: [String] {
@@ -698,6 +740,8 @@ struct PassageOverview: Equatable, Hashable {
 }
 
 private enum PedagogicalTextKind {
+    case faithfulTranslation
+    case teachingInterpretation
     case naturalMeaning
     case sentenceCore
     case paragraphTheme
@@ -739,6 +783,20 @@ private func pedagogicalTextScore(_ value: String, kind: PedagogicalTextKind) ->
     var score = min(trimmed.count, 120)
 
     switch kind {
+    case .faithfulTranslation:
+        if lower.contains("本段") || lower.contains("作者") || lower.contains("真正") || lower.contains("重点") {
+            score -= 18
+        }
+        if lower.contains("意思是") || lower.contains("可以译为") || lower.contains("译作") {
+            score += 10
+        }
+    case .teachingInterpretation:
+        if lower.contains("真正重点") || lower.contains("真正要你抓") || lower.contains("不要把") || lower.contains("先抓") {
+            score += 12
+        }
+        if lower.contains("逐词翻译") {
+            score -= 8
+        }
     case .naturalMeaning:
         if lower.contains("这句话服务于本段") { score -= 24 }
         if lower.contains("不要平均翻译") { score -= 18 }
@@ -799,10 +857,20 @@ extension ProfessorSentenceAnalysis {
             coreSkeleton: coreSkeleton ?? fallback.coreSkeleton,
             chunkLayers: chunkLayers.isEmpty ? fallback.chunkLayers : chunkLayers,
             grammarFocus: grammarFocus.isEmpty ? fallback.grammarFocus : grammarFocus,
+            faithfulTranslation: preferredPedagogicalText(
+                faithfulTranslation,
+                fallback: fallback.faithfulTranslation,
+                kind: .faithfulTranslation
+            ),
+            teachingInterpretation: preferredPedagogicalText(
+                teachingInterpretation,
+                fallback: fallback.teachingInterpretation,
+                kind: .teachingInterpretation
+            ),
             naturalChineseMeaning: preferredPedagogicalText(
                 naturalChineseMeaning,
                 fallback: fallback.naturalChineseMeaning,
-                kind: .naturalMeaning
+                kind: .teachingInterpretation
             ),
             sentenceCore: preferredPedagogicalText(sentenceCore, fallback: fallback.sentenceCore, kind: .sentenceCore),
             chunkBreakdown: pedagogicalList(chunkBreakdown, fallback: fallback.chunkBreakdown, limit: 6),

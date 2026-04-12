@@ -42,21 +42,23 @@ struct ArchivistWorkspaceView: View {
                         EditorialPaperCanvas(
                             document: document,
                             bundle: bundle,
-                            headerTags: workspaceViewModel.headerTags,
+                            headerSnapshot: workspaceViewModel.headerSnapshot,
                             selectedSentenceID: workspaceViewModel.selectedSentenceID,
                             onSentenceTap: { workspaceViewModel.selectSentence($0) }
                         ) {
                             ArchivistContextAssistant(
                                 node: workspaceViewModel.selectedNode,
                                 sentence: workspaceViewModel.selectedSentence,
-                                result: workspaceViewModel.analysisResult,
+                                analysis: workspaceViewModel.effectiveAnalysis,
                                 isLoading: workspaceViewModel.isLoadingAnalysis,
                                 errorMessage: workspaceViewModel.analysisError,
+                                selectedTerm: selectedWord?.term,
+                                relatedEvidenceItems: workspaceViewModel.relatedEvidenceItems,
                                 onWordTap: { keyword in
                                     guard let sentence = workspaceViewModel.selectedSentence else { return }
                                     selectedWord = appViewModel.wordExplanation(
                                         for: keyword.term,
-                                        meaningHint: keyword.meaning,
+                                        meaningHint: keyword.hint,
                                         sentence: sentence,
                                         in: document
                                     )
@@ -402,10 +404,12 @@ private struct NavigatorNodeRow: View {
 private struct ArchivistContextAssistant: View {
     let node: OutlineNode?
     let sentence: Sentence?
-    let result: AIExplainSentenceResult?
+    let analysis: ProfessorSentenceAnalysis?
     let isLoading: Bool
     let errorMessage: String?
-    let onWordTap: (AIExplainSentenceResult.KeyTerm) -> Void
+    let selectedTerm: String?
+    let relatedEvidenceItems: [String]
+    let onWordTap: (OutlineNodeKeyword) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: ArchivistSpacing.lg) {
@@ -444,78 +448,19 @@ private struct ArchivistContextAssistant: View {
                         .font(ArchivistTypography.annotation)
                         .foregroundStyle(ArchivistColors.mutedInk)
                 }
-            } else if let result {
-                let sentenceFunction = result.renderedSentenceFunction.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !sentenceFunction.isEmpty {
-                    ContextAnalysisCard(title: "句子定位", tapeColor: ArchivistColors.greenWash, offset: CGSize(width: 0, height: 0)) {
-                        Text(sentenceFunction)
-                            .font(ArchivistTypography.annotation)
-                            .foregroundStyle(ArchivistColors.mutedInk)
-                            .lineSpacing(4)
+            } else if let analysis {
+                ContextAnalysisCard(title: "Professor Analysis", tapeColor: ArchivistColors.yellowWash, offset: CGSize(width: 6, height: -4)) {
+                    ScrollView(showsIndicators: false) {
+                        ProfessorAnalysisPanel(
+                            analysis: analysis,
+                            keywordMinimumWidth: 118,
+                            selectedTerm: selectedTerm,
+                            relatedEvidenceItems: relatedEvidenceItems,
+                            onWordTap: onWordTap
+                        )
                     }
+                    .frame(maxHeight: 520)
                 }
-
-                ContextAnalysisCard(title: "句子主干", tapeColor: ArchivistColors.blueWash, offset: CGSize(width: 10, height: -6)) {
-                    Text(result.renderedSentenceCore)
-                        .font(ArchivistTypography.annotation)
-                        .foregroundStyle(ArchivistColors.mutedInk)
-                        .lineSpacing(4)
-                }
-
-                if let misread = result.renderedMisreadingTraps.first {
-                    ContextAnalysisCard(title: "学生易错点", tapeColor: ArchivistColors.pinkWash, offset: CGSize(width: 6, height: -2)) {
-                        Text(misread)
-                            .font(ArchivistTypography.annotation)
-                            .foregroundStyle(ArchivistColors.mutedInk)
-                            .lineSpacing(4)
-                    }
-                }
-
-                if let rewrite = result.renderedExamParaphraseRoutes.first {
-                    ContextAnalysisCard(title: "出题改写点", tapeColor: ArchivistColors.yellowWash, offset: CGSize(width: -8, height: -4)) {
-                        Text(rewrite)
-                            .font(ArchivistTypography.annotation)
-                            .foregroundStyle(ArchivistColors.mutedInk)
-                            .lineSpacing(4)
-                    }
-                }
-
-                if !result.keyTerms.isEmpty {
-                    ContextAnalysisCard(title: "词汇在句中义", tapeColor: ArchivistColors.yellowWash, offset: CGSize(width: -8, height: -4)) {
-                        FlexibleVocabFlow(terms: result.keyTerms, onTap: onWordTap)
-                    }
-                }
-            }
-        }
-    }
-}
-
-private struct FlexibleVocabFlow: View {
-    let terms: [AIExplainSentenceResult.KeyTerm]
-    let onTap: (AIExplainSentenceResult.KeyTerm) -> Void
-
-    var body: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 8)], alignment: .leading, spacing: 8) {
-            ForEach(terms, id: \.term) { term in
-                Button {
-                    onTap(term)
-                } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(term.term)
-                            .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        Text(term.meaning)
-                            .font(ArchivistTypography.annotationSmall)
-                            .lineLimit(2)
-                    }
-                    .foregroundStyle(ArchivistColors.primaryInk)
-                    .padding(10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(ArchivistColors.paperCanvas.opacity(0.7))
-                    )
-                }
-                .buttonStyle(.plain)
             }
         }
     }

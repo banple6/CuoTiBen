@@ -3,7 +3,7 @@ import SwiftUI
 struct EditorialPaperCanvas<AnalysisContent: View>: View {
     let document: SourceDocument
     let bundle: StructuredSourceBundle
-    let headerTags: [String]
+    let headerSnapshot: ProfessorTeachingStatusSnapshot
     let selectedSentenceID: String?
     let onSentenceTap: (Sentence) -> Void
     let analysisContent: AnalysisContent
@@ -11,58 +11,83 @@ struct EditorialPaperCanvas<AnalysisContent: View>: View {
     init(
         document: SourceDocument,
         bundle: StructuredSourceBundle,
-        headerTags: [String],
+        headerSnapshot: ProfessorTeachingStatusSnapshot,
         selectedSentenceID: String?,
         onSentenceTap: @escaping (Sentence) -> Void,
         @ViewBuilder analysisContent: () -> AnalysisContent
     ) {
         self.document = document
         self.bundle = bundle
-        self.headerTags = headerTags
+        self.headerSnapshot = headerSnapshot
         self.selectedSentenceID = selectedSentenceID
         self.onSentenceTap = onSentenceTap
         self.analysisContent = analysisContent()
     }
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: ArchivistEffects.paperCorner, style: .continuous)
-                .fill(ArchivistColors.paperCanvas)
+        GeometryReader { proxy in
+            ZStack {
+                RoundedRectangle(cornerRadius: ArchivistEffects.paperCorner, style: .continuous)
+                    .fill(ArchivistColors.paperCanvas)
 
-            PaperTextureOverlay()
-                .clipShape(RoundedRectangle(cornerRadius: ArchivistEffects.paperCorner, style: .continuous))
+                PaperTextureOverlay()
+                    .clipShape(RoundedRectangle(cornerRadius: ArchivistEffects.paperCorner, style: .continuous))
 
-            HStack(spacing: ArchivistSpacing.xxxl) {
-                VStack(alignment: .leading, spacing: ArchivistSpacing.xxl) {
-                    DocumentHeaderBlock(
-                        title: document.title,
-                        subtitle: "\(document.documentType.displayName) · \(max(document.pageCount, bundle.source.pageCount)) pages",
-                        tags: headerTags
-                    )
+                HStack(alignment: .top, spacing: ArchivistSpacing.xxxl) {
+                    ScrollView(showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: ArchivistSpacing.xxl) {
+                            DocumentHeaderBlock(
+                                snapshot: headerSnapshot,
+                                subtitle: "\(document.documentType.displayName) · \(max(document.pageCount, bundle.source.pageCount)) pages",
+                                metadataTags: metadataTags
+                            )
 
-                    ForEach(bundle.segments) { segment in
-                        ParagraphTextBlock(
-                            segment: segment,
-                            sentences: bundle.sentences(in: segment),
-                            selectedSentenceID: selectedSentenceID,
-                            onSentenceTap: onSentenceTap
-                        )
+                            ForEach(bundle.segments) { segment in
+                                ParagraphTextBlock(
+                                    segment: segment,
+                                    sentences: bundle.sentences(in: segment),
+                                    selectedSentenceID: selectedSentenceID,
+                                    onSentenceTap: onSentenceTap
+                                )
+                            }
+
+                            DecorativeNoteBlock(
+                                text: "Teaching note: use the current teaching focus to decide what belongs to the sentence core, what only frames it, and what exam questions are likely to paraphrase."
+                            )
+                        }
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
-                    DecorativeNoteBlock(
-                        text: "Note: connect the selected sentence to your related knowledge points and quote interpretation instead of collecting fragments passively."
+                    ScrollView(showsIndicators: false) {
+                        analysisContent
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                    }
+                    .frame(
+                        minWidth: analysisPanelWidth(for: proxy.size.width),
+                        maxWidth: analysisPanelWidth(for: proxy.size.width),
+                        maxHeight: .infinity,
+                        alignment: .top
                     )
                 }
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-
-                analysisContent
-                    .frame(width: 280, alignment: .top)
+                .padding(.leading, ArchivistSpacing.paperLeftMargin)
+                .padding(.trailing, ArchivistSpacing.paperRightMargin)
+                .padding(.vertical, ArchivistSpacing.paperVerticalMargin)
             }
-            .padding(.leading, ArchivistSpacing.paperLeftMargin)
-            .padding(.trailing, ArchivistSpacing.paperRightMargin)
-            .padding(.vertical, ArchivistSpacing.paperVerticalMargin)
+            .archivistFloatingShadow()
         }
-        .archivistFloatingShadow()
+    }
+
+    private var metadataTags: [String] {
+        [
+            headerSnapshot.currentSentenceAnchor,
+            headerSnapshot.currentParagraphRole,
+            "\(bundle.professorSentenceCards.count) 句重点句"
+        ]
+    }
+
+    private func analysisPanelWidth(for availableWidth: CGFloat) -> CGFloat {
+        min(max(availableWidth * 0.32, 318), 376)
     }
 }
 
@@ -87,22 +112,19 @@ struct PaperTextureOverlay: View {
 }
 
 struct DocumentHeaderBlock: View {
-    let title: String
+    let snapshot: ProfessorTeachingStatusSnapshot
     let subtitle: String
-    let tags: [String]
+    let metadataTags: [String]
 
     var body: some View {
         VStack(alignment: .leading, spacing: ArchivistSpacing.lg) {
-            FlexibleArchivistTagFlow(tags: tags)
-
-            Text(title)
-                .font(ArchivistTypography.workspaceTitle)
-                .foregroundStyle(ArchivistColors.mutedInk)
-                .lineSpacing(6)
+            ProfessorTeachingStatusHeader(snapshot: snapshot)
 
             Text(subtitle)
                 .font(ArchivistTypography.annotation)
                 .foregroundStyle(ArchivistColors.softInk)
+
+            FlexibleArchivistTagFlow(tags: metadataTags)
         }
     }
 }

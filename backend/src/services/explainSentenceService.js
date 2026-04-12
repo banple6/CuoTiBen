@@ -18,13 +18,16 @@ export function buildExplainSentencePrompt({ title, sentence, context, paragraph
     "请使用中文讲解，但必要时保留关键英语术语或英语原句片段。",
     "JSON 顶层必须是对象。",
     "你不是摘要器，你是在教学生如何真正读懂句子、识别主干、修饰语、逻辑关系和出题改写。",
-    "输出字段必须固定为：original_sentence、evidence_type、sentence_function、core_skeleton、chunk_layers、grammar_focus、natural_chinese_meaning、contextual_vocabulary、misreading_traps、exam_paraphrase_routes、simpler_rewrite、mini_check、hierarchy_rebuild、syntactic_variation。",
+    "输出字段必须固定为：original_sentence、evidence_type、sentence_function、core_skeleton、chunk_layers、grammar_focus、faithful_translation、teaching_interpretation、natural_chinese_meaning、contextual_vocabulary、misreading_traps、exam_paraphrase_routes、simpler_rewrite、mini_check、hierarchy_rebuild、syntactic_variation。",
     "original_sentence 必须回填原句。",
     "evidence_type 必须只能是：background_info / transition_signal / core_claim / supporting_evidence / counter_argument / conclusion_marker 之一。",
     "sentence_function 必须直接说明这句在论证里在做什么，如“核心判断句：作者真正要成立的判断在这里”。",
     "core_skeleton 必须是对象，字段固定为 subject、predicate、complement_or_object。内容必须明确，不允许空泛总结。",
     "chunk_layers 必须是数组，每项都是对象，字段固定为 text、role、attaches_to、gloss。role 要说明它是核心信息、前置框架、后置修饰、补充说明还是让步/条件框架。",
     "grammar_focus 必须是数组，每项都是对象，字段固定为 phenomenon、function、why_it_matters。只保留最关键的 1-3 个。",
+    "faithful_translation 必须是忠实翻译：中文自然，但要尽量贴住原句真实意思，不要偷换成教学评论。",
+    "teaching_interpretation 必须是教学解读：说明这句话真正承担什么功能、该先抓哪一层、为什么容易读错。",
+    "natural_chinese_meaning 用于兼容旧字段，内容与 teaching_interpretation 保持一致。",
     "contextual_vocabulary 必须是数组，每项字段固定为 term、meaning，meaning 必须是本句义。",
     "misreading_traps 必须指出学生最容易误判主干、修饰范围、指代、否定或逻辑关系的地方。",
     "exam_paraphrase_routes 必须指出该句可能如何在阅读理解题中被改写、偷换或设陷阱。",
@@ -43,7 +46,7 @@ export function buildExplainSentencePrompt({ title, sentence, context, paragraph
     "",
     "输出标准：",
     "1. 输出优先级必须体现：句子定位 → 句子主干 → 语块切分 → 关键语法点 → 学生易错点 → 出题改写点 → 简化英文改写 → 微练习。",
-    "2. 自然中文义必须是自然汉语，不要逐词对译，也不要写成“这句话服务于本段”之类元话语。",
+    "2. faithful_translation 必须是忠实翻译；teaching_interpretation 才负责老师口吻的解释，两者不能混写。",
     "3. core_skeleton 必须直接说清主句主干，不能写成“本句讲了什么”或“先抓主干”。",
     "4. chunk_layers 不是机械切分，必须说明每一块的功能和挂接对象。",
     "5. grammar_focus 只保留最关键的 1-3 个语法点，而且必须说明它在这句里具体起什么作用，以及为什么做题时重要。",
@@ -221,7 +224,8 @@ function ensureExplainResultShape(raw) {
     ["core_skeleton", "sentence_core"],
     ["chunk_layers", "chunk_breakdown"],
     ["grammar_focus", "grammar_points"],
-    ["natural_chinese_meaning"],
+    ["faithful_translation", "translation", "natural_chinese_meaning"],
+    ["teaching_interpretation", "natural_chinese_meaning"],
     ["contextual_vocabulary", "vocabulary_in_context"],
     ["misreading_traps", "misread_points", "common_misreadings"],
     ["exam_paraphrase_routes", "exam_rewrite_points", "exam_paraphrase_points"],
@@ -258,6 +262,8 @@ function normalizeExplainResult(raw, sourceSentence, paragraph_role = "") {
   const rawRewritePoints = firstDefined(raw, ["exam_paraphrase_routes", "exam_rewrite_points", "exam_paraphrase_points"]);
   const rawSimplerRewrite = firstDefined(raw, ["simpler_rewrite", "simplified_english"]);
   const rawEvidenceType = firstDefined(raw, ["evidence_type", "sentence_role"]);
+  const rawFaithfulTranslation = firstDefined(raw, ["faithful_translation", "translation", "natural_chinese_meaning"]);
+  const rawTeachingInterpretation = firstDefined(raw, ["teaching_interpretation", "natural_chinese_meaning", "translation"]);
   const evidenceType = normalizeEvidenceType(rawEvidenceType, inferEvidenceTypeFromParagraphRole(paragraph_role));
   const sentenceFunction = typeof raw.sentence_function === "string" && raw.sentence_function.trim()
     ? raw.sentence_function.trim()
@@ -303,6 +309,8 @@ function normalizeExplainResult(raw, sourceSentence, paragraph_role = "") {
     .map((item) => typeof item === "string" ? item.trim() : "")
     .filter(Boolean);
   const simplerRewrite = typeof rawSimplerRewrite === "string" ? rawSimplerRewrite.trim() : "";
+  const faithfulTranslation = typeof rawFaithfulTranslation === "string" ? rawFaithfulTranslation.trim() : "";
+  const teachingInterpretation = typeof rawTeachingInterpretation === "string" ? rawTeachingInterpretation.trim() : "";
   const miniCheck = typeof firstDefined(raw, ["mini_check", "mini_exercise"]) === "string"
     ? firstDefined(raw, ["mini_check", "mini_exercise"]).trim()
     : "";
@@ -315,7 +323,9 @@ function normalizeExplainResult(raw, sourceSentence, paragraph_role = "") {
     core_skeleton: coreSkeleton,
     chunk_layers: chunkLayers,
     grammar_focus: grammarFocus,
-    natural_chinese_meaning: typeof raw.natural_chinese_meaning === "string" ? raw.natural_chinese_meaning.trim() : "",
+    faithful_translation: faithfulTranslation,
+    teaching_interpretation: teachingInterpretation || faithfulTranslation,
+    natural_chinese_meaning: teachingInterpretation || faithfulTranslation,
     sentence_core: sentenceCore,
     evidence_type: evidenceType,
     chunk_breakdown: effectiveChunkBreakdown,
@@ -334,7 +344,7 @@ function normalizeExplainResult(raw, sourceSentence, paragraph_role = "") {
       .map((item) => typeof item === "string" ? item.trim() : "")
       .filter(Boolean),
     syntactic_variation: typeof raw.syntactic_variation === "string" ? raw.syntactic_variation.trim() : "",
-    translation: typeof raw.natural_chinese_meaning === "string" ? raw.natural_chinese_meaning.trim() : "",
+    translation: faithfulTranslation,
     main_structure: sentenceCore,
     key_terms: vocabularyInContext,
     rewrite_example: simplerRewrite
@@ -671,7 +681,24 @@ function normalizeGrammarFocus(raw, fallbackSentence) {
   return buildFallbackGrammarFocus(fallbackSentence);
 }
 
-function buildFallbackNaturalMeaning({ sentence, paragraph_theme = "", paragraph_role = "" }) {
+function buildFallbackFaithfulTranslation({ sentence, paragraph_theme = "" }) {
+  const chunks = splitSentenceIntoChunks(sentence);
+  const coreClause = extractCoreClause(sentence, chunks);
+  const focus = coreClause.replace(/\s+/g, " ").trim();
+
+  if (paragraph_theme.trim()) {
+    return `句子的基本意思是：围绕“${paragraph_theme.trim()}”这个话题，真正成立的内容落在“${focus}”这一层。`;
+  }
+
+  if (chunks.length >= 2) {
+    const prefix = chunks[0] === coreClause ? "" : `前面先交代“${chunks[0]}”，`;
+    return `句子的基本意思是：${prefix}真正要表达的是“${focus}”。`;
+  }
+
+  return `句子的基本意思是：${focus}。`;
+}
+
+function buildFallbackTeachingInterpretation({ sentence, paragraph_theme = "", paragraph_role = "" }) {
   const chunks = splitSentenceIntoChunks(sentence);
   const coreClause = extractCoreClause(sentence, chunks);
   const lower = sentence.toLowerCase();
@@ -793,8 +820,11 @@ function isShallowText(text, patterns = []) {
 function validateExplainResultQuality(result, sourceSentence) {
   const warnings = [];
 
-  if (isShallowText(result.natural_chinese_meaning, ["这句话服务于本段", "不要平均翻译", "先抓主干"])) {
-    warnings.push("natural_chinese_meaning 仍然像教学提示，不像自然释义");
+  if (isShallowText(result.faithful_translation, ["这句话服务于本段", "真正要", "重点在"])) {
+    warnings.push("faithful_translation 仍然混入教学评论");
+  }
+  if (isShallowText(result.teaching_interpretation, ["直译", "逐词对译"]) || result.teaching_interpretation.length < 10) {
+    warnings.push("teaching_interpretation 太弱");
   }
   if (isShallowText(result.sentence_function, ["这句话", "本句", "用于说明"]) || result.sentence_function.length < 10) {
     warnings.push("sentence_function 太弱");
@@ -844,12 +874,13 @@ function buildExplainSentenceRepairPrompt({
     `薄弱点：${warnings.join("；")}`,
     "特别要求：",
     "1. sentence_function 必须先判清这句是背景、推进、核心判断、证据、让步还是结论，并直接说清它在论证中做什么。",
-    "2. natural_chinese_meaning 要像老师口头解释句意，而不是写成“这句话服务于本段”。",
-    "3. core_skeleton 必须明确 subject、predicate、complement_or_object，不能再写空泛总结。",
-    "4. chunk_layers 每一项都要标明 role、attaches_to、gloss，至少要有一项 role 是“核心信息”。",
-    "5. grammar_focus 必须说清结构功能和为什么重要，不能只贴标签。",
-    "6. misreading_traps 必须写清学生会把哪一层读错。",
-    "7. exam_paraphrase_routes 必须写出命题人会怎么偷换。",
+    "2. faithful_translation 只负责忠实翻译，不能混入“真正要你抓”“这句在本段里”这类教学评论。",
+    "3. teaching_interpretation 才负责老师口吻的解释，要直接说清学生该先抓哪一层、最容易把哪层挂错。",
+    "4. core_skeleton 必须明确 subject、predicate、complement_or_object，不能再写空泛总结。",
+    "5. chunk_layers 每一项都要标明 role、attaches_to、gloss，至少要有一项 role 是“核心信息”。",
+    "6. grammar_focus 必须说清结构功能和为什么重要，不能只贴标签。",
+    "7. misreading_traps 必须写清学生会把哪一层读错。",
+    "8. exam_paraphrase_routes 必须写出命题人会怎么偷换。",
     "",
     "你上一次的 JSON 为：",
     JSON.stringify(previousResult)
@@ -892,6 +923,15 @@ function enrichExplainResult(result, {
     paragraph_role
   });
   const simplerRewrite = result.simpler_rewrite || result.simplified_english || `${coreClause}.`;
+  const faithfulTranslation = result.faithful_translation || result.translation || buildFallbackFaithfulTranslation({
+    sentence,
+    paragraph_theme
+  });
+  const teachingInterpretation = result.teaching_interpretation || result.natural_chinese_meaning || buildFallbackTeachingInterpretation({
+    sentence,
+    paragraph_theme,
+    paragraph_role
+  });
   const miniCheck = result.mini_check || result.mini_exercise || buildFallbackMiniExercise({
     ...result,
     chunk_breakdown: labeledChunks,
@@ -908,11 +948,9 @@ function enrichExplainResult(result, {
     core_skeleton: coreSkeleton,
     chunk_layers: chunkLayers,
     grammar_focus: grammarFocus,
-    natural_chinese_meaning: result.natural_chinese_meaning || buildFallbackNaturalMeaning({
-      sentence,
-      paragraph_theme,
-      paragraph_role
-    }),
+    faithful_translation: faithfulTranslation,
+    teaching_interpretation: teachingInterpretation,
+    natural_chinese_meaning: teachingInterpretation,
     sentence_core: result.sentence_core || renderCoreSkeleton(coreSkeleton) || buildFallbackSentenceCore(sentence),
     chunk_breakdown: labeledChunks,
     grammar_points: result.grammar_points.length > 0 ? result.grammar_points : grammarFocus.map((item) => ({
@@ -935,7 +973,7 @@ function enrichExplainResult(result, {
     mini_check: miniCheck,
     hierarchy_rebuild: result.hierarchy_rebuild.length > 0 ? result.hierarchy_rebuild : buildFallbackHierarchyRebuild(chunks, coreClause),
     syntactic_variation: result.syntactic_variation || buildFallbackSyntacticVariation(sentence),
-    translation: result.natural_chinese_meaning || buildFallbackNaturalMeaning({ sentence, paragraph_theme, paragraph_role }),
+    translation: faithfulTranslation,
     main_structure: result.sentence_core || renderCoreSkeleton(coreSkeleton) || buildFallbackSentenceCore(sentence),
     key_terms: result.vocabulary_in_context.length > 0 ? result.vocabulary_in_context : buildFallbackVocabularyInContext(sentence),
     rewrite_example: simplerRewrite

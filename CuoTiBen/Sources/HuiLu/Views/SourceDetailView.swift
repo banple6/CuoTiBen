@@ -69,6 +69,78 @@ struct SourceDetailView: View {
         )
     }
 
+    private var currentSentenceForTeachingStatus: Sentence? {
+        guard let structuredSource else { return nil }
+        if let selectedSentence {
+            return structuredSource.sentence(id: selectedSentence.id) ?? selectedSentence
+        }
+        if let highlightedSentenceID, let sentence = structuredSource.sentence(id: highlightedSentenceID) {
+            return sentence
+        }
+        if let node = structuredSource.outlineNode(id: highlightedOutlineNodeID),
+           let sentence = structuredSource.sentence(id: node.primarySentenceID ?? node.anchor.sentenceID) {
+            return sentence
+        }
+        if let firstKeySentence = structuredSource.professorSentenceCards.first,
+           let sentence = structuredSource.sentence(id: firstKeySentence.sentenceID) {
+            return sentence
+        }
+        return structuredSource.sentences.first
+    }
+
+    private var currentParagraphCardForTeachingStatus: ParagraphTeachingCard? {
+        guard let structuredSource else { return nil }
+        if let sentence = currentSentenceForTeachingStatus,
+           let card = structuredSource.paragraphCard(forSegmentID: sentence.segmentID) {
+            return card
+        }
+        if let node = structuredSource.outlineNode(id: highlightedOutlineNodeID) {
+            return structuredSource.paragraphCard(forSegmentID: node.primarySegmentID ?? node.anchor.segmentID)
+        }
+        return structuredSource.paragraphTeachingCards.first
+    }
+
+    private var currentAnalysisForTeachingStatus: ProfessorSentenceAnalysis? {
+        guard let structuredSource else { return nil }
+        if let sentence = currentSentenceForTeachingStatus {
+            return structuredSource.sentenceCard(id: sentence.id)?.analysis
+        }
+        return structuredSource.professorSentenceCards.first?.analysis
+    }
+
+    private var currentModeLabel: String {
+        switch selectedTab {
+        case .original:
+            return "原文模式"
+        case .outline:
+            return "教学树模式"
+        case .professor:
+            return "句子分析模式"
+        }
+    }
+
+    private var teachingStatusSnapshot: ProfessorTeachingStatusSnapshot {
+        let anchor = currentSentenceForTeachingStatus?.anchorLabel
+            ?? structuredSource?.outlineNode(id: highlightedOutlineNodeID)?.anchor.label
+            ?? "等待定位"
+        let sentenceFunction = currentAnalysisForTeachingStatus?.renderedSentenceFunction.nonEmpty
+            ?? "先选中一句或一个教学节点，系统会把当前句的定位、主干和教学焦点放到这里。"
+        let paragraphRole = currentParagraphCardForTeachingStatus?.argumentRole.displayName
+            ?? "段落角色待识别"
+        let teachingFocus = currentParagraphCardForTeachingStatus?.teachingFocuses.first?.nonEmpty
+            ?? currentParagraphCardForTeachingStatus?.theme.nonEmpty
+            ?? "教学焦点待提取"
+
+        return ProfessorTeachingStatusSnapshot(
+            documentTitle: liveDocument.title,
+            currentSentenceAnchor: anchor,
+            currentSentenceFunction: sentenceFunction,
+            currentParagraphRole: paragraphRole,
+            currentTeachingFocus: teachingFocus,
+            currentMode: currentModeLabel
+        )
+    }
+
     var body: some View {
         GeometryReader { proxy in
             let usesArchivistWorkspace = proxy.size.width >= 960
@@ -232,51 +304,41 @@ struct SourceDetailView: View {
     }
 
     private var overlayHeader: some View {
-        HStack(alignment: .center) {
-            Capsule()
-                .fill(AppPalette.paperLine)
-                .frame(width: 66, height: 6)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center) {
+                Capsule()
+                    .fill(AppPalette.paperLine)
+                    .frame(width: 66, height: 6)
 
-            Spacer()
+                Spacer()
 
-            Text(isExpanded ? "下拉收起" : "上拉展开")
-                .font(.system(size: 13, weight: .semibold, design: .serif))
-                .foregroundStyle(AppPalette.paperMuted)
+                Text(isExpanded ? "下拉收起" : "上拉展开")
+                    .font(.system(size: 13, weight: .semibold, design: .serif))
+                    .foregroundStyle(AppPalette.paperMuted)
 
-            Spacer()
+                Spacer()
 
-            Button(action: onClose) {
-                HStack(spacing: 6) {
-                    Image(systemName: "xmark.circle.fill")
-                    Text("关闭")
+                Button(action: onClose) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "xmark.circle.fill")
+                        Text("关闭")
+                    }
+                    .font(.system(size: 15, weight: .medium, design: .serif))
+                    .foregroundStyle(AppPalette.paperMuted)
                 }
-                .font(.system(size: 15, weight: .medium, design: .serif))
-                .foregroundStyle(AppPalette.paperMuted)
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
+
+            ProfessorTeachingStatusHeader(
+                snapshot: teachingStatusSnapshot,
+                compact: true
+            )
         }
     }
 
     @ViewBuilder
     private var overlayBody: some View {
         VStack(alignment: .leading, spacing: 22) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Resource Details")
-                    .font(.system(size: 31, weight: .bold, design: .serif))
-                    .italic()
-                    .foregroundStyle(AppPalette.paperInk)
-
-                Rectangle()
-                    .fill(AppPalette.paperLine)
-                    .frame(width: 190, height: 2)
-
-                Text("结构化预览与资料整理")
-                    .font(.system(size: 14, weight: .medium, design: .serif))
-                    .foregroundStyle(AppPalette.paperMuted)
-            }
-
-            sourceMetaSection
-
             overlayStatsSection
 
             if let structuredSource {
@@ -284,6 +346,8 @@ struct SourceDetailView: View {
             } else {
                 structureLoadingSection
             }
+
+            sourceMetaSection
 
             topicTagsSection
         }
@@ -684,6 +748,13 @@ struct SourceDetailView: View {
                     dragOffset = 0
                 }
             }
+    }
+}
+
+private extension String {
+    var nonEmpty: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 

@@ -43,19 +43,65 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
         bundle.flattenedOutlineNodes()
     }
 
-    var headerTags: [String] {
-        var tags = [
-            "Source: \(document.title)",
-            "Type: \(document.documentType.displayName)",
-            "Pages: \(max(document.pageCount, bundle.source.pageCount))"
-        ]
+    var selectedParagraphCard: ParagraphTeachingCard? {
+        if let selectedSentence {
+            return bundle.paragraphCard(forSegmentID: selectedSentence.segmentID)
+        }
+        if let selectedNode {
+            return bundle.paragraphCard(forSegmentID: selectedNode.primarySegmentID ?? selectedNode.anchor.segmentID)
+        }
+        return bundle.paragraphTeachingCards.first
+    }
 
-        let topical = document.topicTags
+    var effectiveAnalysis: ProfessorSentenceAnalysis? {
+        let bundled = bundle.sentenceCard(id: selectedSentenceID)?.analysis
+        if let remote = analysisResult?.localFallbackAnalysis {
+            return remote.mergingFallback(bundled)
+        }
+        return bundled
+    }
+
+    var relatedEvidenceItems: [String] {
+        guard let selectedSentence else { return [] }
+        var items: [String] = []
+
+        if let card = selectedParagraphCard {
+            if let blindSpot = card.studentBlindSpot?.nonEmpty {
+                items.append("本段易偏点：\(blindSpot)")
+            }
+            if let focus = card.teachingFocuses.first?.nonEmpty {
+                items.append("本段教学重点：\(focus)")
+            }
+        }
+
+        items.append(contentsOf: bundle.questionLinks
+            .filter { link in
+                link.supportingSentenceIDs.contains(selectedSentence.id) ||
+                link.supportParagraphIDs.contains(selectedSentence.segmentID)
+            }
             .prefix(2)
-            .map { "Topic: \($0)" }
+            .map { link in
+                let trap = link.trapType.nonEmpty ?? "题目证据"
+                let evidence = link.paraphraseEvidence.first?.nonEmpty ?? String(link.questionText.prefix(48))
+                return "\(trap)：\(evidence)"
+            })
 
-        tags.append(contentsOf: topical)
-        return tags
+        var seen: Set<String> = []
+        return items.compactMap(\.nonEmpty).filter { seen.insert($0).inserted }
+    }
+
+    var headerSnapshot: ProfessorTeachingStatusSnapshot {
+        ProfessorTeachingStatusSnapshot(
+            documentTitle: document.title,
+            currentSentenceAnchor: selectedSentence?.anchorLabel ?? selectedNode?.anchor.label ?? "等待定位",
+            currentSentenceFunction: effectiveAnalysis?.renderedSentenceFunction.nonEmpty
+                ?? "先在原文或教学树里选中一句，系统会把当前句的定位、主干和教学焦点同步到这里。",
+            currentParagraphRole: selectedParagraphCard?.argumentRole.displayName ?? "段落角色待识别",
+            currentTeachingFocus: selectedParagraphCard?.teachingFocuses.first?.nonEmpty
+                ?? selectedParagraphCard?.theme.nonEmpty
+                ?? "教学焦点待提取",
+            currentMode: "句子分析模式"
+        )
     }
 
     func selectSentence(_ sentence: Sentence) {
@@ -145,5 +191,12 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
 
         analysisTask = task
         await task.value
+    }
+}
+
+private extension String {
+    var nonEmpty: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }

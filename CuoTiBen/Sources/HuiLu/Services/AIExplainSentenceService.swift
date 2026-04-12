@@ -22,6 +22,8 @@ struct AIExplainSentenceResult: Equatable {
     let coreSkeleton: CoreSkeleton?
     let chunkLayers: [ChunkLayer]
     let grammarFocus: [GrammarFocus]
+    let faithfulTranslation: String
+    let teachingInterpretation: String
     let naturalChineseMeaning: String
     let sentenceCore: String
     let chunkBreakdown: [String]
@@ -45,6 +47,8 @@ struct AIExplainSentenceResult: Equatable {
         coreSkeleton: CoreSkeleton?,
         chunkLayers: [ChunkLayer],
         grammarFocus: [GrammarFocus],
+        faithfulTranslation: String,
+        teachingInterpretation: String,
         naturalChineseMeaning: String,
         sentenceCore: String,
         chunkBreakdown: [String],
@@ -67,6 +71,8 @@ struct AIExplainSentenceResult: Equatable {
         self.coreSkeleton = coreSkeleton
         self.chunkLayers = chunkLayers
         self.grammarFocus = grammarFocus
+        self.faithfulTranslation = faithfulTranslation
+        self.teachingInterpretation = teachingInterpretation
         self.naturalChineseMeaning = naturalChineseMeaning
         self.sentenceCore = sentenceCore
         self.chunkBreakdown = chunkBreakdown
@@ -109,6 +115,24 @@ struct AIExplainSentenceResult: Equatable {
         let sentenceFunction = Self.firstString(in: dictionary, keys: ["sentence_function"])
             ?? professorSentenceRolePresentation(for: evidenceType).map { "\($0.label)：\($0.description)" }
             ?? ""
+        let faithfulTranslation = Self.firstString(
+            in: dictionary,
+            keys: hasProfessorPayload
+                ? ["faithful_translation", "faithfulTranslation", "translation"]
+                : ["faithful_translation", "translation", "natural_chinese_meaning", "naturalChineseMeaning"]
+        ) ?? ""
+        let teachingInterpretation = Self.firstString(
+            in: dictionary,
+            keys: hasProfessorPayload
+                ? ["teaching_interpretation", "teachingInterpretation", "natural_chinese_meaning", "naturalChineseMeaning"]
+                : ["teaching_interpretation", "natural_chinese_meaning", "naturalChineseMeaning", "translation"]
+        ) ?? ""
+        let naturalChineseMeaning = Self.firstString(
+            in: dictionary,
+            keys: hasProfessorPayload
+                ? ["teaching_interpretation", "natural_chinese_meaning", "naturalChineseMeaning", "faithful_translation"]
+                : ["teaching_interpretation", "natural_chinese_meaning", "translation", "naturalChineseMeaning"]
+        ) ?? Self.nonEmpty(teachingInterpretation) ?? faithfulTranslation
 
         self.init(
             originalSentence: Self.firstString(in: dictionary, keys: ["original_sentence", "originalSentence", "sentence"]) ?? sourceSentence,
@@ -117,10 +141,9 @@ struct AIExplainSentenceResult: Equatable {
             coreSkeleton: Self.coreSkeleton(in: dictionary, fallbackSentenceCore: sentenceCore),
             chunkLayers: Self.chunkLayers(in: dictionary, fallbackChunks: chunkBreakdown),
             grammarFocus: Self.grammarFocus(in: dictionary, fallbackGrammarPoints: grammarPoints),
-            naturalChineseMeaning: Self.firstString(
-                in: dictionary,
-                keys: hasProfessorPayload ? ["natural_chinese_meaning", "naturalChineseMeaning"] : ["natural_chinese_meaning", "translation", "naturalChineseMeaning"]
-            ) ?? "",
+            faithfulTranslation: Self.nonEmpty(faithfulTranslation) ?? naturalChineseMeaning,
+            teachingInterpretation: Self.nonEmpty(teachingInterpretation) ?? naturalChineseMeaning,
+            naturalChineseMeaning: naturalChineseMeaning,
             sentenceCore: sentenceCore,
             chunkBreakdown: chunkBreakdown,
             grammarPoints: grammarPoints,
@@ -138,10 +161,15 @@ struct AIExplainSentenceResult: Equatable {
         )
     }
 
-    var translation: String { naturalChineseMeaning }
+    var translation: String { Self.nonEmpty(faithfulTranslation) ?? naturalChineseMeaning }
     var mainStructure: String { sentenceCore }
     var keyTerms: [KeyTerm] { vocabularyInContext }
     var rewriteExample: String { simplifiedEnglish }
+
+    private static func nonEmpty(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
 
     var localFallbackAnalysis: ProfessorSentenceAnalysis {
         ProfessorSentenceAnalysis(
@@ -150,6 +178,8 @@ struct AIExplainSentenceResult: Equatable {
             coreSkeleton: coreSkeleton,
             chunkLayers: chunkLayers,
             grammarFocus: grammarFocus,
+            faithfulTranslation: faithfulTranslation,
+            teachingInterpretation: teachingInterpretation,
             naturalChineseMeaning: naturalChineseMeaning,
             sentenceCore: sentenceCore,
             chunkBreakdown: chunkBreakdown,
@@ -171,6 +201,8 @@ struct AIExplainSentenceResult: Equatable {
 
     var renderedSentenceFunction: String { localFallbackAnalysis.renderedSentenceFunction }
     var renderedSentenceCore: String { localFallbackAnalysis.renderedSentenceCore }
+    var renderedFaithfulTranslation: String { localFallbackAnalysis.renderedFaithfulTranslation }
+    var renderedTeachingInterpretation: String { localFallbackAnalysis.renderedTeachingInterpretation }
     var renderedChunkLayers: [String] { localFallbackAnalysis.renderedChunkLayers }
     var renderedGrammarFocus: [String] { localFallbackAnalysis.renderedGrammarFocus }
     var renderedMisreadingTraps: [String] { localFallbackAnalysis.renderedMisreadingTraps }
@@ -186,6 +218,8 @@ struct AIExplainSentenceResult: Equatable {
             "core_skeleton",
             "chunk_layers",
             "grammar_focus",
+            "faithful_translation",
+            "teaching_interpretation",
             "natural_chinese_meaning",
             "vocabulary_in_context",
             "contextual_vocabulary",
@@ -221,6 +255,8 @@ struct AIExplainSentenceResult: Equatable {
             "core_skeleton",
             "chunk_layers",
             "grammar_focus",
+            "faithful_translation",
+            "teaching_interpretation",
             "natural_chinese_meaning",
             "contextual_vocabulary",
             "misreading_traps",

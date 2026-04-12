@@ -74,7 +74,9 @@ function buildAnalyzePassagePrompt({ title, paragraphs, keySentences }) {
     "  core_skeleton：对象，字段固定为 subject、predicate、complement_or_object。必须明确主干。",
     "  chunk_layers：数组，每项是对象，字段固定为 text、role、attaches_to、gloss。要说明每个语块是核心信息、框架、后置修饰还是补充说明。",
     "  grammar_focus：数组，每项包含 phenomenon、function、why_it_matters。只保留真正帮助理解的 1-3 个。",
-    "  natural_chinese_meaning：自然中文义，不要逐词对译，要还原原句的语气和重心。",
+    "  faithful_translation：忠实翻译。中文自然，但要尽量贴住原句真实意思，不要偷换成教学评论。",
+    "  teaching_interpretation：教学解读。说明这句话真正承担什么功能、该先抓哪一层、学生最可能错在哪。",
+    "  natural_chinese_meaning：兼容旧字段，内容与 teaching_interpretation 保持一致。",
     "  sentence_core：直接写清“主语 + 谓语 + 核心宾语/补语”是什么。格式尽量写成“主语：...｜谓语：...｜核心补足：...”。不要说'本句主要讲了...'。",
     "  chunk_breakdown：字符串数组，把句子按自然语义块断开，不是逐词切。每项要标明作用，如“框架让步：... / 核心信息：... / 补充说明：...” 。",
     "  grammar_points：数组，每项包含 name 和 explanation。只保留真正帮助理解的 1-3 个语法点。explanation 必须说清'它在这句里到底起什么作用'，不要贴标签。",
@@ -94,7 +96,7 @@ function buildAnalyzePassagePrompt({ title, paragraphs, keySentences }) {
     "质量底线（违反任何一条都视为失败）：",
     "═══════════════════════",
     "1. sentence_core 绝不能是'本句主要讲了...'或'本句说的是...'，必须指出具体的主语+谓语+宾语。",
-    "2. natural_chinese_meaning 绝不能是逐词翻译。",
+    "2. faithful_translation 必须像可靠译文，teaching_interpretation 才负责老师口吻的解释，两者不能混写。",
     "3. evidence_type 不能空缺，也不能乱给；它决定了学生先把这句当背景、转折还是核心判断。",
     "4. misread_points 绝不能是泛泛的'注意理解'，必须说清学生具体会怎么误读。",
     "5. exam_paraphrase_routes / exam_rewrite_points 绝不能只说'可能考同义替换'，必须给出具体的替换示例。",
@@ -313,6 +315,8 @@ function normalizeSentenceAnalysis(raw, sourceSentence) {
   const rawMisread = firstDefined(raw, ["misreading_traps", "misread_points", "common_misreadings"]);
   const rawRewrite = firstDefined(raw, ["exam_paraphrase_routes", "exam_rewrite_points", "exam_paraphrase_points"]);
   const rawSimplerRewrite = firstDefined(raw, ["simpler_rewrite", "simplified_english"]);
+  const rawFaithfulTranslation = firstDefined(raw, ["faithful_translation", "translation", "natural_chinese_meaning"]);
+  const rawTeachingInterpretation = firstDefined(raw, ["teaching_interpretation", "natural_chinese_meaning", "translation"]);
   const rawChunkBreakdown = normalizeArray(raw.chunk_breakdown).map(String).filter(Boolean);
   const rawGrammarPoints = normalizeArray(raw.grammar_points)
     .map((item) => ({
@@ -328,6 +332,8 @@ function normalizeSentenceAnalysis(raw, sourceSentence) {
   const misreadingTraps = normalizeArray(rawMisread).map(String).filter(Boolean).slice(0, 3);
   const examParaphraseRoutes = normalizeArray(rawRewrite).map(String).filter(Boolean).slice(0, 3);
   const simplerRewrite = normalizeString(rawSimplerRewrite);
+  const faithfulTranslation = normalizeString(rawFaithfulTranslation);
+  const teachingInterpretation = normalizeString(rawTeachingInterpretation, faithfulTranslation);
   const miniCheck = normalizeString(firstDefined(raw, ["mini_check", "mini_exercise"]));
   const derivedChunkBreakdown = chunkLayers
     .map((item) => {
@@ -344,7 +350,9 @@ function normalizeSentenceAnalysis(raw, sourceSentence) {
     core_skeleton: coreSkeleton,
     chunk_layers: chunkLayers,
     grammar_focus: grammarFocus,
-    natural_chinese_meaning: normalizeString(raw.natural_chinese_meaning),
+    faithful_translation: faithfulTranslation,
+    teaching_interpretation: teachingInterpretation,
+    natural_chinese_meaning: teachingInterpretation,
     sentence_core: normalizeString(raw.sentence_core, renderCoreSkeleton(coreSkeleton)),
     chunk_breakdown: rawChunkBreakdown.length > 0 ? rawChunkBreakdown : derivedChunkBreakdown,
     grammar_points: rawGrammarPoints.length > 0
@@ -432,6 +440,12 @@ function validateAnalysisQuality(result) {
       if (!sa.sentence_function || sa.sentence_function.length < 10) {
         warnings.push(`[${sa.sentence_ref}] sentence_function 太弱`);
       }
+      if (!sa.faithful_translation || sa.faithful_translation.includes("真正要") || sa.faithful_translation.includes("重点在")) {
+        warnings.push(`[${sa.sentence_ref}] faithful_translation 不像忠实翻译`);
+      }
+      if (!sa.teaching_interpretation || sa.teaching_interpretation.length < 10) {
+        warnings.push(`[${sa.sentence_ref}] teaching_interpretation 太弱`);
+      }
       if (isShallowSentenceCore(sa.sentence_core)) {
         warnings.push(`[${sa.sentence_ref}] sentence_core 太浅: "${sa.sentence_core?.slice(0, 40)}"`);
       }
@@ -471,8 +485,9 @@ function buildAnalyzePassageRepairPrompt({ title, paragraphs, keySentences, prev
     "2. relation_to_previous 和 exam_value 必须具体到逻辑推进和考试题型，不能只写泛泛判断。",
     "3. teaching_focuses 必须写成具体教学动作，而不是抽象建议。",
     "4. passage_overview 必须像老师带读整篇文章，而不是做摘要；likely_question_types 和 logic_pitfalls 不能空。",
-    "5. sentence_function 必须明确说明这句在论证中做什么；core_skeleton 必须指出主语、谓语、核心宾补。",
-    "6. evidence_type 不能漏；chunk_layers 至少有一项 role 是“核心信息”，并说明 attaches_to。",
+    "5. faithful_translation 必须是忠实翻译，不能混入“真正要你抓”这类教学评论；teaching_interpretation 才负责老师口吻。",
+    "6. sentence_function 必须明确说明这句在论证中做什么；core_skeleton 必须指出主语、谓语、核心宾补。",
+    "7. evidence_type 不能漏；chunk_layers 至少有一项 role 是“核心信息”，并说明 attaches_to。",
     "",
     "你上一次的 JSON 为：",
     JSON.stringify(previousResult)
