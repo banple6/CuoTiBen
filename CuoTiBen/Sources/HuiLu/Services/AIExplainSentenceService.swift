@@ -131,6 +131,7 @@ struct AIExplainSentenceResult: Equatable {
     let examParaphraseRoutes: [String]
     let simplifiedEnglish: String
     let simplerRewrite: String
+    let simplerRewriteTranslation: String
     let miniExercise: String?
     let miniCheck: String?
     let hierarchyRebuild: [String]
@@ -157,6 +158,7 @@ struct AIExplainSentenceResult: Equatable {
         examParaphraseRoutes: [String],
         simplifiedEnglish: String,
         simplerRewrite: String,
+        simplerRewriteTranslation: String,
         miniExercise: String?,
         miniCheck: String?,
         hierarchyRebuild: [String],
@@ -182,6 +184,7 @@ struct AIExplainSentenceResult: Equatable {
         self.examParaphraseRoutes = examParaphraseRoutes
         self.simplifiedEnglish = simplifiedEnglish
         self.simplerRewrite = simplerRewrite
+        self.simplerRewriteTranslation = simplerRewriteTranslation
         self.miniExercise = miniExercise
         self.miniCheck = miniCheck
         self.hierarchyRebuild = hierarchyRebuild
@@ -231,6 +234,11 @@ struct AIExplainSentenceResult: Equatable {
                 ? ["teaching_interpretation", "natural_chinese_meaning", "naturalChineseMeaning", "faithful_translation"]
                 : ["teaching_interpretation", "natural_chinese_meaning", "translation", "naturalChineseMeaning"]
         ) ?? Self.nonEmpty(teachingInterpretation) ?? faithfulTranslation
+        let simplerRewrite = rewriteExample ?? ""
+        let simplerRewriteTranslation = Self.firstString(
+            in: dictionary,
+            keys: ["simpler_rewrite_translation", "rewrite_translation"]
+        ) ?? ""
 
         self.init(
             originalSentence: Self.firstString(in: dictionary, keys: ["original_sentence", "originalSentence", "sentence"]) ?? sourceSentence,
@@ -251,8 +259,9 @@ struct AIExplainSentenceResult: Equatable {
             examRewritePoints: examParaphraseRoutes.isEmpty ? explicitExamRewritePoints : examParaphraseRoutes,
             misreadingTraps: misreadingTraps,
             examParaphraseRoutes: examParaphraseRoutes.isEmpty ? explicitExamRewritePoints : examParaphraseRoutes,
-            simplifiedEnglish: rewriteExample ?? "",
-            simplerRewrite: rewriteExample ?? "",
+            simplifiedEnglish: simplerRewrite,
+            simplerRewrite: simplerRewrite,
+            simplerRewriteTranslation: simplerRewriteTranslation,
             miniExercise: Self.firstString(in: dictionary, keys: ["mini_exercise"]),
             miniCheck: Self.firstString(in: dictionary, keys: ["mini_check", "mini_exercise"]),
             hierarchyRebuild: Self.stringArray(in: dictionary, keys: ["hierarchy_rebuild"]),
@@ -290,6 +299,7 @@ struct AIExplainSentenceResult: Equatable {
             examParaphraseRoutes: examParaphraseRoutes,
             simplifiedEnglish: simplifiedEnglish,
             simplerRewrite: simplerRewrite,
+            simplerRewriteTranslation: simplerRewriteTranslation,
             miniExercise: miniExercise,
             miniCheck: miniCheck,
             hierarchyRebuild: hierarchyRebuild,
@@ -320,6 +330,7 @@ struct AIExplainSentenceResult: Equatable {
             examParaphraseRoutes: examParaphraseRoutes,
             simplifiedEnglish: simplifiedEnglish,
             simplerRewrite: simplerRewrite,
+            simplerRewriteTranslation: simplerRewriteTranslation,
             miniExercise: miniExercise,
             miniCheck: miniCheck,
             hierarchyRebuild: hierarchyRebuild,
@@ -336,6 +347,7 @@ struct AIExplainSentenceResult: Equatable {
     var renderedMisreadingTraps: [String] { localFallbackAnalysis.renderedMisreadingTraps }
     var renderedExamParaphraseRoutes: [String] { localFallbackAnalysis.renderedExamParaphraseRoutes }
     var renderedSimplerRewrite: String { localFallbackAnalysis.renderedSimplerRewrite }
+    var renderedSimplerRewriteTranslation: String { localFallbackAnalysis.renderedSimplerRewriteTranslation }
     var renderedMiniCheck: String? { localFallbackAnalysis.renderedMiniCheck }
 
     static func looksLikePayload(_ dictionary: [String: Any]) -> Bool {
@@ -356,6 +368,7 @@ struct AIExplainSentenceResult: Equatable {
             "exam_paraphrase_routes",
             "exam_paraphrase_points",
             "simpler_rewrite",
+            "simpler_rewrite_translation",
             "mini_check",
             "sentence_core",
             "chunk_breakdown",
@@ -392,6 +405,7 @@ struct AIExplainSentenceResult: Equatable {
             "exam_paraphrase_routes",
             "exam_paraphrase_points",
             "simpler_rewrite",
+            "simpler_rewrite_translation",
             "mini_check",
             "sentence_core",
             "chunk_breakdown",

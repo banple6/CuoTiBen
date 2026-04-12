@@ -111,11 +111,11 @@ struct SourceDetailView: View {
     private var currentModeLabel: String {
         switch selectedTab {
         case .original:
-            return "原文模式"
+            return "原文"
         case .outline:
-            return "教学树模式"
+            return "结构树"
         case .professor:
-            return "句子分析模式"
+            return "句子讲解"
         }
     }
 

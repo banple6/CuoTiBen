@@ -118,7 +118,7 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
             currentTeachingFocus: selectedParagraphCard?.teachingFocuses.first?.nonEmpty
                 ?? selectedParagraphCard?.theme.nonEmpty
                 ?? "教学焦点待提取",
-            currentMode: "句子分析模式"
+            currentMode: "句子讲解"
         )
     }
 

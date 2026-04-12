@@ -123,7 +123,7 @@ struct SourceOutlineTab: View {
         viewportSize: CGSize
     ) -> some View {
         LazyVStack(alignment: .leading, spacing: densityMode.rowSpacing) {
-            ForEach(nodes) { node in
+            ForEach(visibleNodes) { node in
                 OutlineTreeNodeRow(
                     node: node,
                     highlightedNodeID: highlightedNodeID,
@@ -443,6 +443,10 @@ private struct OutlineTreeNodeRow: View {
         }
     }
 
+    private var rowLeadingInset: CGFloat {
+        CGFloat(normalizedDepth) * (densityMode == .detailed ? 54 : 42)
+    }
+
     private var titleColor: Color {
         isHighlighted ? nodeAccentColor.opacity(0.96) : Color.black.opacity(0.82)
     }
@@ -460,40 +464,20 @@ private struct OutlineTreeNodeRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: densityMode.branchSpacing) {
-            HStack(alignment: .top, spacing: 12) {
-                hierarchyRail
+        HStack(alignment: .top, spacing: 12) {
+            Color.clear
+                .frame(width: rowLeadingInset, height: 1)
 
-                VStack(alignment: .leading, spacing: densityMode.branchSpacing) {
-                    HStack(alignment: .top, spacing: 10) {
-                        disclosureView
-                        outlineNodeButton
-                    }
+            hierarchyRail
 
-                    if isExpanded && !node.children.isEmpty {
-                        childNodesSection
-                    }
-                }
+            HStack(alignment: .top, spacing: 10) {
+                disclosureView
+                outlineNodeButton
             }
         }
         .padding(rowPadding)
         .background(nodeBackground)
         .id(node.id)
-    }
-
-    private var childNodesSection: some View {
-        VStack(alignment: .leading, spacing: densityMode.branchSpacing) {
-            ForEach(node.children) { child in
-                OutlineTreeNodeRow(
-                    node: child,
-                    highlightedNodeID: highlightedNodeID,
-                    densityMode: densityMode,
-                    expandedNodeIDs: $expandedNodeIDs,
-                    onNodeTap: onNodeTap
-                )
-            }
-        }
-        .padding(.leading, childIndent)
     }
 
     @ViewBuilder

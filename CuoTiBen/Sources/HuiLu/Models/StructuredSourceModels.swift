@@ -377,6 +377,13 @@ struct ProfessorChunkLayer: Codable, Equatable, Hashable {
     }
 }
 
+struct ProfessorChunkLayerDisplayItem: Equatable, Hashable {
+    let text: String
+    let role: String
+    let attachesTo: String
+    let gloss: String
+}
+
 struct ProfessorGrammarFocus: Codable, Equatable, Hashable {
     let phenomenon: String
     let function: String
@@ -467,6 +474,7 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
     let examParaphraseRoutes: [String]
     let simplifiedEnglish: String
     let simplerRewrite: String
+    let simplerRewriteTranslation: String
     let miniExercise: String?
     let miniCheck: String?
     let hierarchyRebuild: [String]
@@ -493,6 +501,7 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
         case examParaphraseRoutes = "exam_paraphrase_routes"
         case simplifiedEnglish = "simplified_english"
         case simplerRewrite = "simpler_rewrite"
+        case simplerRewriteTranslation = "simpler_rewrite_translation"
         case miniExercise = "mini_exercise"
         case miniCheck = "mini_check"
         case hierarchyRebuild = "hierarchy_rebuild"
@@ -520,6 +529,7 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
         examParaphraseRoutes: [String] = [],
         simplifiedEnglish: String,
         simplerRewrite: String = "",
+        simplerRewriteTranslation: String = "",
         miniExercise: String?,
         miniCheck: String? = nil,
         hierarchyRebuild: [String],
@@ -554,6 +564,7 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
         self.examParaphraseRoutes = examParaphraseRoutes.isEmpty ? examRewritePoints : examParaphraseRoutes
         self.simplifiedEnglish = simplifiedEnglish
         self.simplerRewrite = simplerRewrite.isEmpty ? simplifiedEnglish : simplerRewrite
+        self.simplerRewriteTranslation = trimmedOrEmpty(simplerRewriteTranslation)
         self.miniExercise = miniExercise
         self.miniCheck = (miniCheck?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) ? miniCheck : miniExercise
         self.hierarchyRebuild = hierarchyRebuild
@@ -589,6 +600,7 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
         examParaphraseRoutes = try container.decodeIfPresent([String].self, forKey: .examParaphraseRoutes) ?? examRewritePoints
         simplifiedEnglish = try container.decode(String.self, forKey: .simplifiedEnglish)
         simplerRewrite = try container.decodeIfPresent(String.self, forKey: .simplerRewrite) ?? simplifiedEnglish
+        simplerRewriteTranslation = try container.decodeIfPresent(String.self, forKey: .simplerRewriteTranslation) ?? ""
         miniExercise = try container.decodeIfPresent(String.self, forKey: .miniExercise)
         miniCheck = try container.decodeIfPresent(String.self, forKey: .miniCheck) ?? miniExercise
         hierarchyRebuild = try container.decode([String].self, forKey: .hierarchyRebuild)
@@ -639,6 +651,73 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
         return chunkBreakdown
     }
 
+    var displayedCoreSkeleton: ProfessorCoreSkeleton {
+        if let coreSkeleton {
+            return coreSkeleton
+        }
+
+        let segments = sentenceCore.split(separator: "｜").map(String.init)
+        var subject = ""
+        var predicate = ""
+        var complement = ""
+
+        for segment in segments {
+            if segment.contains("主语：") {
+                subject = segment.replacingOccurrences(of: "主语：", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+            } else if segment.contains("谓语：") {
+                predicate = segment.replacingOccurrences(of: "谓语：", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+            } else if segment.contains("核心补足：") {
+                complement = segment.replacingOccurrences(of: "核心补足：", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+
+        return ProfessorCoreSkeleton(
+            subject: subject,
+            predicate: predicate,
+            complementOrObject: complement
+        )
+    }
+
+    var displayedChunkLayers: [ProfessorChunkLayerDisplayItem] {
+        if !chunkLayers.isEmpty {
+            return chunkLayers.map {
+                ProfessorChunkLayerDisplayItem(
+                    text: $0.text,
+                    role: $0.role,
+                    attachesTo: $0.attachesTo,
+                    gloss: $0.gloss
+                )
+            }
+        }
+
+        return chunkBreakdown.compactMap { item in
+            let trimmed = trimmedOrEmpty(item)
+            guard !trimmed.isEmpty else { return nil }
+
+            let parts = trimmed.components(separatedBy: "｜")
+            let head = parts.first.map(trimmedOrEmpty) ?? ""
+            let gloss = parts.dropFirst().map(trimmedOrEmpty).filter { !$0.isEmpty }.joined(separator: "｜")
+
+            if let split = head.range(of: "：") {
+                let role = trimmedOrEmpty(String(head[..<split.lowerBound]))
+                let text = trimmedOrEmpty(String(head[split.upperBound...]))
+                return ProfessorChunkLayerDisplayItem(
+                    text: text,
+                    role: role,
+                    attachesTo: "",
+                    gloss: gloss
+                )
+            }
+
+            return ProfessorChunkLayerDisplayItem(
+                text: head,
+                role: "语块",
+                attachesTo: "",
+                gloss: gloss
+            )
+        }
+    }
+
     var renderedGrammarFocus: [String] {
         if !grammarFocus.isEmpty {
             return grammarFocus.map(\.rendered)
@@ -657,6 +736,29 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
     var renderedSimplerRewrite: String {
         let trimmed = simplerRewrite.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? simplifiedEnglish : trimmed
+    }
+
+    var renderedSimplerRewriteTranslation: String {
+        let explicit = purifiedChineseExplanation(simplerRewriteTranslation)
+        if !explicit.isEmpty { return explicit }
+
+        let faithful = renderedFaithfulTranslation
+        let rewrite = renderedSimplerRewrite.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rewrite.isEmpty else { return "" }
+
+        var parts: [String] = []
+        if !faithful.isEmpty {
+            parts.append("译意：\(faithful)")
+        }
+
+        let roles = displayedChunkLayers.map(\.role)
+        if roles.contains(where: { $0.contains("前置") || $0.contains("条件") || $0.contains("让步") || $0.contains("后置") }) {
+            parts.append("简化时把外围框架和修饰层压缩掉，保留了原句主干判断。")
+        } else {
+            parts.append("简化时保留原意，把句子改成更直接的主谓表达。")
+        }
+
+        return parts.joined(separator: " ")
     }
 
     var renderedMiniCheck: String? {
@@ -906,6 +1008,11 @@ extension ProfessorSentenceAnalysis {
             examParaphraseRoutes: pedagogicalList(examParaphraseRoutes, fallback: fallback.examParaphraseRoutes, limit: 4),
             simplifiedEnglish: preferredPedagogicalText(simplifiedEnglish, fallback: fallback.simplifiedEnglish, kind: .generic),
             simplerRewrite: preferredPedagogicalText(simplerRewrite, fallback: fallback.simplerRewrite, kind: .generic),
+            simplerRewriteTranslation: preferredPedagogicalText(
+                simplerRewriteTranslation,
+                fallback: fallback.simplerRewriteTranslation,
+                kind: .teachingInterpretation
+            ),
             miniExercise: preferredPedagogicalText(miniExercise ?? "", fallback: fallback.miniExercise ?? "", kind: .generic).isEmpty
                 ? nil
                 : preferredPedagogicalText(miniExercise ?? "", fallback: fallback.miniExercise ?? "", kind: .generic),

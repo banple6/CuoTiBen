@@ -18,7 +18,7 @@ export function buildExplainSentencePrompt({ title, sentence, context, paragraph
     "请使用中文讲解，但必要时保留关键英语术语或英语原句片段。",
     "JSON 顶层必须是对象。",
     "你不是摘要器，你是在教学生如何真正读懂句子、识别主干、修饰语、逻辑关系和出题改写。",
-    "输出字段必须固定为：original_sentence、evidence_type、sentence_function、core_skeleton、chunk_layers、grammar_focus、faithful_translation、teaching_interpretation、natural_chinese_meaning、contextual_vocabulary、misreading_traps、exam_paraphrase_routes、simpler_rewrite、mini_check、hierarchy_rebuild、syntactic_variation。",
+    "输出字段必须固定为：original_sentence、evidence_type、sentence_function、core_skeleton、chunk_layers、grammar_focus、faithful_translation、teaching_interpretation、natural_chinese_meaning、contextual_vocabulary、misreading_traps、exam_paraphrase_routes、simpler_rewrite、simpler_rewrite_translation、mini_check、hierarchy_rebuild、syntactic_variation。",
     "original_sentence 必须回填原句。",
     "evidence_type 必须只能是：background_info / transition_signal / core_claim / supporting_evidence / counter_argument / conclusion_marker 之一。",
     "sentence_function 必须直接说明这句在论证里在做什么，如“核心判断句：作者真正要成立的判断在这里”。",
@@ -32,6 +32,7 @@ export function buildExplainSentencePrompt({ title, sentence, context, paragraph
     "misreading_traps 必须指出学生最容易误判主干、修饰范围、指代、否定或逻辑关系的地方。",
     "exam_paraphrase_routes 必须指出该句可能如何在阅读理解题中被改写、偷换或设陷阱。",
     "simpler_rewrite 用更简单的英语重写这句话，保持原意。",
+    "simpler_rewrite_translation 必须用中文说明这个英文简化改写在说什么，以及它是怎样在保留原意的前提下把结构简化的。",
     "mini_check 给一个非常短、非常精确的小检验；如果不适合，返回空字符串。",
     "hierarchy_rebuild 用于长难句，按层级重组；简单句返回空数组。",
     "syntactic_variation 用更易懂的句法把原句重写；简单句也尽量给出。",
@@ -231,6 +232,7 @@ function ensureExplainResultShape(raw) {
     ["misreading_traps", "misread_points", "common_misreadings"],
     ["exam_paraphrase_routes", "exam_rewrite_points", "exam_paraphrase_points"],
     ["simpler_rewrite", "simplified_english"],
+    ["simpler_rewrite_translation", "rewrite_translation"],
     ["mini_check", "mini_exercise"],
     ["hierarchy_rebuild"],
     ["syntactic_variation"]
@@ -262,6 +264,7 @@ function normalizeExplainResult(raw, sourceSentence, paragraph_role = "") {
   const rawMisread = firstDefined(raw, ["misreading_traps", "misread_points", "common_misreadings"]);
   const rawRewritePoints = firstDefined(raw, ["exam_paraphrase_routes", "exam_rewrite_points", "exam_paraphrase_points"]);
   const rawSimplerRewrite = firstDefined(raw, ["simpler_rewrite", "simplified_english"]);
+  const rawSimplerRewriteTranslation = firstDefined(raw, ["simpler_rewrite_translation", "rewrite_translation"]);
   const rawEvidenceType = firstDefined(raw, ["evidence_type", "sentence_role"]);
   const rawFaithfulTranslation = firstDefined(raw, ["faithful_translation", "translation", "natural_chinese_meaning"]);
   const rawTeachingInterpretation = firstDefined(raw, ["teaching_interpretation", "natural_chinese_meaning", "translation"]);
@@ -309,9 +312,17 @@ function normalizeExplainResult(raw, sourceSentence, paragraph_role = "") {
   const examParaphraseRoutes = normalizeArray(rawRewritePoints)
     .map((item) => typeof item === "string" ? item.trim() : "")
     .filter(Boolean);
-  const simplerRewrite = typeof rawSimplerRewrite === "string" ? rawSimplerRewrite.trim() : "";
   const faithfulTranslation = typeof rawFaithfulTranslation === "string" ? rawFaithfulTranslation.trim() : "";
   const teachingInterpretation = typeof rawTeachingInterpretation === "string" ? rawTeachingInterpretation.trim() : "";
+  const simplerRewrite = typeof rawSimplerRewrite === "string" ? rawSimplerRewrite.trim() : "";
+  const simplerRewriteTranslation = typeof rawSimplerRewriteTranslation === "string"
+    ? rawSimplerRewriteTranslation.trim()
+    : buildRewriteTranslationExplanation({
+      simplerRewrite,
+      faithfulTranslation,
+      coreSkeleton,
+      chunkLayers
+    });
   const miniCheck = typeof firstDefined(raw, ["mini_check", "mini_exercise"]) === "string"
     ? firstDefined(raw, ["mini_check", "mini_exercise"]).trim()
     : "";
@@ -339,6 +350,7 @@ function normalizeExplainResult(raw, sourceSentence, paragraph_role = "") {
     exam_paraphrase_routes: examParaphraseRoutes,
     simplified_english: simplerRewrite,
     simpler_rewrite: simplerRewrite,
+    simpler_rewrite_translation: simplerRewriteTranslation,
     mini_exercise: miniCheck,
     mini_check: miniCheck,
     hierarchy_rebuild: normalizeArray(raw.hierarchy_rebuild)
@@ -354,6 +366,32 @@ function normalizeExplainResult(raw, sourceSentence, paragraph_role = "") {
 
 function tokenizeEnglishWords(text) {
   return (text.match(/[A-Za-z][A-Za-z'-]*/g) || []).map((token) => token.trim()).filter(Boolean);
+}
+
+function buildRewriteTranslationExplanation({ simplerRewrite, faithfulTranslation, coreSkeleton, chunkLayers }) {
+  const rewrite = typeof simplerRewrite === "string" ? simplerRewrite.trim() : "";
+  if (!rewrite) return "";
+
+  const parts = [];
+  const faithful = typeof faithfulTranslation === "string" ? faithfulTranslation.trim() : "";
+  if (faithful) {
+    parts.push(`译意：${faithful}`);
+  }
+
+  const simplificationNotes = [];
+  if (coreSkeleton?.subject || coreSkeleton?.predicate) {
+    simplificationNotes.push("简化改写保留了原句主干判断");
+  }
+
+  const layeredRoles = Array.isArray(chunkLayers) ? chunkLayers.map((item) => String(item?.role || "").trim()) : [];
+  if (layeredRoles.some((role) => /前置框架|条件|让步|后置修饰/.test(role))) {
+    simplificationNotes.push("把原句里外围框架和修饰层压缩成更直接的主句表达");
+  } else {
+    simplificationNotes.push("把原句改成更直接的主谓表达");
+  }
+
+  parts.push(`简化方式：${simplificationNotes.join("，")}。`);
+  return parts.join(" ");
 }
 
 function isChineseDominantText(text) {

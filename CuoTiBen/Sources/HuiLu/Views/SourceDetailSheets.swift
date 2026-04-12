@@ -1513,6 +1513,8 @@ struct ProfessorAnalysisPanel: View {
     var relatedEvidenceItems: [String] = []
     let onWordTap: (OutlineNodeKeyword) -> Void
 
+    @State private var showsRewriteMeaning = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             if let sentenceFunction = analysis.renderedSentenceFunction.nonEmpty {
@@ -1523,18 +1525,9 @@ struct ProfessorAnalysisPanel: View {
                 )
             }
 
-            SentenceExplainBlock(
-                title: "句子主干",
-                content: analysis.renderedSentenceCore,
-                tone: .structure,
-                highlightTokens: analysis.grammarFocus.map(\.phenomenon) + analysis.grammarPoints.map(\.name) + analysis.vocabularyInContext.map(\.term)
-            )
+            StructuredCoreSkeletonCard(analysis: analysis)
 
-            SentenceExplainListBlock(
-                title: "语块切分",
-                items: analysis.renderedChunkLayers,
-                tone: .sentence
-            )
+            StructuredChunkLayerCard(analysis: analysis)
 
             SentenceExplainListBlock(
                 title: "关键语法点",
@@ -1571,12 +1564,14 @@ struct ProfessorAnalysisPanel: View {
                 )
             }
 
-            SentenceExplainBlock(
-                title: "简化改写",
-                content: analysis.renderedSimplerRewrite,
-                tone: .rewrite,
-                highlightTokens: analysis.vocabularyInContext.map(\.term)
-            )
+            if analysis.renderedSimplerRewrite.nonEmpty != nil {
+                RewriteCardWithTranslationToggle(
+                    rewrite: analysis.renderedSimplerRewrite,
+                    explanation: analysis.renderedSimplerRewriteTranslation,
+                    highlightTokens: analysis.vocabularyInContext.map(\.term),
+                    showsExplanation: $showsRewriteMeaning
+                )
+            }
 
             if let miniExercise = analysis.renderedMiniCheck?.nonEmpty {
                 SentenceExplainBlock(
@@ -1608,6 +1603,188 @@ struct ProfessorAnalysisPanel: View {
                     items: relatedEvidenceItems,
                     tone: .node
                 )
+            }
+        }
+    }
+}
+
+private struct StructuredCoreSkeletonCard: View {
+    let analysis: ProfessorSentenceAnalysis
+
+    private var skeleton: ProfessorCoreSkeleton {
+        analysis.displayedCoreSkeleton
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionMarker(text: "句子主干", tone: .structure)
+
+            VStack(spacing: 10) {
+                skeletonRow(label: "主语", content: skeleton.subject, tone: .structure)
+                skeletonRow(label: "谓语", content: skeleton.predicate, tone: .grammar)
+                skeletonRow(label: "核心补足", content: skeleton.complementOrObject, tone: .sentence)
+            }
+        }
+    }
+
+    private func skeletonRow(label: String, content: String, tone: ExplainHighlightTone) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text(label)
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .foregroundStyle(tone.accent.opacity(0.9))
+                .frame(width: 68, alignment: .leading)
+
+            Text(content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "当前结果里没有单独提取这一栏。" : content)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Color.black.opacity(0.78))
+                .lineSpacing(4)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(tone.softFill)
+        )
+    }
+}
+
+private struct StructuredChunkLayerCard: View {
+    let analysis: ProfessorSentenceAnalysis
+
+    private var layers: [ProfessorChunkLayerDisplayItem] {
+        analysis.displayedChunkLayers
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionMarker(text: "语块切分", tone: .sentence)
+
+            ForEach(Array(layers.enumerated()), id: \.offset) { index, layer in
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .center, spacing: 8) {
+                        Text("第\(index + 1)块")
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .foregroundStyle(Color.black.opacity(0.42))
+
+                        Text(layer.role.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "语块" : layer.role)
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .foregroundStyle(ExplainHighlightTone.sentence.accent.opacity(0.9))
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 5)
+                            .background(
+                                Capsule(style: .continuous)
+                                    .fill(ExplainHighlightTone.sentence.softFill)
+                            )
+                    }
+
+                    Text(layer.text)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Color.black.opacity(0.8))
+                        .lineSpacing(4)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if let attaches = layer.attachesTo.nonEmpty {
+                        chunkMetaRow(label: "挂接对象", value: attaches)
+                    }
+
+                    if let gloss = layer.gloss.nonEmpty {
+                        chunkMetaRow(label: "这一块在干什么", value: gloss)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(Color.white.opacity(0.78))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(ExplainHighlightTone.sentence.accent.opacity(0.12), lineWidth: 1)
+                        )
+                )
+            }
+        }
+    }
+
+    private func chunkMetaRow(label: String, value: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(label)
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(Color.black.opacity(0.42))
+            Text(value)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(Color.black.opacity(0.64))
+                .lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+private struct RewriteCardWithTranslationToggle: View {
+    let rewrite: String
+    let explanation: String
+    let highlightTokens: [String]
+    @Binding var showsExplanation: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center) {
+                sectionMarker(text: "英文简化改写", tone: .rewrite)
+                Spacer(minLength: 0)
+                if explanation.nonEmpty != nil {
+                    Button(showsExplanation ? "隐藏译意" : "显示译意") {
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
+                            showsExplanation.toggle()
+                        }
+                    }
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(ExplainHighlightTone.rewrite.accent.opacity(0.9))
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                if !highlightTokens.isEmpty {
+                    HighlightTokenRow(tokens: highlightTokens, tone: .rewrite)
+                }
+
+                Text(rewrite)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(Color.black.opacity(0.68))
+                    .lineSpacing(4)
+            }
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [ExplainHighlightTone.rewrite.softFill, Color.white.opacity(0.84)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .stroke(ExplainHighlightTone.rewrite.stroke, lineWidth: 1)
+                    )
+            )
+            .overlay(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(ExplainHighlightTone.rewrite.accent.opacity(0.35))
+                    .frame(width: 4)
+                    .padding(.vertical, 14)
+                    .padding(.leading, 10)
+            }
+
+            if showsExplanation, let visibleExplanation = explanation.nonEmpty {
+                SentenceExplainBlock(
+                    title: "改写译意",
+                    content: visibleExplanation,
+                    tone: .translation
+                )
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
     }
