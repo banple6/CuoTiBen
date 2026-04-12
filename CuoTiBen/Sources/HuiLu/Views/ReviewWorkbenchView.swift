@@ -1320,6 +1320,18 @@ private struct ReviewWorkbenchSentencePanel: View {
         viewModel.contextSentences(for: sentence, in: document)
     }
 
+    private var effectiveAnalysis: ProfessorSentenceAnalysis? {
+        let bundled = viewModel.professorSentenceCard(for: sentence, in: document)?.analysis
+        if let remote = result?.localFallbackAnalysis {
+            return remote.mergingFallback(bundled)
+        }
+        return bundled
+    }
+
+    private var evidenceRolePresentation: SentenceRolePresentation? {
+        professorSentenceRolePresentation(for: effectiveAnalysis?.evidenceType)
+    }
+
     var body: some View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
@@ -1370,7 +1382,7 @@ private struct ReviewWorkbenchSentencePanel: View {
         SentenceFocusCard(
             anchorLabel: sentence.anchorLabel,
             text: sentence.text,
-            highlightTokens: result?.keyTerms.map(\.term) ?? []
+            highlightTokens: effectiveAnalysis?.vocabularyInContext.map(\.term) ?? []
         )
     }
 
@@ -1448,8 +1460,121 @@ private struct ReviewWorkbenchSentencePanel: View {
 
     @ViewBuilder
     private var explanationSection: some View {
-        if isLoading {
-            ProgressView("正在获取讲解…")
+        if let analysis = effectiveAnalysis {
+            VStack(alignment: .leading, spacing: 14) {
+                if isLoading {
+                    ProgressView("正在获取教授式精讲…")
+                        .font(.system(size: 15, weight: .medium))
+                } else if let errorMessage, result == nil {
+                    SentenceExplainBlock(
+                        title: "提示",
+                        content: "当前展示的是本地教学卡骨架；远端教授式精讲获取失败：\(errorMessage)",
+                        tone: .neutral
+                    )
+                }
+
+                let sentenceFunction = analysis.renderedSentenceFunction.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !sentenceFunction.isEmpty {
+                    SentenceExplainBlock(
+                        title: "句子定位",
+                        content: sentenceFunction,
+                        tone: .node
+                    )
+                }
+
+                SentenceExplainBlock(
+                    title: "句子主干",
+                    content: analysis.renderedSentenceCore,
+                    tone: .structure,
+                    highlightTokens: analysis.grammarFocus.map(\.phenomenon) + analysis.grammarPoints.map(\.name) + analysis.vocabularyInContext.map(\.term)
+                )
+                SentenceExplainListBlock(
+                    title: "语块切分",
+                    items: analysis.renderedChunkLayers,
+                    tone: .sentence
+                )
+
+                SentenceExplainListBlock(
+                    title: "关键语法点",
+                    items: analysis.renderedGrammarFocus,
+                    tone: .grammar
+                )
+                SentenceExplainListBlock(
+                    title: "学生易错点",
+                    items: analysis.renderedMisreadingTraps,
+                    tone: .misread
+                )
+                SentenceExplainListBlock(
+                    title: "出题改写点",
+                    items: analysis.renderedExamParaphraseRoutes,
+                    tone: .rewrite
+                )
+                SentenceExplainBlock(
+                    title: "简化英文改写",
+                    content: analysis.renderedSimplerRewrite,
+                    tone: .rewrite,
+                    highlightTokens: analysis.vocabularyInContext.map(\.term)
+                )
+
+                if let miniExercise = analysis.renderedMiniCheck?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !miniExercise.isEmpty {
+                    SentenceExplainBlock(
+                        title: "微练习",
+                        content: miniExercise,
+                        tone: .grammar
+                    )
+                }
+
+                SentenceExplainBlock(
+                    title: "自然中文义",
+                    content: analysis.naturalChineseMeaning,
+                    tone: .translation,
+                    highlightTokens: analysis.vocabularyInContext.map(\.term)
+                )
+
+                if !analysis.vocabularyInContext.isEmpty {
+                    InteractiveKeywordSection(
+                        title: "词汇在句中义",
+                        minimumItemWidth: 140,
+                        selectedTerm: selectedWordTerm,
+                        keywords: analysis.vocabularyInContext.map {
+                            OutlineNodeKeyword(
+                                id: $0.term.lowercased(),
+                                term: $0.term,
+                                hint: $0.meaning
+                            )
+                        }
+                    ) { keyword in
+                        onWordTap(
+                            viewModel.wordExplanation(
+                                for: keyword.term,
+                                meaningHint: keyword.hint,
+                                sentence: sentence,
+                                in: document
+                            )
+                        )
+                    }
+                }
+
+                if !analysis.hierarchyRebuild.isEmpty {
+                    SentenceExplainListBlock(
+                        title: "层级重组",
+                        items: analysis.hierarchyRebuild,
+                        tone: .structure
+                    )
+                }
+
+                if let variation = analysis.syntacticVariation?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !variation.isEmpty {
+                    SentenceExplainBlock(
+                        title: "句法替换版",
+                        content: variation,
+                        tone: .structure
+                    )
+                }
+            }
+        } else if isLoading {
+            ProgressView("正在获取教授式精讲…")
                 .font(.system(size: 15, weight: .medium))
         } else if let errorMessage {
             VStack(alignment: .leading, spacing: 10) {
@@ -1466,56 +1591,6 @@ private struct ReviewWorkbenchSentencePanel: View {
                 .font(.system(size: 14, weight: .semibold))
                 .buttonStyle(.plain)
                 .foregroundStyle(Color.blue.opacity(0.82))
-            }
-        } else if let result {
-            VStack(alignment: .leading, spacing: 14) {
-                SentenceExplainBlock(
-                    title: "中文翻译",
-                    content: result.translation,
-                    tone: .translation,
-                    highlightTokens: result.keyTerms.map(\.term)
-                )
-                SentenceExplainBlock(
-                    title: "主干结构",
-                    content: result.mainStructure,
-                    tone: .structure,
-                    highlightTokens: result.grammarPoints.map(\.name) + result.keyTerms.map(\.term)
-                )
-
-                SentenceExplainListBlock(
-                    title: "语法点",
-                    items: result.grammarPoints.map { "\($0.name)：\($0.explanation)" },
-                    tone: .grammar
-                )
-
-                InteractiveKeywordSection(
-                    title: "关键词",
-                    minimumItemWidth: 140,
-                    selectedTerm: selectedWordTerm,
-                    keywords: result.keyTerms.map {
-                        OutlineNodeKeyword(
-                            id: $0.term.lowercased(),
-                            term: $0.term,
-                            hint: $0.meaning
-                        )
-                    }
-                ) { keyword in
-                    onWordTap(
-                        viewModel.wordExplanation(
-                            for: keyword.term,
-                            meaningHint: keyword.hint,
-                            sentence: sentence,
-                            in: document
-                        )
-                    )
-                }
-
-                SentenceExplainBlock(
-                    title: "改写示例",
-                    content: result.rewriteExample,
-                    tone: .rewrite,
-                    highlightTokens: result.keyTerms.map(\.term)
-                )
             }
         }
     }

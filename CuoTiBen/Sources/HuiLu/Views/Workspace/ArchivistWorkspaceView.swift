@@ -445,22 +445,45 @@ private struct ArchivistContextAssistant: View {
                         .foregroundStyle(ArchivistColors.mutedInk)
                 }
             } else if let result {
-                ContextAnalysisCard(title: "Translation", tapeColor: ArchivistColors.greenWash, offset: CGSize(width: 0, height: 0)) {
-                    Text(result.translation)
+                let sentenceFunction = result.renderedSentenceFunction.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !sentenceFunction.isEmpty {
+                    ContextAnalysisCard(title: "句子定位", tapeColor: ArchivistColors.greenWash, offset: CGSize(width: 0, height: 0)) {
+                        Text(sentenceFunction)
+                            .font(ArchivistTypography.annotation)
+                            .foregroundStyle(ArchivistColors.mutedInk)
+                            .lineSpacing(4)
+                    }
+                }
+
+                ContextAnalysisCard(title: "句子主干", tapeColor: ArchivistColors.blueWash, offset: CGSize(width: 10, height: -6)) {
+                    Text(result.renderedSentenceCore)
                         .font(ArchivistTypography.annotation)
                         .foregroundStyle(ArchivistColors.mutedInk)
                         .lineSpacing(4)
                 }
 
-                ContextAnalysisCard(title: "Syntax Focus", tapeColor: ArchivistColors.blueWash, offset: CGSize(width: 10, height: -6)) {
-                    Text(result.mainStructure)
-                        .font(ArchivistTypography.annotation)
-                        .foregroundStyle(ArchivistColors.mutedInk)
-                        .lineSpacing(4)
+                if let misread = result.renderedMisreadingTraps.first {
+                    ContextAnalysisCard(title: "学生易错点", tapeColor: ArchivistColors.pinkWash, offset: CGSize(width: 6, height: -2)) {
+                        Text(misread)
+                            .font(ArchivistTypography.annotation)
+                            .foregroundStyle(ArchivistColors.mutedInk)
+                            .lineSpacing(4)
+                    }
                 }
 
-                ContextAnalysisCard(title: "Vocabulary", tapeColor: ArchivistColors.yellowWash, offset: CGSize(width: -8, height: -4)) {
-                    FlexibleVocabFlow(terms: result.keyTerms, onTap: onWordTap)
+                if let rewrite = result.renderedExamParaphraseRoutes.first {
+                    ContextAnalysisCard(title: "出题改写点", tapeColor: ArchivistColors.yellowWash, offset: CGSize(width: -8, height: -4)) {
+                        Text(rewrite)
+                            .font(ArchivistTypography.annotation)
+                            .foregroundStyle(ArchivistColors.mutedInk)
+                            .lineSpacing(4)
+                    }
+                }
+
+                if !result.keyTerms.isEmpty {
+                    ContextAnalysisCard(title: "词汇在句中义", tapeColor: ArchivistColors.yellowWash, offset: CGSize(width: -8, height: -4)) {
+                        FlexibleVocabFlow(terms: result.keyTerms, onTap: onWordTap)
+                    }
                 }
             }
         }
@@ -530,4 +553,3 @@ private struct ArchivistFooterStrip: View {
 private extension ArchivistColors {
     static let tertiaryLabel = Color(red: 89 / 255, green: 97 / 255, blue: 0 / 255)
 }
-

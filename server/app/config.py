@@ -24,6 +24,10 @@ SCHEMA_VERSION: str = "v2"
 AI_STUDIO_API_URL: str = _require_env("AI_STUDIO_API_URL")
 AI_STUDIO_ACCESS_TOKEN: str = _require_env("AI_STUDIO_ACCESS_TOKEN")
 AI_STUDIO_TIMEOUT: int = int(os.environ.get("AI_STUDIO_TIMEOUT", "60"))
+AI_STUDIO_USE_DOC_ORIENTATION_CLASSIFY: bool = os.environ.get("AI_STUDIO_USE_DOC_ORIENTATION_CLASSIFY", "false").lower() == "true"
+AI_STUDIO_USE_DOC_UNWARPING: bool = os.environ.get("AI_STUDIO_USE_DOC_UNWARPING", "false").lower() == "true"
+AI_STUDIO_USE_TEXTLINE_ORIENTATION: bool = os.environ.get("AI_STUDIO_USE_TEXTLINE_ORIENTATION", "false").lower() == "true"
+AI_STUDIO_USE_CHART_RECOGNITION: bool = os.environ.get("AI_STUDIO_USE_CHART_RECOGNITION", "false").lower() == "true"
 
 # ── 服务 ──
 APP_HOST: str = os.environ.get("APP_HOST", "0.0.0.0")

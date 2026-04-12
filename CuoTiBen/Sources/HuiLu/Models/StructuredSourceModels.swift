@@ -294,6 +294,23 @@ enum ParagraphArgumentRole: String, Codable, CaseIterable, Hashable {
         case .conclusion: return "结论收束"
         }
     }
+
+    var teachingDescription: String {
+        switch self {
+        case .background:
+            return "这一段先交代理解前提，重点不是直接给答案，而是限定后文讨论从什么背景出发。"
+        case .support:
+            return "这一段在替核心判断补理由、补限制或补展开，做题时要把细节重新挂回主判断。"
+        case .objection:
+            return "这一段先让步或摆出异议，再转回真正立场；最容易把让步内容误当作者结论。"
+        case .transition:
+            return "这一段的关键是论证换挡，帮助你看清作者是从背景走向判断，还是从观点转到例证。"
+        case .evidence:
+            return "这一段主要提供事实、例子或数据。考试常把例子本身和它支撑的判断混写成干扰项。"
+        case .conclusion:
+            return "这一段负责收束判断，最值得用于主旨题、标题题和作者态度题。"
+        }
+    }
 }
 
 struct ProfessorGrammarPoint: Codable, Equatable, Hashable {
@@ -306,8 +323,137 @@ struct ProfessorVocabularyItem: Codable, Equatable, Hashable {
     let meaning: String
 }
 
+struct ProfessorCoreSkeleton: Codable, Equatable, Hashable {
+    let subject: String
+    let predicate: String
+    let complementOrObject: String
+
+    private enum CodingKeys: String, CodingKey {
+        case subject
+        case predicate
+        case complementOrObject = "complement_or_object"
+    }
+
+    var rendered: String {
+        let subjectPart = subject.trimmingCharacters(in: .whitespacesAndNewlines)
+        let predicatePart = predicate.trimmingCharacters(in: .whitespacesAndNewlines)
+        let complementPart = complementOrObject.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        var parts: [String] = []
+        if !subjectPart.isEmpty { parts.append("主语：\(subjectPart)") }
+        if !predicatePart.isEmpty { parts.append("谓语：\(predicatePart)") }
+        if !complementPart.isEmpty { parts.append("核心补足：\(complementPart)") }
+        return parts.joined(separator: "｜")
+    }
+}
+
+struct ProfessorChunkLayer: Codable, Equatable, Hashable {
+    let text: String
+    let role: String
+    let attachesTo: String
+    let gloss: String
+
+    private enum CodingKeys: String, CodingKey {
+        case text
+        case role
+        case attachesTo = "attaches_to"
+        case gloss
+    }
+
+    var rendered: String {
+        let rolePart = role.trimmingCharacters(in: .whitespacesAndNewlines)
+        let textPart = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let attachesPart = attachesTo.trimmingCharacters(in: .whitespacesAndNewlines)
+        let glossPart = gloss.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        var base = rolePart.isEmpty ? textPart : "\(rolePart)：\(textPart)"
+        if !attachesPart.isEmpty && attachesPart != "主句主干" && attachesPart != "核心信息" {
+            base += "｜挂到：\(attachesPart)"
+        }
+        if !glossPart.isEmpty {
+            base += "｜\(glossPart)"
+        }
+        return base
+    }
+}
+
+struct ProfessorGrammarFocus: Codable, Equatable, Hashable {
+    let phenomenon: String
+    let function: String
+    let whyItMatters: String
+
+    private enum CodingKeys: String, CodingKey {
+        case phenomenon
+        case function
+        case whyItMatters = "why_it_matters"
+    }
+
+    var rendered: String {
+        let phenomenonPart = phenomenon.trimmingCharacters(in: .whitespacesAndNewlines)
+        let functionPart = function.trimmingCharacters(in: .whitespacesAndNewlines)
+        let whyPart = whyItMatters.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        var parts: [String] = []
+        if !phenomenonPart.isEmpty { parts.append(phenomenonPart) }
+        if !functionPart.isEmpty { parts.append(functionPart) }
+        if !whyPart.isEmpty { parts.append("为什么重要：\(whyPart)") }
+        return parts.joined(separator: "｜")
+    }
+}
+
+struct SentenceRolePresentation: Equatable, Hashable {
+    let label: String
+    let description: String
+}
+
+func professorSentenceRolePresentation(for raw: String?) -> SentenceRolePresentation? {
+    guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !raw.isEmpty else {
+        return nil
+    }
+
+    switch raw {
+    case "core_claim":
+        return SentenceRolePresentation(
+            label: "核心判断句",
+            description: "这句承担作者真正要成立的判断。做题时优先盯主干，不要被前后修饰和背景信息带偏。"
+        )
+    case "supporting_evidence":
+        return SentenceRolePresentation(
+            label: "支撑证据句",
+            description: "这句的任务是替上一层判断补事实、补例证或补论据。不能只记细节，要回到它支撑的观点。"
+        )
+    case "background_info":
+        return SentenceRolePresentation(
+            label: "背景信息句",
+            description: "这句主要交代场景、前提或历史背景，不是作者最后要你选的结论。"
+        )
+    case "counter_argument":
+        return SentenceRolePresentation(
+            label: "让步/反方句",
+            description: "这句常先承认一种看法，真正立场多半落在它之后，最容易把让步内容错当答案。"
+        )
+    case "transition_signal":
+        return SentenceRolePresentation(
+            label: "推进信号句",
+            description: "这句的价值在于提示作者怎样换挡，适合判断段落关系、论证方向和结构推进。"
+        )
+    case "conclusion_marker":
+        return SentenceRolePresentation(
+            label: "结论收束句",
+            description: "这句在回收前文信息，常是主旨题、标题题和作者态度题最该回看的位置。"
+        )
+    default:
+        return SentenceRolePresentation(label: "句子定位", description: raw)
+    }
+}
+
 struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
     let originalSentence: String
+    let sentenceFunction: String
+    let coreSkeleton: ProfessorCoreSkeleton?
+    let chunkLayers: [ProfessorChunkLayer]
+    let grammarFocus: [ProfessorGrammarFocus]
     let naturalChineseMeaning: String
     let sentenceCore: String
     let chunkBreakdown: [String]
@@ -315,8 +461,12 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
     let vocabularyInContext: [ProfessorVocabularyItem]
     let misreadPoints: [String]
     let examRewritePoints: [String]
+    let misreadingTraps: [String]
+    let examParaphraseRoutes: [String]
     let simplifiedEnglish: String
+    let simplerRewrite: String
     let miniExercise: String?
+    let miniCheck: String?
     let hierarchyRebuild: [String]
     let syntacticVariation: String?
     let evidenceType: String?
@@ -324,6 +474,10 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
 
     private enum CodingKeys: String, CodingKey {
         case originalSentence = "original_sentence"
+        case sentenceFunction = "sentence_function"
+        case coreSkeleton = "core_skeleton"
+        case chunkLayers = "chunk_layers"
+        case grammarFocus = "grammar_focus"
         case naturalChineseMeaning = "natural_chinese_meaning"
         case sentenceCore = "sentence_core"
         case chunkBreakdown = "chunk_breakdown"
@@ -331,8 +485,12 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
         case vocabularyInContext = "vocabulary_in_context"
         case misreadPoints = "misread_points"
         case examRewritePoints = "exam_rewrite_points"
+        case misreadingTraps = "misreading_traps"
+        case examParaphraseRoutes = "exam_paraphrase_routes"
         case simplifiedEnglish = "simplified_english"
+        case simplerRewrite = "simpler_rewrite"
         case miniExercise = "mini_exercise"
+        case miniCheck = "mini_check"
         case hierarchyRebuild = "hierarchy_rebuild"
         case syntacticVariation = "syntactic_variation"
         case evidenceType = "evidence_type"
@@ -341,6 +499,10 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
 
     init(
         originalSentence: String,
+        sentenceFunction: String = "",
+        coreSkeleton: ProfessorCoreSkeleton? = nil,
+        chunkLayers: [ProfessorChunkLayer] = [],
+        grammarFocus: [ProfessorGrammarFocus] = [],
         naturalChineseMeaning: String,
         sentenceCore: String,
         chunkBreakdown: [String],
@@ -348,14 +510,22 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
         vocabularyInContext: [ProfessorVocabularyItem],
         misreadPoints: [String],
         examRewritePoints: [String],
+        misreadingTraps: [String] = [],
+        examParaphraseRoutes: [String] = [],
         simplifiedEnglish: String,
+        simplerRewrite: String = "",
         miniExercise: String?,
+        miniCheck: String? = nil,
         hierarchyRebuild: [String],
         syntacticVariation: String?,
         evidenceType: String? = nil,
         isAIGenerated: Bool = false
     ) {
         self.originalSentence = originalSentence
+        self.sentenceFunction = sentenceFunction
+        self.coreSkeleton = coreSkeleton
+        self.chunkLayers = chunkLayers
+        self.grammarFocus = grammarFocus
         self.naturalChineseMeaning = naturalChineseMeaning
         self.sentenceCore = sentenceCore
         self.chunkBreakdown = chunkBreakdown
@@ -363,8 +533,12 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
         self.vocabularyInContext = vocabularyInContext
         self.misreadPoints = misreadPoints
         self.examRewritePoints = examRewritePoints
+        self.misreadingTraps = misreadingTraps.isEmpty ? misreadPoints : misreadingTraps
+        self.examParaphraseRoutes = examParaphraseRoutes.isEmpty ? examRewritePoints : examParaphraseRoutes
         self.simplifiedEnglish = simplifiedEnglish
+        self.simplerRewrite = simplerRewrite.isEmpty ? simplifiedEnglish : simplerRewrite
         self.miniExercise = miniExercise
+        self.miniCheck = (miniCheck?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) ? miniCheck : miniExercise
         self.hierarchyRebuild = hierarchyRebuild
         self.syntacticVariation = syntacticVariation
         self.evidenceType = evidenceType
@@ -374,6 +548,10 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         originalSentence = try container.decode(String.self, forKey: .originalSentence)
+        sentenceFunction = try container.decodeIfPresent(String.self, forKey: .sentenceFunction) ?? ""
+        coreSkeleton = try container.decodeIfPresent(ProfessorCoreSkeleton.self, forKey: .coreSkeleton)
+        chunkLayers = try container.decodeIfPresent([ProfessorChunkLayer].self, forKey: .chunkLayers) ?? []
+        grammarFocus = try container.decodeIfPresent([ProfessorGrammarFocus].self, forKey: .grammarFocus) ?? []
         naturalChineseMeaning = try container.decode(String.self, forKey: .naturalChineseMeaning)
         sentenceCore = try container.decode(String.self, forKey: .sentenceCore)
         chunkBreakdown = try container.decode([String].self, forKey: .chunkBreakdown)
@@ -381,12 +559,65 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
         vocabularyInContext = try container.decode([ProfessorVocabularyItem].self, forKey: .vocabularyInContext)
         misreadPoints = try container.decode([String].self, forKey: .misreadPoints)
         examRewritePoints = try container.decode([String].self, forKey: .examRewritePoints)
+        misreadingTraps = try container.decodeIfPresent([String].self, forKey: .misreadingTraps) ?? misreadPoints
+        examParaphraseRoutes = try container.decodeIfPresent([String].self, forKey: .examParaphraseRoutes) ?? examRewritePoints
         simplifiedEnglish = try container.decode(String.self, forKey: .simplifiedEnglish)
+        simplerRewrite = try container.decodeIfPresent(String.self, forKey: .simplerRewrite) ?? simplifiedEnglish
         miniExercise = try container.decodeIfPresent(String.self, forKey: .miniExercise)
+        miniCheck = try container.decodeIfPresent(String.self, forKey: .miniCheck) ?? miniExercise
         hierarchyRebuild = try container.decode([String].self, forKey: .hierarchyRebuild)
         syntacticVariation = try container.decodeIfPresent(String.self, forKey: .syntacticVariation)
         evidenceType = try container.decodeIfPresent(String.self, forKey: .evidenceType)
         isAIGenerated = try container.decodeIfPresent(Bool.self, forKey: .isAIGenerated) ?? false
+    }
+
+    var renderedSentenceFunction: String {
+        let explicit = sentenceFunction.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !explicit.isEmpty { return explicit }
+        if let role = professorSentenceRolePresentation(for: evidenceType) {
+            return "\(role.label)：\(role.description)"
+        }
+        return ""
+    }
+
+    var renderedSentenceCore: String {
+        if let skeleton = coreSkeleton {
+            let rendered = skeleton.rendered.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !rendered.isEmpty { return rendered }
+        }
+        return sentenceCore
+    }
+
+    var renderedChunkLayers: [String] {
+        if !chunkLayers.isEmpty {
+            return chunkLayers.map(\.rendered)
+        }
+        return chunkBreakdown
+    }
+
+    var renderedGrammarFocus: [String] {
+        if !grammarFocus.isEmpty {
+            return grammarFocus.map(\.rendered)
+        }
+        return grammarPoints.map { "\($0.name)：\($0.explanation)" }
+    }
+
+    var renderedMisreadingTraps: [String] {
+        !misreadingTraps.isEmpty ? misreadingTraps : misreadPoints
+    }
+
+    var renderedExamParaphraseRoutes: [String] {
+        !examParaphraseRoutes.isEmpty ? examParaphraseRoutes : examRewritePoints
+    }
+
+    var renderedSimplerRewrite: String {
+        let trimmed = simplerRewrite.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? simplifiedEnglish : trimmed
+    }
+
+    var renderedMiniCheck: String? {
+        let trimmed = miniCheck?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? miniExercise : trimmed
     }
 }
 
@@ -458,6 +689,8 @@ struct PassageOverview: Equatable, Hashable {
     let articleTheme: String
     let authorCoreQuestion: String
     let progressionPath: String
+    let likelyQuestionTypes: [String]
+    let logicPitfalls: [String]
     let paragraphFunctionMap: [String]
     let syntaxHighlights: [String]
     let readingTraps: [String]
@@ -562,6 +795,10 @@ extension ProfessorSentenceAnalysis {
 
         return ProfessorSentenceAnalysis(
             originalSentence: preferredPedagogicalText(originalSentence, fallback: fallback.originalSentence, kind: .generic),
+            sentenceFunction: preferredPedagogicalText(sentenceFunction, fallback: fallback.sentenceFunction, kind: .generic),
+            coreSkeleton: coreSkeleton ?? fallback.coreSkeleton,
+            chunkLayers: chunkLayers.isEmpty ? fallback.chunkLayers : chunkLayers,
+            grammarFocus: grammarFocus.isEmpty ? fallback.grammarFocus : grammarFocus,
             naturalChineseMeaning: preferredPedagogicalText(
                 naturalChineseMeaning,
                 fallback: fallback.naturalChineseMeaning,
@@ -573,10 +810,16 @@ extension ProfessorSentenceAnalysis {
             vocabularyInContext: vocabularyInContext.isEmpty ? fallback.vocabularyInContext : vocabularyInContext,
             misreadPoints: pedagogicalList(misreadPoints, fallback: fallback.misreadPoints, limit: 4),
             examRewritePoints: pedagogicalList(examRewritePoints, fallback: fallback.examRewritePoints, limit: 4),
+            misreadingTraps: pedagogicalList(misreadingTraps, fallback: fallback.misreadingTraps, limit: 4),
+            examParaphraseRoutes: pedagogicalList(examParaphraseRoutes, fallback: fallback.examParaphraseRoutes, limit: 4),
             simplifiedEnglish: preferredPedagogicalText(simplifiedEnglish, fallback: fallback.simplifiedEnglish, kind: .generic),
+            simplerRewrite: preferredPedagogicalText(simplerRewrite, fallback: fallback.simplerRewrite, kind: .generic),
             miniExercise: preferredPedagogicalText(miniExercise ?? "", fallback: fallback.miniExercise ?? "", kind: .generic).isEmpty
                 ? nil
                 : preferredPedagogicalText(miniExercise ?? "", fallback: fallback.miniExercise ?? "", kind: .generic),
+            miniCheck: preferredPedagogicalText(miniCheck ?? "", fallback: fallback.miniCheck ?? "", kind: .generic).isEmpty
+                ? nil
+                : preferredPedagogicalText(miniCheck ?? "", fallback: fallback.miniCheck ?? "", kind: .generic),
             hierarchyRebuild: pedagogicalList(hierarchyRebuild, fallback: fallback.hierarchyRebuild, limit: 5),
             syntacticVariation: preferredPedagogicalText(
                 syntacticVariation ?? "",
@@ -641,6 +884,8 @@ extension PassageOverview {
                 fallback: fallback.progressionPath,
                 kind: .overviewProgression
             ),
+            likelyQuestionTypes: pedagogicalList(likelyQuestionTypes, fallback: fallback.likelyQuestionTypes, limit: 6),
+            logicPitfalls: pedagogicalList(logicPitfalls, fallback: fallback.logicPitfalls, limit: 6),
             paragraphFunctionMap: pedagogicalList(paragraphFunctionMap, fallback: fallback.paragraphFunctionMap, limit: 10),
             syntaxHighlights: pedagogicalList(syntaxHighlights, fallback: fallback.syntaxHighlights, limit: 6),
             readingTraps: pedagogicalList(readingTraps, fallback: fallback.readingTraps, limit: 6),
@@ -1128,13 +1373,13 @@ struct StructuredSourceBundle: Equatable {
         let theme = trimmedOrEmpty(overview.articleTheme)
         let question = trimmedOrEmpty(overview.authorCoreQuestion)
         let progression = trimmedOrEmpty(overview.progressionPath)
+        let questionType = trimmedOrEmpty(overview.likelyQuestionTypes.first ?? "")
+        let logicPitfall = trimmedOrEmpty(overview.logicPitfalls.first ?? "")
 
-        return [theme, question, progression]
+        let parts = [theme, question, progression, questionType.isEmpty ? "" : "高频题型：\(questionType)", logicPitfall.isEmpty ? "" : "逻辑易错：\(logicPitfall)"]
             .filter { !$0.isEmpty }
-            .joined(separator: "｜")
-            .isEmpty ? "正文教学树" : [theme, question, progression]
-                .filter { !$0.isEmpty }
-                .joined(separator: "｜")
+
+        return parts.isEmpty ? "正文教学树" : parts.joined(separator: "｜")
     }
 
     private static func pedagogicalFocusTitle(card: ParagraphTeachingCard) -> String {
@@ -1148,10 +1393,15 @@ struct StructuredSourceBundle: Equatable {
         card: ParagraphTeachingCard,
         linkedQuestions: [QuestionEvidenceLink]
     ) -> String {
-        var parts = pedagogicalList(card.teachingFocuses, fallback: [], limit: 3)
+        var parts = [
+            trimmedOrEmpty(card.examValue),
+            trimmedOrEmpty(card.studentBlindSpot ?? "")
+        ].filter { !$0.isEmpty }
 
-        if let blindSpot = card.studentBlindSpot {
-            parts.append("易偏点：\(trimmedOrEmpty(blindSpot))")
+        parts.append(contentsOf: pedagogicalList(card.teachingFocuses, fallback: [], limit: 3))
+
+        if let blindSpot = card.studentBlindSpot?.trimmingCharacters(in: .whitespacesAndNewlines), !blindSpot.isEmpty {
+            parts.append("易偏点：\(blindSpot)")
         }
 
         if let firstQuestion = linkedQuestions.first {
@@ -1175,8 +1425,19 @@ struct StructuredSourceBundle: Equatable {
         analysis: ProfessorSentenceAnalysis?
     ) -> String {
         if let analysis {
-            let core = trimmedOrEmpty(analysis.sentenceCore)
+            let core = trimmedOrEmpty(analysis.renderedSentenceCore)
             if !core.isEmpty {
+                let function = trimmedOrEmpty(analysis.renderedSentenceFunction)
+                if !function.isEmpty {
+                    let functionHead = function
+                        .split(separator: "：", maxSplits: 1)
+                        .first
+                        .map(String.init)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    if !functionHead.isEmpty {
+                        return "\(functionHead)｜\(core)"
+                    }
+                }
                 return core
             }
         }
@@ -1190,10 +1451,11 @@ struct StructuredSourceBundle: Equatable {
         guard let analysis else { return sentence.text }
 
         let parts = [
-            trimmedOrEmpty(analysis.naturalChineseMeaning),
-            trimmedOrEmpty(analysis.misreadPoints.first ?? ""),
-            trimmedOrEmpty(analysis.examRewritePoints.first ?? "")
-        ].filter { !$0.isEmpty }
+            trimmedOrEmpty(analysis.renderedSentenceFunction),
+            trimmedOrEmpty(analysis.renderedChunkLayers.first ?? ""),
+            trimmedOrEmpty(analysis.renderedMisreadingTraps.first ?? ""),
+            trimmedOrEmpty(analysis.renderedExamParaphraseRoutes.first ?? "")
+        ].compactMap { $0 }.filter { !$0.isEmpty }
 
         return parts.isEmpty ? sentence.text : parts.joined(separator: "｜")
     }

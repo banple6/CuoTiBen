@@ -12,8 +12,16 @@ struct ExplainSentenceContext: Equatable {
 struct AIExplainSentenceResult: Equatable {
     typealias GrammarPoint = ProfessorGrammarPoint
     typealias KeyTerm = ProfessorVocabularyItem
+    typealias CoreSkeleton = ProfessorCoreSkeleton
+    typealias ChunkLayer = ProfessorChunkLayer
+    typealias GrammarFocus = ProfessorGrammarFocus
 
     let originalSentence: String
+    let evidenceType: String?
+    let sentenceFunction: String
+    let coreSkeleton: CoreSkeleton?
+    let chunkLayers: [ChunkLayer]
+    let grammarFocus: [GrammarFocus]
     let naturalChineseMeaning: String
     let sentenceCore: String
     let chunkBreakdown: [String]
@@ -21,13 +29,22 @@ struct AIExplainSentenceResult: Equatable {
     let vocabularyInContext: [KeyTerm]
     let misreadPoints: [String]
     let examRewritePoints: [String]
+    let misreadingTraps: [String]
+    let examParaphraseRoutes: [String]
     let simplifiedEnglish: String
+    let simplerRewrite: String
     let miniExercise: String?
+    let miniCheck: String?
     let hierarchyRebuild: [String]
     let syntacticVariation: String?
 
     init(
         originalSentence: String,
+        evidenceType: String?,
+        sentenceFunction: String,
+        coreSkeleton: CoreSkeleton?,
+        chunkLayers: [ChunkLayer],
+        grammarFocus: [GrammarFocus],
         naturalChineseMeaning: String,
         sentenceCore: String,
         chunkBreakdown: [String],
@@ -35,12 +52,21 @@ struct AIExplainSentenceResult: Equatable {
         vocabularyInContext: [KeyTerm],
         misreadPoints: [String],
         examRewritePoints: [String],
+        misreadingTraps: [String],
+        examParaphraseRoutes: [String],
         simplifiedEnglish: String,
+        simplerRewrite: String,
         miniExercise: String?,
+        miniCheck: String?,
         hierarchyRebuild: [String],
         syntacticVariation: String?
     ) {
         self.originalSentence = originalSentence
+        self.evidenceType = evidenceType
+        self.sentenceFunction = sentenceFunction
+        self.coreSkeleton = coreSkeleton
+        self.chunkLayers = chunkLayers
+        self.grammarFocus = grammarFocus
         self.naturalChineseMeaning = naturalChineseMeaning
         self.sentenceCore = sentenceCore
         self.chunkBreakdown = chunkBreakdown
@@ -48,8 +74,12 @@ struct AIExplainSentenceResult: Equatable {
         self.vocabularyInContext = vocabularyInContext
         self.misreadPoints = misreadPoints
         self.examRewritePoints = examRewritePoints
+        self.misreadingTraps = misreadingTraps
+        self.examParaphraseRoutes = examParaphraseRoutes
         self.simplifiedEnglish = simplifiedEnglish
+        self.simplerRewrite = simplerRewrite
         self.miniExercise = miniExercise
+        self.miniCheck = miniCheck
         self.hierarchyRebuild = hierarchyRebuild
         self.syntacticVariation = syntacticVariation
     }
@@ -59,33 +89,50 @@ struct AIExplainSentenceResult: Equatable {
         let rewriteExample = Self.firstString(
             in: dictionary,
             keys: hasProfessorPayload
-                ? ["simplified_english", "simpler_rewrite"]
-                : ["simplified_english", "simpler_rewrite", "rewrite_example"]
+                ? ["simpler_rewrite", "simplified_english"]
+                : ["simpler_rewrite", "simplified_english", "rewrite_example"]
         )
         let explicitExamRewritePoints = Self.stringArray(
             in: dictionary,
             keys: ["exam_rewrite_points", "exam_paraphrase_points"]
         )
+        let evidenceType = Self.firstString(in: dictionary, keys: ["evidence_type", "sentence_role"])
+        let sentenceCore = Self.firstString(
+            in: dictionary,
+            keys: hasProfessorPayload ? ["sentence_core", "sentenceCore"] : ["sentence_core", "main_structure", "sentenceCore"]
+        ) ?? ""
+        let chunkBreakdown = Self.stringArray(in: dictionary, keys: ["chunk_breakdown", "chunks"])
+        let grammarPoints = Self.grammarPoints(in: dictionary)
+        let vocabularyInContext = Self.vocabularyItems(in: dictionary)
+        let misreadingTraps = Self.stringArray(in: dictionary, keys: ["misreading_traps", "misread_points", "common_misread_points", "common_misreadings"])
+        let examParaphraseRoutes = Self.stringArray(in: dictionary, keys: ["exam_paraphrase_routes", "exam_rewrite_points", "exam_paraphrase_points"])
+        let sentenceFunction = Self.firstString(in: dictionary, keys: ["sentence_function"])
+            ?? professorSentenceRolePresentation(for: evidenceType).map { "\($0.label)：\($0.description)" }
+            ?? ""
 
         self.init(
             originalSentence: Self.firstString(in: dictionary, keys: ["original_sentence", "originalSentence", "sentence"]) ?? sourceSentence,
+            evidenceType: evidenceType,
+            sentenceFunction: sentenceFunction,
+            coreSkeleton: Self.coreSkeleton(in: dictionary, fallbackSentenceCore: sentenceCore),
+            chunkLayers: Self.chunkLayers(in: dictionary, fallbackChunks: chunkBreakdown),
+            grammarFocus: Self.grammarFocus(in: dictionary, fallbackGrammarPoints: grammarPoints),
             naturalChineseMeaning: Self.firstString(
                 in: dictionary,
                 keys: hasProfessorPayload ? ["natural_chinese_meaning", "naturalChineseMeaning"] : ["natural_chinese_meaning", "translation", "naturalChineseMeaning"]
             ) ?? "",
-            sentenceCore: Self.firstString(
-                in: dictionary,
-                keys: hasProfessorPayload ? ["sentence_core", "sentenceCore"] : ["sentence_core", "main_structure", "sentenceCore"]
-            ) ?? "",
-            chunkBreakdown: Self.stringArray(in: dictionary, keys: ["chunk_breakdown", "chunks"]),
-            grammarPoints: Self.grammarPoints(in: dictionary),
-            vocabularyInContext: Self.vocabularyItems(in: dictionary),
-            misreadPoints: Self.stringArray(in: dictionary, keys: ["misread_points", "common_misread_points", "common_misreadings"]),
-            examRewritePoints: explicitExamRewritePoints.isEmpty
-                ? (rewriteExample.map { ["可把这句改写版当作命题同义替换的线索：\($0)"] } ?? [])
-                : explicitExamRewritePoints,
+            sentenceCore: sentenceCore,
+            chunkBreakdown: chunkBreakdown,
+            grammarPoints: grammarPoints,
+            vocabularyInContext: vocabularyInContext,
+            misreadPoints: misreadingTraps,
+            examRewritePoints: examParaphraseRoutes.isEmpty ? explicitExamRewritePoints : examParaphraseRoutes,
+            misreadingTraps: misreadingTraps,
+            examParaphraseRoutes: examParaphraseRoutes.isEmpty ? explicitExamRewritePoints : examParaphraseRoutes,
             simplifiedEnglish: rewriteExample ?? "",
+            simplerRewrite: rewriteExample ?? "",
             miniExercise: Self.firstString(in: dictionary, keys: ["mini_exercise"]),
+            miniCheck: Self.firstString(in: dictionary, keys: ["mini_check", "mini_exercise"]),
             hierarchyRebuild: Self.stringArray(in: dictionary, keys: ["hierarchy_rebuild"]),
             syntacticVariation: Self.firstString(in: dictionary, keys: ["syntactic_variation", "rewrite_example"])
         )
@@ -99,6 +146,10 @@ struct AIExplainSentenceResult: Equatable {
     var localFallbackAnalysis: ProfessorSentenceAnalysis {
         ProfessorSentenceAnalysis(
             originalSentence: originalSentence,
+            sentenceFunction: sentenceFunction,
+            coreSkeleton: coreSkeleton,
+            chunkLayers: chunkLayers,
+            grammarFocus: grammarFocus,
             naturalChineseMeaning: naturalChineseMeaning,
             sentenceCore: sentenceCore,
             chunkBreakdown: chunkBreakdown,
@@ -106,26 +157,47 @@ struct AIExplainSentenceResult: Equatable {
             vocabularyInContext: vocabularyInContext,
             misreadPoints: misreadPoints,
             examRewritePoints: examRewritePoints,
+            misreadingTraps: misreadingTraps,
+            examParaphraseRoutes: examParaphraseRoutes,
             simplifiedEnglish: simplifiedEnglish,
+            simplerRewrite: simplerRewrite,
             miniExercise: miniExercise,
+            miniCheck: miniCheck,
             hierarchyRebuild: hierarchyRebuild,
-            syntacticVariation: syntacticVariation
+            syntacticVariation: syntacticVariation,
+            evidenceType: evidenceType
         )
     }
+
+    var renderedSentenceFunction: String { localFallbackAnalysis.renderedSentenceFunction }
+    var renderedSentenceCore: String { localFallbackAnalysis.renderedSentenceCore }
+    var renderedChunkLayers: [String] { localFallbackAnalysis.renderedChunkLayers }
+    var renderedGrammarFocus: [String] { localFallbackAnalysis.renderedGrammarFocus }
+    var renderedMisreadingTraps: [String] { localFallbackAnalysis.renderedMisreadingTraps }
+    var renderedExamParaphraseRoutes: [String] { localFallbackAnalysis.renderedExamParaphraseRoutes }
+    var renderedSimplerRewrite: String { localFallbackAnalysis.renderedSimplerRewrite }
+    var renderedMiniCheck: String? { localFallbackAnalysis.renderedMiniCheck }
 
     static func looksLikePayload(_ dictionary: [String: Any]) -> Bool {
         let professorKeys = [
             "original_sentence",
+            "evidence_type",
+            "sentence_function",
+            "core_skeleton",
+            "chunk_layers",
+            "grammar_focus",
             "natural_chinese_meaning",
-            "sentence_core",
-            "chunk_breakdown",
-            "grammar_points",
             "vocabulary_in_context",
             "contextual_vocabulary",
-            "misread_points",
+            "misreading_traps",
             "common_misreadings",
-            "exam_rewrite_points",
-            "exam_paraphrase_points"
+            "exam_paraphrase_routes",
+            "exam_paraphrase_points",
+            "simpler_rewrite",
+            "mini_check",
+            "sentence_core",
+            "chunk_breakdown",
+            "grammar_points"
         ]
         let legacyKeys = ["translation", "main_structure", "rewrite_example"]
 
@@ -144,15 +216,22 @@ struct AIExplainSentenceResult: Equatable {
 
     private static func hasProfessorFieldCoverage(_ dictionary: [String: Any]) -> Bool {
         let keys = [
+            "evidence_type",
+            "sentence_function",
+            "core_skeleton",
+            "chunk_layers",
+            "grammar_focus",
             "natural_chinese_meaning",
+            "contextual_vocabulary",
+            "misreading_traps",
+            "common_misreadings",
+            "exam_paraphrase_routes",
+            "exam_paraphrase_points",
+            "simpler_rewrite",
+            "mini_check",
             "sentence_core",
             "chunk_breakdown",
-            "grammar_points",
-            "contextual_vocabulary",
-            "misread_points",
-            "common_misreadings",
-            "exam_rewrite_points",
-            "exam_paraphrase_points"
+            "grammar_points"
         ]
 
         let score = keys.reduce(into: 0) { partialResult, key in
@@ -233,6 +312,94 @@ struct AIExplainSentenceResult: Equatable {
             }
 
             return nil
+        }
+    }
+
+    private static func coreSkeleton(in dictionary: [String: Any], fallbackSentenceCore: String) -> CoreSkeleton? {
+        if let payload = dictionary["core_skeleton"] as? [String: Any] {
+            let subject = firstString(in: payload, keys: ["subject"]) ?? ""
+            let predicate = firstString(in: payload, keys: ["predicate"]) ?? ""
+            let complement = firstString(in: payload, keys: ["complement_or_object", "complementOrObject", "object"]) ?? ""
+            if !subject.isEmpty || !predicate.isEmpty || !complement.isEmpty {
+                return CoreSkeleton(subject: subject, predicate: predicate, complementOrObject: complement)
+            }
+        }
+
+        let core = fallbackSentenceCore.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !core.isEmpty else { return nil }
+
+        let segments = core.split(separator: "｜").map(String.init)
+        var subject = ""
+        var predicate = ""
+        var complement = ""
+
+        for segment in segments {
+            if segment.contains("主语：") {
+                subject = segment.replacingOccurrences(of: "主语：", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+            } else if segment.contains("谓语：") {
+                predicate = segment.replacingOccurrences(of: "谓语：", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+            } else if segment.contains("核心补足：") {
+                complement = segment.replacingOccurrences(of: "核心补足：", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+
+        if !subject.isEmpty || !predicate.isEmpty || !complement.isEmpty {
+            return CoreSkeleton(subject: subject, predicate: predicate, complementOrObject: complement)
+        }
+        return nil
+    }
+
+    private static func chunkLayers(in dictionary: [String: Any], fallbackChunks: [String]) -> [ChunkLayer] {
+        if let rawItems = dictionary["chunk_layers"] as? [Any] {
+            let items = rawItems.compactMap { item -> ChunkLayer? in
+                guard let payload = item as? [String: Any] else { return nil }
+                let text = firstString(in: payload, keys: ["text"]) ?? ""
+                let role = firstString(in: payload, keys: ["role"]) ?? ""
+                let attachesTo = firstString(in: payload, keys: ["attaches_to", "attachesTo"]) ?? ""
+                let gloss = firstString(in: payload, keys: ["gloss"]) ?? ""
+                guard !text.isEmpty || !role.isEmpty || !attachesTo.isEmpty || !gloss.isEmpty else { return nil }
+                return ChunkLayer(text: text, role: role, attachesTo: attachesTo, gloss: gloss)
+            }
+            if !items.isEmpty {
+                return items
+            }
+        }
+
+        return fallbackChunks.compactMap { item in
+            let parts = item.split(separator: "：", maxSplits: 1).map(String.init)
+            if parts.count == 2 {
+                let role = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+                let text = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                let attachesTo = role == "核心信息" ? "主句主干" : "核心信息"
+                return ChunkLayer(text: text, role: role, attachesTo: attachesTo, gloss: "")
+            }
+            let text = item.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { return nil }
+            return ChunkLayer(text: text, role: "语块", attachesTo: "核心信息", gloss: "")
+        }
+    }
+
+    private static func grammarFocus(in dictionary: [String: Any], fallbackGrammarPoints: [GrammarPoint]) -> [GrammarFocus] {
+        if let rawItems = dictionary["grammar_focus"] as? [Any] {
+            let items = rawItems.compactMap { item -> GrammarFocus? in
+                guard let payload = item as? [String: Any] else { return nil }
+                let phenomenon = firstString(in: payload, keys: ["phenomenon"]) ?? ""
+                let function = firstString(in: payload, keys: ["function"]) ?? ""
+                let why = firstString(in: payload, keys: ["why_it_matters", "whyItMatters"]) ?? ""
+                guard !phenomenon.isEmpty || !function.isEmpty || !why.isEmpty else { return nil }
+                return GrammarFocus(phenomenon: phenomenon, function: function, whyItMatters: why)
+            }
+            if !items.isEmpty {
+                return items
+            }
+        }
+
+        return fallbackGrammarPoints.map {
+            GrammarFocus(
+                phenomenon: $0.name,
+                function: $0.explanation,
+                whyItMatters: "这个结构如果挂错范围或读错修饰对象，整句主干就会被带偏。"
+            )
         }
     }
 
@@ -402,30 +569,12 @@ enum AIExplainSentenceService {
             results.append(normalized)
         }
 
-        let currentPort = components.port
-        if let preferredPort {
-            if currentPort == nil {
-                var preferred = components
-                preferred.port = preferredPort
-                append(preferred)
-                append(components)
-            } else if currentPort == preferredPort {
-                append(components)
-                var portless = components
-                portless.port = nil
-                append(portless)
-            } else {
-                append(components)
-                var preferred = components
-                preferred.port = preferredPort
-                append(preferred)
+        append(components)
 
-                var portless = components
-                portless.port = nil
-                append(portless)
-            }
-        } else {
-            append(components)
+        if let preferredPort, components.port != preferredPort {
+            var preferred = components
+            preferred.port = preferredPort
+            append(preferred)
         }
 
         return results
@@ -440,6 +589,14 @@ enum AIExplainSentenceService {
         from data: Data,
         sourceSentence: String
     ) throws -> ExplainSentenceResponseEnvelope {
+        let isWhitespaceOnly = data.allSatisfy { byte in
+            byte == 0x20 || byte == 0x09 || byte == 0x0A || byte == 0x0D
+        }
+
+        guard !data.isEmpty, !isWhitespaceOnly else {
+            throw AIExplainSentenceServiceError.invalidServerResponse
+        }
+
         let object = try JSONSerialization.jsonObject(with: data)
         guard let dictionary = object as? [String: Any] else {
             throw AIExplainSentenceServiceError.invalidServerResponse
@@ -529,34 +686,45 @@ enum AIExplainSentenceService {
                         throw AIExplainSentenceServiceError.invalidServerResponse
                     }
 
-                    let decoded = try decodeResponseEnvelope(
-                        from: data,
-                        sourceSentence: validatedExplainContext.sentence
-                    )
-
-                    if httpResponse.statusCode == 200, decoded.success, let result = decoded.data {
-                        return result
-                    }
-
                     if shouldRetrySameEndpoint(statusCode: httpResponse.statusCode), attempt == 0 {
                         TextPipelineDiagnostics.log(
                             "句子分析",
                             "AI 端点瞬时失败，准备重试: \(endpointURL.absoluteString) status=\(httpResponse.statusCode)",
                             severity: .warning
                         )
-                        try await Task.sleep(nanoseconds: retryDelayNanoseconds(for: attempt))
-                        continue
+                            try await Task.sleep(nanoseconds: retryDelayNanoseconds(for: attempt))
+                            continue
+                        }
+
+                    guard (200 ..< 300).contains(httpResponse.statusCode) else {
+                        let bodySnippet = String(data: data.prefix(500), encoding: .utf8)?
+                            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+                        if shouldRetryEndpoint(statusCode: httpResponse.statusCode), index < endpointURLs.count - 1 {
+                            let nextURL = endpointURLs[index + 1].absoluteString
+                            TextPipelineDiagnostics.log(
+                                "句子分析",
+                                "AI 端点不可用，切换候选地址: \(endpointURL.absoluteString) -> \(nextURL) status=\(httpResponse.statusCode)",
+                                severity: .warning
+                            )
+                            lastError = AIExplainSentenceServiceError.requestFailed(
+                                bodySnippet.isEmpty ? "HTTP \(httpResponse.statusCode)" : "HTTP \(httpResponse.statusCode): \(bodySnippet)"
+                            )
+                            break
+                        }
+
+                        throw AIExplainSentenceServiceError.requestFailed(
+                            bodySnippet.isEmpty ? "HTTP \(httpResponse.statusCode)" : "HTTP \(httpResponse.statusCode): \(bodySnippet)"
+                        )
                     }
 
-                    if shouldRetryEndpoint(statusCode: httpResponse.statusCode), index < endpointURLs.count - 1 {
-                        let nextURL = endpointURLs[index + 1].absoluteString
-                        TextPipelineDiagnostics.log(
-                            "句子分析",
-                            "AI 端点不可用，切换候选地址: \(endpointURL.absoluteString) -> \(nextURL) status=\(httpResponse.statusCode)",
-                            severity: .warning
-                        )
-                        lastError = AIExplainSentenceServiceError.requestFailed("HTTP \(httpResponse.statusCode)")
-                        break
+                    let decoded = try decodeResponseEnvelope(
+                        from: data,
+                        sourceSentence: validatedExplainContext.sentence
+                    )
+
+                    if decoded.success, let result = decoded.data {
+                        return result
                     }
 
                     if let message = decoded.error, !message.isEmpty {

@@ -1249,26 +1249,66 @@ struct ReviewDetailOverlay: View {
 
     private func explanationSections(_ explanation: AIExplainSentenceResult) -> some View {
         VStack(alignment: .leading, spacing: 16) {
-            explanationSection(title: "中文翻译", body: explanation.translation, tint: AppPalette.paperHighlightMint, rotation: -0.2)
-            explanationSection(title: "主干结构", body: explanation.mainStructure, tint: AppPalette.paperTapeBlue.opacity(0.8), rotation: 0.3)
+            let sentenceFunction = explanation.renderedSentenceFunction.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !sentenceFunction.isEmpty {
+                explanationSection(
+                    title: "句子定位",
+                    body: sentenceFunction,
+                    tint: AppPalette.paperTapeBlue,
+                    rotation: -0.18
+                )
+            }
 
-            if !explanation.grammarPoints.isEmpty {
-                ReviewSectionPaper(title: "语法点", tint: AppPalette.amber, rotation: -0.25) {
-                    ForEach(Array(explanation.grammarPoints.enumerated()), id: \.offset) { _, point in
-                        explanationBullet(title: point.name, body: point.explanation)
+            explanationSection(title: "句子主干", body: explanation.renderedSentenceCore, tint: AppPalette.paperTapeBlue.opacity(0.8), rotation: 0.3)
+
+            if !explanation.renderedChunkLayers.isEmpty {
+                ReviewSectionPaper(title: "语块切分", tint: AppPalette.paperHighlightMint, rotation: -0.2) {
+                    ForEach(Array(explanation.renderedChunkLayers.enumerated()), id: \.offset) { _, chunk in
+                        explanationBullet(title: "语块", body: chunk)
                     }
                 }
             }
 
+            if !explanation.renderedGrammarFocus.isEmpty {
+                ReviewSectionPaper(title: "关键语法点", tint: AppPalette.amber, rotation: -0.25) {
+                    ForEach(Array(explanation.renderedGrammarFocus.enumerated()), id: \.offset) { _, point in
+                        explanationBullet(title: "语法点", body: point)
+                    }
+                }
+            }
+
+            if !explanation.renderedMisreadingTraps.isEmpty {
+                ReviewSectionPaper(title: "学生易错点", tint: AppPalette.amber.opacity(0.82), rotation: 0.18) {
+                    ForEach(Array(explanation.renderedMisreadingTraps.enumerated()), id: \.offset) { _, item in
+                        explanationBullet(title: "易错点", body: item)
+                    }
+                }
+            }
+
+            if !explanation.renderedExamParaphraseRoutes.isEmpty {
+                ReviewSectionPaper(title: "出题改写点", tint: AppPalette.paperHighlight, rotation: -0.1) {
+                    ForEach(Array(explanation.renderedExamParaphraseRoutes.enumerated()), id: \.offset) { _, item in
+                        explanationBullet(title: "改写路线", body: item)
+                    }
+                }
+            }
+
+            explanationSection(title: "简化英文改写", body: explanation.renderedSimplerRewrite, tint: AppPalette.paperTapeBlue.opacity(0.72), rotation: 0.14)
+
+            if let miniExercise = explanation.renderedMiniCheck?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !miniExercise.isEmpty {
+                explanationSection(title: "微练习", body: miniExercise, tint: AppPalette.amber.opacity(0.72), rotation: -0.08)
+            }
+
+            explanationSection(title: "自然中文义", body: explanation.naturalChineseMeaning, tint: AppPalette.paperHighlightMint, rotation: -0.2)
+
             if !explanation.keyTerms.isEmpty {
-                ReviewSectionPaper(title: "关键词", tint: AppPalette.paperTapeBlue, rotation: 0.35) {
+                ReviewSectionPaper(title: "词汇在句中义", tint: AppPalette.paperTapeBlue, rotation: 0.35) {
                     ForEach(Array(explanation.keyTerms.enumerated()), id: \.offset) { _, term in
                         explanationBullet(title: term.term, body: term.meaning)
                     }
                 }
             }
-
-            explanationSection(title: "改写示例", body: explanation.rewriteExample, tint: AppPalette.paperHighlight, rotation: -0.1)
         }
     }
 

@@ -352,8 +352,9 @@ enum NormalizedDocumentConverter {
 
         return sentences.map { sentence in
             let paragraphCard = paragraphCardIndex[sentence.segmentID]
-            let chunks = chunkSentence(sentence.text)
-            let coreClause = extractCoreClause(from: sentence.text, chunks: chunks)
+            let rawChunks = chunkSentence(sentence.text)
+            let coreClause = extractCoreClause(from: sentence.text, chunks: rawChunks)
+            let chunkBreakdown = pedagogicalChunkBreakdown(chunks: rawChunks, coreClause: coreClause)
             let grammarPoints = detectGrammarPoints(in: sentence.text, coreClause: coreClause)
             let vocabulary = buildVocabularyInContext(
                 sentence: sentence.text,
@@ -361,7 +362,7 @@ enum NormalizedDocumentConverter {
             )
             let misreadPoints = buildMisreadPoints(
                 sentence: sentence.text,
-                chunks: chunks,
+                chunks: rawChunks,
                 coreClause: coreClause
             )
             let examRewritePoints = buildExamRewritePoints(
@@ -369,38 +370,59 @@ enum NormalizedDocumentConverter {
                 paragraphRole: paragraphCard?.argumentRole
             )
             let hierarchyRebuild = buildHierarchyRebuild(
-                chunks: chunks,
+                chunks: rawChunks,
                 coreClause: coreClause
             )
             let simplifiedEnglish = buildSimplifiedEnglish(
                 sentence: sentence.text,
                 coreClause: coreClause,
-                chunks: chunks
+                chunks: rawChunks
             )
+            let siblingSentences = sentenceIndex[sentence.segmentID] ?? []
+            let isCoreSentence = paragraphCard?.coreSentenceID == sentence.id
+            let evidenceType = inferEvidenceType(
+                sentence: sentence,
+                paragraphCard: paragraphCard,
+                isCoreSentence: isCoreSentence,
+                siblingSentences: siblingSentences
+            )
+            let sentenceFunction = buildSentenceFunction(evidenceType: evidenceType)
+            let coreSkeleton = buildCoreSkeleton(from: coreClause)
+            let chunkLayers = buildChunkLayers(from: chunkBreakdown)
+            let grammarFocus = buildGrammarFocus(from: grammarPoints)
+            let miniCheck = buildMiniExercise(grammarPoints: grammarPoints, chunks: rawChunks)
             let analysis = ProfessorSentenceAnalysis(
                 originalSentence: sentence.text,
+                sentenceFunction: sentenceFunction,
+                coreSkeleton: coreSkeleton,
+                chunkLayers: chunkLayers,
+                grammarFocus: grammarFocus,
                 naturalChineseMeaning: buildNaturalChineseMeaning(
                     sentence: sentence.text,
                     paragraphCard: paragraphCard,
                     coreClause: coreClause,
-                    chunks: chunks
+                    chunks: rawChunks
                 ),
                 sentenceCore: buildSentenceCoreDescription(
                     sentence: sentence.text,
                     coreClause: coreClause
                 ),
-                chunkBreakdown: chunks,
+                chunkBreakdown: chunkBreakdown,
                 grammarPoints: grammarPoints,
                 vocabularyInContext: vocabulary,
                 misreadPoints: misreadPoints,
                 examRewritePoints: examRewritePoints,
+                misreadingTraps: misreadPoints,
+                examParaphraseRoutes: examRewritePoints,
                 simplifiedEnglish: simplifiedEnglish,
-                miniExercise: buildMiniExercise(grammarPoints: grammarPoints, chunks: chunks),
+                simplerRewrite: simplifiedEnglish,
+                miniExercise: miniCheck,
+                miniCheck: miniCheck,
                 hierarchyRebuild: hierarchyRebuild,
-                syntacticVariation: buildSyntacticVariation(coreClause: coreClause, chunks: chunks)
+                syntacticVariation: buildSyntacticVariation(coreClause: coreClause, chunks: rawChunks),
+                evidenceType: evidenceType
             )
 
-            let siblingSentences = sentenceIndex[sentence.segmentID] ?? []
             let isKeySentence = paragraphCard?.coreSentenceID == sentence.id ||
                 sentence.localIndex == 0 ||
                 sentence.text.count >= (siblingSentences.map(\.text.count).max() ?? 0)
@@ -482,29 +504,37 @@ enum NormalizedDocumentConverter {
 
         let openingTheme = paragraphCards.first?.theme.nonEmpty ?? title.nonEmpty ?? "文章核心议题"
         let landingTheme = paragraphCards.last?.theme.nonEmpty ?? openingTheme
-        let articleTheme = "本文真正讨论的不是零散信息，而是“\(openingTheme)”这一议题如何一步步被论证，并最终落到“\(landingTheme)”这一判断上。"
-        let authorCoreQuestion = "作者真正追问的是：围绕“\(shortFocusText(from: title.nonEmpty ?? openingTheme))”这个议题，哪些只是背景和例证，哪些才构成最后应抓住的判断？"
+        let articleTheme = "文章真正要学生看懂的核心，不是零散细节，而是围绕“\(openingTheme)”这一议题，作者怎样把判断一步步推到“\(landingTheme)”上。"
+        let authorCoreQuestion = "作者真正关心的问题是：面对“\(shortFocusText(from: title.nonEmpty ?? openingTheme))”这一议题，哪些信息只是背景、让步或例证，哪些才构成最后该抓住的判断？"
         let progressionPath = paragraphCards
             .map { card in
                 "第\(card.paragraphIndex + 1)段先用\(card.argumentRole.displayName)处理“\(shortFocusText(from: card.theme))”"
             }
             .joined(separator: " → ")
+        let likelyQuestionTypes = uniqueStrings(
+            from: paragraphCards.map { likelyQuestionType(for: $0.argumentRole) }
+                + questionLinks.map { "\($0.trapType)：\(shortSnippet(from: $0.questionText))" },
+            limit: 5
+        )
+        let logicPitfalls = uniqueStrings(
+            from: paragraphCards.compactMap(\.studentBlindSpot)
+                + sentenceCards.compactMap { $0.analysis.renderedMisreadingTraps.first }
+                + questionLinks.map { "\($0.trapType)：\(shortSnippet(from: $0.paraphraseEvidence.first ?? $0.questionText))" },
+            limit: 5
+        )
         let paragraphFunctionMap = paragraphCards.map {
             "第\($0.paragraphIndex + 1)段｜\($0.argumentRole.displayName)｜\(shortSnippet(from: $0.theme))"
         }
         let syntaxHighlights = uniqueStrings(
             from: sentenceCards.flatMap { card in
-                card.analysis.grammarPoints.map { point in
-                    let explanation = shortSnippet(from: point.explanation)
-                    return explanation.isEmpty ? point.name : "\(point.name)：\(explanation)"
-                }
+                card.analysis.renderedGrammarFocus
             },
             limit: 5
         )
         let readingTraps = uniqueStrings(
             from: questionLinks.map(\.trapType)
                 + paragraphCards.compactMap(\.studentBlindSpot)
-                + sentenceCards.compactMap { $0.analysis.misreadPoints.first },
+                + sentenceCards.compactMap { $0.analysis.renderedMisreadingTraps.first },
             limit: 5
         )
         let vocabularyHighlights = uniqueStrings(
@@ -521,6 +551,8 @@ enum NormalizedDocumentConverter {
             articleTheme: articleTheme,
             authorCoreQuestion: authorCoreQuestion,
             progressionPath: progressionPath,
+            likelyQuestionTypes: likelyQuestionTypes,
+            logicPitfalls: logicPitfalls,
             paragraphFunctionMap: paragraphFunctionMap,
             syntaxHighlights: syntaxHighlights,
             readingTraps: readingTraps,
@@ -593,7 +625,23 @@ enum NormalizedDocumentConverter {
                         depth: 2,
                         order: sentence.index,
                         nodeType: .supportingSentence,
-                        title: analysis?.sentenceCore.nonEmpty ?? shortFocusText(from: sentence.text),
+                        title: {
+                            if let analysis,
+                               let core = analysis.renderedSentenceCore.nonEmpty {
+                                let functionHead = analysis.renderedSentenceFunction
+                                    .split(separator: "：", maxSplits: 1)
+                                    .first
+                                    .map(String.init)?
+                                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                                if !functionHead.isEmpty {
+                                    return "\(functionHead)｜\(core)"
+                                }
+                                if let role = professorSentenceRolePresentation(for: analysis.evidenceType)?.label {
+                                    return "\(role)｜\(core)"
+                                }
+                            }
+                            return analysis?.renderedSentenceCore.nonEmpty ?? shortFocusText(from: sentence.text)
+                        }(),
                         summary: teachingSentenceSummary(analysis: analysis, sentence: sentence.text),
                         anchor: OutlineAnchor(
                             segmentID: sentence.segmentID,
@@ -657,7 +705,7 @@ enum NormalizedDocumentConverter {
             order: 0,
             nodeType: .passageRoot,
             title: "文章主题与问题意识",
-            summary: [overview?.articleTheme, overview?.authorCoreQuestion, overview?.progressionPath]
+            summary: [overview?.articleTheme, overview?.authorCoreQuestion, overview?.progressionPath, overview?.likelyQuestionTypes.first, overview?.logicPitfalls.first]
                 .compactMap { $0?.nonEmpty }
                 .joined(separator: "｜")
                 .nonEmpty ?? "正文教学树",
@@ -852,6 +900,178 @@ enum NormalizedDocumentConverter {
         }
 
         return Array(focuses.prefix(3))
+    }
+
+    private static func inferEvidenceType(
+        sentence: Sentence,
+        paragraphCard: ParagraphTeachingCard?,
+        isCoreSentence: Bool,
+        siblingSentences: [Sentence]
+    ) -> String {
+        guard let paragraphCard else {
+            return sentence.localIndex == 0 ? "core_claim" : "supporting_evidence"
+        }
+
+        if isCoreSentence {
+            switch paragraphCard.argumentRole {
+            case .background:
+                return "background_info"
+            case .transition:
+                return "transition_signal"
+            case .objection:
+                return "counter_argument"
+            case .conclusion:
+                return "conclusion_marker"
+            case .support:
+                return "core_claim"
+            case .evidence:
+                return "supporting_evidence"
+            }
+        }
+
+        switch paragraphCard.argumentRole {
+        case .background:
+            return "background_info"
+        case .transition:
+            return sentence.localIndex == 0 ? "transition_signal" : "supporting_evidence"
+        case .objection:
+            return sentence.localIndex == 0 ? "counter_argument" : "supporting_evidence"
+        case .conclusion:
+            return sentence.localIndex == siblingSentences.count - 1 ? "conclusion_marker" : "supporting_evidence"
+        case .evidence:
+            return "supporting_evidence"
+        case .support:
+            return sentence.localIndex == 0 ? "core_claim" : "supporting_evidence"
+        }
+    }
+
+    private static func buildSentenceFunction(evidenceType: String) -> String {
+        guard let role = professorSentenceRolePresentation(for: evidenceType) else { return "" }
+        return "\(role.label)：\(role.description)"
+    }
+
+    private static func buildCoreSkeleton(from coreClause: String) -> ProfessorCoreSkeleton? {
+        let components = extractCoreComponents(from: coreClause)
+        let subject = components.subject?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let predicate = components.predicate?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let complement = components.complement?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        guard !subject.isEmpty, !predicate.isEmpty else {
+            return nil
+        }
+        return ProfessorCoreSkeleton(
+            subject: subject,
+            predicate: predicate,
+            complementOrObject: complement
+        )
+    }
+
+    private static func buildChunkLayers(from labeledChunks: [String]) -> [ProfessorChunkLayer] {
+        labeledChunks.compactMap { item in
+            let trimmed = item.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+
+            let parts = trimmed.split(separator: "：", maxSplits: 1).map(String.init)
+            let role = parts.count == 2 ? parts[0].trimmingCharacters(in: .whitespacesAndNewlines) : "语块"
+            let text = parts.count == 2 ? parts[1].trimmingCharacters(in: .whitespacesAndNewlines) : trimmed
+            guard !text.isEmpty else { return nil }
+
+            let attachesTo: String
+            let gloss: String
+
+            switch role {
+            case "核心信息":
+                attachesTo = "主句主干"
+                gloss = "这一块先读稳，再把其他修饰信息补回去。"
+            case "前置框架", "框架让步", "框架对比", "条件框架", "时间框架", "因果前提", "框架说明", "让步背景", "目的框架":
+                attachesTo = "核心信息"
+                gloss = "先把它当阅读框架，不要把它误当主句判断。"
+            case "后置修饰":
+                attachesTo = "前面名词或主句主干"
+                gloss = "回头确认它修饰谁，别把修饰语挂错对象。"
+            default:
+                attachesTo = "核心信息"
+                gloss = "它在补范围、条件或细节，不改变主句主干。"
+            }
+
+            return ProfessorChunkLayer(
+                text: text,
+                role: role,
+                attachesTo: attachesTo,
+                gloss: gloss
+            )
+        }
+    }
+
+    private static func buildGrammarFocus(from grammarPoints: [ProfessorGrammarPoint]) -> [ProfessorGrammarFocus] {
+        grammarPoints.map { point in
+            ProfessorGrammarFocus(
+                phenomenon: point.name,
+                function: point.explanation,
+                whyItMatters: whyGrammarPointMatters(name: point.name)
+            )
+        }
+    }
+
+    private static func whyGrammarPointMatters(name: String) -> String {
+        if name.contains("定语从句") || name.contains("后置修饰") {
+            return "如果修饰对象挂错，学生会把枝叶错当主干。"
+        }
+        if name.contains("非谓语") {
+            return "如果把非谓语误判成完整谓语，整句主干会被拆坏。"
+        }
+        if name.contains("被动") {
+            return "如果忽略被动方向，容易把动作承担者和承受者读反。"
+        }
+        if name.contains("否定") {
+            return "否定范围一旦看错，题目里的态度和细节判断就会整体反向。"
+        }
+        if name.contains("抽象名词") {
+            return "不把抽象名词还原成动作关系，就很难看清作者到底在判断什么。"
+        }
+        return "这个结构决定信息挂接关系，读错会直接影响主干判断和题目定位。"
+    }
+
+    private static func pedagogicalChunkBreakdown(
+        chunks: [String],
+        coreClause: String
+    ) -> [String] {
+        let coreTrimmed = coreClause.trimmingCharacters(in: .whitespacesAndNewlines)
+        let subordinateLabels: [(String, String)] = [
+            ("although", "框架让步"),
+            ("though", "框架让步"),
+            ("while", "框架对比"),
+            ("if", "条件框架"),
+            ("when", "时间框架"),
+            ("because", "因果前提"),
+            ("since", "因果前提"),
+            ("as", "框架说明"),
+            ("despite", "让步背景"),
+            ("in order to", "目的框架"),
+            ("after", "时间框架"),
+            ("before", "时间框架"),
+            ("once", "时间框架")
+        ]
+
+        return chunks.enumerated().compactMap { index, chunk in
+            let trimmed = chunk.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            let lower = trimmed.lowercased()
+
+            if trimmed == coreTrimmed {
+                return "核心信息：\(trimmed)"
+            }
+            if lower.range(of: #"\b(which|that|who|whom|whose|where|when)\b"#, options: .regularExpression) != nil, index > 0 {
+                return "后置修饰：\(trimmed)"
+            }
+            if let label = subordinateLabels.first(where: { lower.hasPrefix($0.0) })?.1 {
+                return "\(label)：\(trimmed)"
+            }
+            if index == 0 && trimmed != coreTrimmed {
+                return "前置框架：\(trimmed)"
+            }
+            return "补充说明：\(trimmed)"
+        }
     }
 
     private static func chunkSentence(_ text: String) -> [String] {
@@ -1162,7 +1382,7 @@ enum NormalizedDocumentConverter {
             return "这句话的自然意思不是逐词平移，而是先成立主句“\(focus)”，再把其余语块当成条件、限定或补充说明依次加回去。"
         }
         if let card = paragraphCard {
-            return "这句话真正在替本段说明的是：\(card.theme)；其中最该先抓住的判断落在“\(focus)”这一层。"
+            return "放在本段里，这句话主要承担“\(card.argumentRole.displayName)”的作用；真正要你先读懂的意思落在“\(focus)”这一层。"
         }
         return "这句话真正想说的是“\(focus)”；其余成分只是帮助你把范围、条件和修饰关系补全。"
     }
@@ -1175,9 +1395,9 @@ enum NormalizedDocumentConverter {
             return "微练习：先只划出主句主语和谓语，再指出从句到底修饰哪个名词。"
         }
         if chunks.count >= 3 {
-            return "微练习：请把这句话按“主干 / 条件或让步 / 补充解释”三层重新编号。"
+            return "微练习：请指出哪一块是核心信息，哪一块只是条件、让步或补充说明。"
         }
-        return "微练习：请先口头复述主句，再说明其余成分是补充什么信息。"
+        return "微练习：请先说出主语和谓语，再判断剩下成分是不是核心补足。"
     }
 
     private static func buildHierarchyRebuild(
@@ -1222,12 +1442,12 @@ enum NormalizedDocumentConverter {
         if let subject = components.subject?.nonEmpty,
            let predicate = components.predicate?.nonEmpty {
             if let complement = components.complement?.nonEmpty {
-                return "主语是 \(subject)，谓语核心是 \(predicate)，后面的 \(complement) 是主句要成立的核心补足信息。"
+                return "主语：\(subject)｜谓语：\(predicate)｜核心补足：\(complement)"
             }
-            return "主语是 \(subject)，谓语核心是 \(predicate)。先把这层主干读稳，再回去补其他修饰。"
+            return "主语：\(subject)｜谓语：\(predicate)｜核心补足：无明显宾补，句意主要靠主谓关系成立"
         }
 
-        return "主句最核心的判断落在“\(shortSnippet(from: coreClause))”这一块，别把前后的修饰语误当成真正主干。"
+        return "主干判断：\(shortSnippet(from: coreClause))"
     }
 
     private static func extractCoreComponents(
@@ -1291,9 +1511,10 @@ enum NormalizedDocumentConverter {
         guard let analysis else { return sentence }
 
         let items = [
-            analysis.naturalChineseMeaning.nonEmpty,
-            analysis.misreadPoints.first?.nonEmpty,
-            analysis.examRewritePoints.first?.nonEmpty
+            analysis.renderedSentenceFunction.nonEmpty,
+            analysis.renderedChunkLayers.first?.nonEmpty,
+            analysis.renderedMisreadingTraps.first?.nonEmpty,
+            analysis.renderedExamParaphraseRoutes.first?.nonEmpty
         ]
             .compactMap { $0 }
 
@@ -1328,11 +1549,13 @@ enum NormalizedDocumentConverter {
         card: ParagraphTeachingCard,
         linkedQuestions: [QuestionEvidenceLink]
     ) -> String {
-        var parts = card.teachingFocuses
+        var parts = [card.examValue]
 
         if let blindSpot = card.studentBlindSpot?.nonEmpty {
             parts.append("易偏点：\(blindSpot)")
         }
+
+        parts.append(contentsOf: card.teachingFocuses)
 
         if let linkedQuestion = linkedQuestions.first {
             let evidence = linkedQuestion.paraphraseEvidence.first?.nonEmpty ?? ""
@@ -1348,6 +1571,23 @@ enum NormalizedDocumentConverter {
         }
 
         return uniqueStrings(from: parts, limit: 4).joined(separator: "；")
+    }
+
+    private static func likelyQuestionType(for role: ParagraphArgumentRole) -> String {
+        switch role {
+        case .background:
+            return "细节前提题：先看背景限定范围，别把背景说明直接拔高成作者结论。"
+        case .support:
+            return "细节定位题：看这一段怎样替主判断补理由，同义改写常落在这里。"
+        case .objection:
+            return "转折重点题：真正答案多半落在让步或转折之后。"
+        case .transition:
+            return "段落关系题：判断作者怎样换挡、怎样推进论证。"
+        case .evidence:
+            return "例证作用题：问这个例子或数据究竟证明了什么。"
+        case .conclusion:
+            return "主旨/标题题：看最后一段怎样回收前文判断并落到结论。"
+        }
     }
 
     private static func buildParaphraseEvidence(

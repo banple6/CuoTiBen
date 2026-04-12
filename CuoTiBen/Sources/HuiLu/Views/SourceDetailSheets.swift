@@ -97,27 +97,10 @@ struct SentenceExplainDetailSheet: View {
     }
 
     private var evidenceRolePresentation: (label: String, description: String)? {
-        guard let raw = effectiveAnalysis?.evidenceType?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !raw.isEmpty else {
+        guard let presentation = professorSentenceRolePresentation(for: effectiveAnalysis?.evidenceType) else {
             return nil
         }
-
-        switch raw {
-        case "core_claim":
-            return ("核心判断句", "这句承担作者真正要成立的判断，读题时要优先盯主干，不要被周围修饰语分散。")
-        case "supporting_evidence":
-            return ("支撑证据句", "这句的任务是给上一层观点补例子、补事实或补论据，做题时要回到它支撑的判断。")
-        case "background_info":
-            return ("背景信息句", "这句主要交代场景或前提，不是作者最后要你选的结论。")
-        case "counter_argument":
-            return ("让步/反方句", "这句常先承认一种看法，真正立场多半落在它之后，不能把让步内容错当答案。")
-        case "transition_signal":
-            return ("推进信号句", "这句的关键价值在于告诉你作者怎样换挡，适合用来判断段落关系和论证方向。")
-        case "conclusion_marker":
-            return ("结论收束句", "这句往往在回收前文信息，是主旨题、标题题和作者态度题最该回看的位置。")
-        default:
-            return ("论证角色", raw)
-        }
+        return (presentation.label, presentation.description)
     }
 
     var body: some View {
@@ -306,55 +289,55 @@ struct SentenceExplainDetailSheet: View {
                     )
                 }
 
-                if let role = evidenceRolePresentation {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "scope")
-                                .font(.system(size: 11, weight: .bold))
-                            Text(role.label)
-                                .font(.system(size: 12, weight: .bold))
-                        }
-                        .foregroundStyle(Color.pink.opacity(0.76))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(
-                            Capsule(style: .continuous)
-                                .fill(Color.pink.opacity(0.1))
-                        )
-
-                        Text(role.description)
-                            .font(.system(size: 13.5, weight: .medium))
-                            .foregroundStyle(Color.black.opacity(0.62))
-                            .lineSpacing(3)
-                    }
+                if let sentenceFunction = analysis.renderedSentenceFunction.nonEmpty {
+                    SentenceExplainBlock(
+                        title: "句子定位",
+                        content: sentenceFunction,
+                        tone: .node
+                    )
                 }
 
                 SentenceExplainBlock(
                     title: "句子主干",
-                    content: analysis.sentenceCore,
+                    content: analysis.renderedSentenceCore,
                     tone: .structure,
-                    highlightTokens: analysis.grammarPoints.map(\.name) + analysis.vocabularyInContext.map(\.term)
+                    highlightTokens: analysis.grammarFocus.map(\.phenomenon) + analysis.grammarPoints.map(\.name) + analysis.vocabularyInContext.map(\.term)
                 )
                 SentenceExplainListBlock(
                     title: "语块切分",
-                    items: analysis.chunkBreakdown,
+                    items: analysis.renderedChunkLayers,
                     tone: .sentence
                 )
                 SentenceExplainListBlock(
                     title: "关键语法点",
-                    items: analysis.grammarPoints.map { "\($0.name)：\($0.explanation)" },
+                    items: analysis.renderedGrammarFocus,
                     tone: .grammar
                 )
                 SentenceExplainListBlock(
-                    title: "常见误读点",
-                    items: analysis.misreadPoints,
+                    title: "学生易错点",
+                    items: analysis.renderedMisreadingTraps,
                     tone: .misread
                 )
                 SentenceExplainListBlock(
                     title: "出题改写点",
-                    items: analysis.examRewritePoints,
+                    items: analysis.renderedExamParaphraseRoutes,
                     tone: .rewrite
                 )
+                SentenceExplainBlock(
+                    title: "简化英文改写",
+                    content: analysis.renderedSimplerRewrite,
+                    tone: .rewrite,
+                    highlightTokens: analysis.vocabularyInContext.map(\.term)
+                )
+
+                if let miniExercise = analysis.renderedMiniCheck?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !miniExercise.isEmpty {
+                    SentenceExplainBlock(
+                        title: "微练习",
+                        content: miniExercise,
+                        tone: .grammar
+                    )
+                }
 
                 SentenceExplainBlock(
                     title: "自然中文义",
@@ -384,20 +367,6 @@ struct SentenceExplainDetailSheet: View {
                         )
                     }
                 }
-                SentenceExplainBlock(
-                    title: "更简单的英文改写",
-                    content: analysis.simplifiedEnglish,
-                    tone: .rewrite,
-                    highlightTokens: analysis.vocabularyInContext.map(\.term)
-                )
-
-                if let miniExercise = analysis.miniExercise?.nonEmpty {
-                    SentenceExplainBlock(
-                        title: "微型练习",
-                        content: miniExercise,
-                        tone: .grammar
-                    )
-                }
 
                 if !analysis.hierarchyRebuild.isEmpty {
                     SentenceExplainListBlock(
@@ -407,7 +376,8 @@ struct SentenceExplainDetailSheet: View {
                     )
                 }
 
-                if let syntacticVariation = analysis.syntacticVariation?.nonEmpty {
+                if let syntacticVariation = analysis.syntacticVariation?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !syntacticVariation.isEmpty {
                     SentenceExplainBlock(
                         title: "句法替换版",
                         content: syntacticVariation,

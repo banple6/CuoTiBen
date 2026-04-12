@@ -49,8 +49,10 @@ function buildAnalyzePassagePrompt({ title, paragraphs, keySentences }) {
     "  article_theme：用中文一段话概括文章真正在谈什么，不要描述格式。",
     "  author_core_question：用中文一句话说清作者真正在回答什么问题。",
     "  progression_path：用中文描述从第1段到最后一段，作者的论证推进路线。",
-    "  paragraph_function_map：字符串数组，每项 '第X段｜角色｜一句话功能'。",
     "  syntax_highlights：字符串数组，最值得关注的 3-5 个句法结构。",
+    "  likely_question_types：字符串数组，最容易出的 3-5 类题。每项必须像“主旨题：最后一段如何收束前文判断”这种具体表达。",
+    "  logic_pitfalls：字符串数组，学生最容易错的 3-5 个逻辑点。要写清是范围、让步、因果、指代还是态度读偏。",
+    "  paragraph_function_map：字符串数组，每项 '第X段｜角色｜一句话功能'。",
     "  reading_traps：字符串数组，学生最容易误读的 3-5 个点。",
     "  vocabulary_highlights：字符串数组，最值得学习的 5-8 个词汇/搭配。",
     "",
@@ -62,36 +64,45 @@ function buildAnalyzePassagePrompt({ title, paragraphs, keySentences }) {
     "  keywords：5个本段最重要的英语关键词或短语。",
     "  relation_to_previous：中文，本段和上一段之间的逻辑关系，不要说'承接上文'这类空话。",
     "  exam_value：中文，说清这段内容在阅读理解考试中最可能对应什么题型和什么陷阱。",
-    "  teaching_focuses：字符串数组，2-3个具体的教学要点。每一条必须说清'为什么这个点重要'+'学生通常怎么错'。",
+    "  teaching_focuses：字符串数组，2-3个具体教学动作。每条都必须体现“先读哪层 / 为什么重要 / 学生会怎么错”。",
     "  student_blind_spot：中文一句话，学生最容易在本段读偏的点。",
     "",
     "三、sentence_analyses 数组（每个关键句一项）：",
     "  sentence_ref：对应输入的 [S_X_Y] 编号。",
+    "  evidence_type：本句在论证中是什么角色：core_claim / supporting_evidence / background_info / counter_argument / transition_signal / conclusion_marker。",
+    "  sentence_function：用中文说明这句在论证里到底在做什么，如“核心判断句：作者真正要成立的判断在这里”。",
+    "  core_skeleton：对象，字段固定为 subject、predicate、complement_or_object。必须明确主干。",
+    "  chunk_layers：数组，每项是对象，字段固定为 text、role、attaches_to、gloss。要说明每个语块是核心信息、框架、后置修饰还是补充说明。",
+    "  grammar_focus：数组，每项包含 phenomenon、function、why_it_matters。只保留真正帮助理解的 1-3 个。",
     "  natural_chinese_meaning：自然中文义，不要逐词对译，要还原原句的语气和重心。",
-    "  sentence_core：直接写清“主语 + 谓语 + 核心宾语/补语”是什么。例：'主语是 a debate, 谓语是 has emerged'。不要说'本句主要讲了...'。",
-    "  chunk_breakdown：字符串数组，把句子按自然语义块断开，不是逐词切。",
+    "  sentence_core：直接写清“主语 + 谓语 + 核心宾语/补语”是什么。格式尽量写成“主语：...｜谓语：...｜核心补足：...”。不要说'本句主要讲了...'。",
+    "  chunk_breakdown：字符串数组，把句子按自然语义块断开，不是逐词切。每项要标明作用，如“框架让步：... / 核心信息：... / 补充说明：...” 。",
     "  grammar_points：数组，每项包含 name 和 explanation。只保留真正帮助理解的 1-3 个语法点。explanation 必须说清'它在这句里到底起什么作用'，不要贴标签。",
     "  vocabulary_in_context：数组，每项包含 term 和 meaning。meaning 是本句中的具体含义，不要给通用词典义。",
+    "  misreading_traps：字符串数组，学生最容易在这句话上犯的 1-3 个误读。必须具体说明会把哪一层挂错。",
+    "  exam_paraphrase_routes：字符串数组，1-3 条，这句话在阅读理解题中可能怎么被改写出题。必须给出具体改写路线。",
     "  misread_points：字符串数组，学生最容易在这句话上犯的 1-3 个错误。必须具体，例如'容易把 once known mainly for 误读为主句而忽略真正主干 a debate has emerged'。",
     "  exam_rewrite_points：字符串数组，1-3 条，这句话在阅读理解题中可能怎么被改写出题。必须给出具体改写示例。",
+    "  simpler_rewrite：用更简单的英语重写这句话，保持原意。",
     "  simplified_english：用更简单的英语重写这句话，保持原意。",
+    "  mini_check：一个针对性微练习，测试学生是否真的理解了本句。",
     "  mini_exercise：一个针对性微练习，测试学生是否真的理解了本句。",
     "  hierarchy_rebuild：字符串数组（长难句才用）。按'先看主干 → 再加第一层修饰 → 再加第二层修饰'的顺序拆解。短句返回空数组。",
     "  syntactic_variation：用不同句式重写这句话。",
-    "  evidence_type：本句在论证中是什么角色：core_claim / supporting_evidence / background_info / counter_argument / transition_signal / conclusion_marker。",
     "",
     "═══════════════════════",
     "质量底线（违反任何一条都视为失败）：",
     "═══════════════════════",
     "1. sentence_core 绝不能是'本句主要讲了...'或'本句说的是...'，必须指出具体的主语+谓语+宾语。",
     "2. natural_chinese_meaning 绝不能是逐词翻译。",
-    "3. misread_points 绝不能是泛泛的'注意理解'，必须说清学生具体会怎么误读。",
-    "4. exam_rewrite_points 绝不能只说'可能考同义替换'，必须给出具体的替换示例。",
-    "5. chunk_breakdown 不能只按逗号切，要按语义关系切。",
-    "6. grammar_points 的 explanation 不能只给术语名称，必须说清在本句中的具体作用。",
-    "7. teaching_focuses 不能是抽象建议（如'注意语法'），必须是具体的教学行动。",
-    "8. 所有中文解释口吻：严谨但平易的英语教授。",
-    "9. 如果信息不足，返回空字符串或空数组，不能删字段。"
+    "3. evidence_type 不能空缺，也不能乱给；它决定了学生先把这句当背景、转折还是核心判断。",
+    "4. misread_points 绝不能是泛泛的'注意理解'，必须说清学生具体会怎么误读。",
+    "5. exam_paraphrase_routes / exam_rewrite_points 绝不能只说'可能考同义替换'，必须给出具体的替换示例。",
+    "6. chunk_layers / chunk_breakdown 不能只按逗号切，要按语义关系切，而且至少有一项标为“核心信息”。",
+    "7. grammar_focus / grammar_points 的解释不能只给术语名称，必须说清在本句中的具体作用。",
+    "8. teaching_focuses 不能是抽象建议（如'注意语法'），必须是具体的教学行动。",
+    "9. 所有中文解释口吻：严谨但平易的英语教授。",
+    "10. 如果信息不足，返回空字符串或空数组，不能删字段。"
   ].join("\n");
 }
 
@@ -112,12 +123,152 @@ function firstDefined(raw, keys) {
   return undefined;
 }
 
+function normalizeEvidenceType(value, fallback = "supporting_evidence") {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  const aliases = {
+    background: "background_info",
+    background_info: "background_info",
+    transition: "transition_signal",
+    transition_signal: "transition_signal",
+    core: "core_claim",
+    core_claim: "core_claim",
+    claim: "core_claim",
+    support: "supporting_evidence",
+    supporting_evidence: "supporting_evidence",
+    evidence: "supporting_evidence",
+    objection: "counter_argument",
+    counter_argument: "counter_argument",
+    rebuttal: "counter_argument",
+    conclusion: "conclusion_marker",
+    conclusion_marker: "conclusion_marker"
+  };
+
+  return aliases[normalized] || fallback;
+}
+
+function buildSentenceFunctionFromEvidenceType(evidenceType) {
+  const normalized = normalizeEvidenceType(evidenceType, "supporting_evidence");
+  const mapping = {
+    core_claim: "核心判断句：这句承担作者真正要成立的判断，做题时先盯主干，再看其余修饰怎么限制这个判断。",
+    supporting_evidence: "支撑证据句：这句在替上一层判断补事实、补例子或补论据，不能只记细节而忘了它服务的观点。",
+    background_info: "背景信息句：这句主要交代场景、前提或历史背景，不是作者最后要你选的结论。",
+    counter_argument: "让步/反方句：这句常先承认一种看法，真正立场多半落在它之后，最容易把让步内容错当答案。",
+    transition_signal: "推进信号句：这句的价值在于提示作者怎样换挡，适合判断段落关系、论证方向和结构推进。",
+    conclusion_marker: "结论收束句：这句在回收前文信息，常是主旨题、标题题和作者态度题最该回看的位置。"
+  };
+  return mapping[normalized] || mapping.supporting_evidence;
+}
+
+function renderCoreSkeleton(coreSkeleton) {
+  if (!coreSkeleton || typeof coreSkeleton !== "object") {
+    return "";
+  }
+
+  const subject = normalizeString(firstDefined(coreSkeleton, ["subject"]));
+  const predicate = normalizeString(firstDefined(coreSkeleton, ["predicate"]));
+  const complement = normalizeString(firstDefined(coreSkeleton, ["complement_or_object", "complementOrObject", "object"]));
+  return [
+    subject ? `主语：${subject}` : "",
+    predicate ? `谓语：${predicate}` : "",
+    complement ? `核心补足：${complement}` : ""
+  ].filter(Boolean).join("｜");
+}
+
+function normalizeCoreSkeleton(raw, fallbackCore) {
+  const subject = normalizeString(firstDefined(raw, ["subject"]));
+  const predicate = normalizeString(firstDefined(raw, ["predicate"]));
+  const complement = normalizeString(firstDefined(raw, ["complement_or_object", "complementOrObject", "object"]));
+
+  if (subject || predicate || complement) {
+    return {
+      subject,
+      predicate,
+      complement_or_object: complement
+    };
+  }
+
+  const segments = normalizeString(fallbackCore)
+    .split("｜")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const fallback = { subject: "", predicate: "", complement_or_object: "" };
+  for (const segment of segments) {
+    if (segment.startsWith("主语：")) fallback.subject = segment.replace("主语：", "").trim();
+    if (segment.startsWith("谓语：")) fallback.predicate = segment.replace("谓语：", "").trim();
+    if (segment.startsWith("核心补足：")) fallback.complement_or_object = segment.replace("核心补足：", "").trim();
+  }
+  return fallback.subject || fallback.predicate || fallback.complement_or_object ? fallback : null;
+}
+
+function normalizeChunkLayers(raw, fallbackBreakdown) {
+  const direct = Array.isArray(raw)
+    ? raw
+      .map((item) => ({
+        text: normalizeString(item?.text),
+        role: normalizeString(item?.role),
+        attaches_to: normalizeString(firstDefined(item, ["attaches_to", "attachesTo"])),
+        gloss: normalizeString(item?.gloss)
+      }))
+      .filter((item) => item.text || item.role || item.attaches_to || item.gloss)
+    : [];
+
+  if (direct.length > 0) {
+    return direct;
+  }
+
+  return normalizeArray(fallbackBreakdown)
+    .map((item) => String(item).trim())
+    .filter(Boolean)
+    .map((item) => {
+      const [rawRole, rawText = ""] = item.split(/[:：]/, 2);
+      const role = (rawRole || "").trim();
+      const text = (rawText || item).trim();
+      return {
+        text,
+        role: role || "语块",
+        attaches_to: role === "核心信息" ? "主句主干" : "核心信息",
+        gloss: role === "后置修饰" ? "注意它修饰谁。" : ""
+      };
+    });
+}
+
+function normalizeGrammarFocus(raw, fallbackPoints) {
+  const direct = Array.isArray(raw)
+    ? raw
+      .map((item) => ({
+        phenomenon: normalizeString(item?.phenomenon),
+        function: normalizeString(item?.function),
+        why_it_matters: normalizeString(firstDefined(item, ["why_it_matters", "whyItMatters"]))
+      }))
+      .filter((item) => item.phenomenon || item.function || item.why_it_matters)
+    : [];
+
+  if (direct.length > 0) {
+    return direct.slice(0, 3);
+  }
+
+  return normalizeArray(fallbackPoints)
+    .map((item) => ({
+      phenomenon: normalizeString(item?.name),
+      function: normalizeString(item?.explanation),
+      why_it_matters: "这个结构一旦挂错范围或修饰对象，整句主干就会被带偏。"
+    }))
+    .filter((item) => item.phenomenon || item.function)
+    .slice(0, 3);
+}
+
 function normalizePassageOverview(raw) {
   if (!raw || typeof raw !== "object") {
     return {
       article_theme: "",
       author_core_question: "",
       progression_path: "",
+      likely_question_types: [],
+      logic_pitfalls: [],
       paragraph_function_map: [],
       syntax_highlights: [],
       reading_traps: [],
@@ -128,6 +279,8 @@ function normalizePassageOverview(raw) {
     article_theme: normalizeString(raw.article_theme),
     author_core_question: normalizeString(raw.author_core_question),
     progression_path: normalizeString(raw.progression_path),
+    likely_question_types: normalizeArray(raw.likely_question_types).map(String).filter(Boolean),
+    logic_pitfalls: normalizeArray(raw.logic_pitfalls).map(String).filter(Boolean),
     paragraph_function_map: normalizeArray(raw.paragraph_function_map).map(String),
     syntax_highlights: normalizeArray(raw.syntax_highlights).map(String),
     reading_traps: normalizeArray(raw.reading_traps).map(String),
@@ -155,31 +308,51 @@ function normalizeParagraphCard(raw) {
 function normalizeSentenceAnalysis(raw, sourceSentence) {
   if (!raw || typeof raw !== "object") return null;
 
-  const validEvidenceTypes = [
-    "core_claim", "supporting_evidence", "background_info",
-    "counter_argument", "transition_signal", "conclusion_marker"
-  ];
-  const evidenceType = validEvidenceTypes.includes(raw.evidence_type)
-    ? raw.evidence_type
-    : "supporting_evidence";
+  const evidenceType = normalizeEvidenceType(raw.evidence_type, "supporting_evidence");
   const rawVocabulary = firstDefined(raw, ["vocabulary_in_context", "contextual_vocabulary"]);
-  const rawMisread = firstDefined(raw, ["misread_points", "common_misreadings"]);
-  const rawRewrite = firstDefined(raw, ["exam_rewrite_points", "exam_paraphrase_points"]);
-  const rawSimplerRewrite = firstDefined(raw, ["simplified_english", "simpler_rewrite"]);
+  const rawMisread = firstDefined(raw, ["misreading_traps", "misread_points", "common_misreadings"]);
+  const rawRewrite = firstDefined(raw, ["exam_paraphrase_routes", "exam_rewrite_points", "exam_paraphrase_points"]);
+  const rawSimplerRewrite = firstDefined(raw, ["simpler_rewrite", "simplified_english"]);
+  const rawChunkBreakdown = normalizeArray(raw.chunk_breakdown).map(String).filter(Boolean);
+  const rawGrammarPoints = normalizeArray(raw.grammar_points)
+    .map((item) => ({
+      name: normalizeString(item?.name),
+      explanation: normalizeString(item?.explanation)
+    }))
+    .filter((item) => item.name || item.explanation)
+    .slice(0, 3);
+  const coreSkeleton = normalizeCoreSkeleton(firstDefined(raw, ["core_skeleton"]), normalizeString(raw.sentence_core));
+  const chunkLayers = normalizeChunkLayers(firstDefined(raw, ["chunk_layers"]), rawChunkBreakdown);
+  const grammarFocus = normalizeGrammarFocus(firstDefined(raw, ["grammar_focus"]), rawGrammarPoints);
+  const sentenceFunction = normalizeString(raw.sentence_function, buildSentenceFunctionFromEvidenceType(evidenceType));
+  const misreadingTraps = normalizeArray(rawMisread).map(String).filter(Boolean).slice(0, 3);
+  const examParaphraseRoutes = normalizeArray(rawRewrite).map(String).filter(Boolean).slice(0, 3);
+  const simplerRewrite = normalizeString(rawSimplerRewrite);
+  const miniCheck = normalizeString(firstDefined(raw, ["mini_check", "mini_exercise"]));
+  const derivedChunkBreakdown = chunkLayers
+    .map((item) => {
+      const role = item.role || "语块";
+      const text = item.text || "";
+      return role && text ? `${role}：${text}` : text;
+    })
+    .filter(Boolean);
 
   return {
     sentence_ref: normalizeString(raw.sentence_ref),
     original_sentence: sourceSentence || normalizeString(raw.original_sentence),
+    sentence_function: sentenceFunction,
+    core_skeleton: coreSkeleton,
+    chunk_layers: chunkLayers,
+    grammar_focus: grammarFocus,
     natural_chinese_meaning: normalizeString(raw.natural_chinese_meaning),
-    sentence_core: normalizeString(raw.sentence_core),
-    chunk_breakdown: normalizeArray(raw.chunk_breakdown).map(String).filter(Boolean),
-    grammar_points: normalizeArray(raw.grammar_points)
-      .map((item) => ({
-        name: normalizeString(item?.name),
-        explanation: normalizeString(item?.explanation)
-      }))
-      .filter((item) => item.name || item.explanation)
-      .slice(0, 3),
+    sentence_core: normalizeString(raw.sentence_core, renderCoreSkeleton(coreSkeleton)),
+    chunk_breakdown: rawChunkBreakdown.length > 0 ? rawChunkBreakdown : derivedChunkBreakdown,
+    grammar_points: rawGrammarPoints.length > 0
+      ? rawGrammarPoints
+      : grammarFocus.map((item) => ({
+        name: item.phenomenon,
+        explanation: [item.function, item.why_it_matters ? `为什么重要：${item.why_it_matters}` : ""].filter(Boolean).join("｜")
+      })),
     vocabulary_in_context: normalizeArray(rawVocabulary)
       .map((item) => ({
         term: normalizeString(item?.term),
@@ -187,10 +360,14 @@ function normalizeSentenceAnalysis(raw, sourceSentence) {
       }))
       .filter((item) => item.term)
       .slice(0, 6),
-    misread_points: normalizeArray(rawMisread).map(String).filter(Boolean).slice(0, 3),
-    exam_rewrite_points: normalizeArray(rawRewrite).map(String).filter(Boolean).slice(0, 3),
-    simplified_english: normalizeString(rawSimplerRewrite),
-    mini_exercise: normalizeString(raw.mini_exercise),
+    misread_points: misreadingTraps,
+    misreading_traps: misreadingTraps,
+    exam_rewrite_points: examParaphraseRoutes,
+    exam_paraphrase_routes: examParaphraseRoutes,
+    simplified_english: simplerRewrite,
+    simpler_rewrite: simplerRewrite,
+    mini_exercise: miniCheck,
+    mini_check: miniCheck,
     hierarchy_rebuild: normalizeArray(raw.hierarchy_rebuild).map(String).filter(Boolean),
     syntactic_variation: normalizeString(raw.syntactic_variation),
     evidence_type: evidenceType
@@ -223,11 +400,23 @@ function validateAnalysisQuality(result) {
   if (!result.passage_overview?.progression_path || result.passage_overview.progression_path.length < 12) {
     warnings.push("passage_overview.progression_path 不够具体");
   }
+  if ((result.passage_overview?.likely_question_types || []).length < 2) {
+    warnings.push("passage_overview.likely_question_types 太弱");
+  }
+  if ((result.passage_overview?.logic_pitfalls || []).length < 2) {
+    warnings.push("passage_overview.logic_pitfalls 太弱");
+  }
 
   if (result.paragraph_cards) {
     for (const card of result.paragraph_cards) {
       if (!card.theme || card.theme.includes("本段主要讲") || card.theme.includes("承担")) {
         warnings.push(`[P${card.paragraph_index}] theme 太空`);
+      }
+      if (!card.relation_to_previous || card.relation_to_previous === "承接上文") {
+        warnings.push(`[P${card.paragraph_index}] relation_to_previous 太空`);
+      }
+      if (!card.exam_value || (!card.exam_value.includes("题") && !card.exam_value.includes("陷阱"))) {
+        warnings.push(`[P${card.paragraph_index}] exam_value 不像考试解法`);
       }
       if ((card.teaching_focuses || []).length === 0) {
         warnings.push(`[P${card.paragraph_index}] teaching_focuses 缺失`);
@@ -240,14 +429,29 @@ function validateAnalysisQuality(result) {
 
   if (result.sentence_analyses) {
     for (const sa of result.sentence_analyses) {
+      if (!sa.sentence_function || sa.sentence_function.length < 10) {
+        warnings.push(`[${sa.sentence_ref}] sentence_function 太弱`);
+      }
       if (isShallowSentenceCore(sa.sentence_core)) {
         warnings.push(`[${sa.sentence_ref}] sentence_core 太浅: "${sa.sentence_core?.slice(0, 40)}"`);
       }
-      if (sa.misread_points?.every(isShallowMisreadPoint)) {
-        warnings.push(`[${sa.sentence_ref}] misread_points 全部太泛`);
+      if (!sa.core_skeleton || (!sa.core_skeleton.subject && !sa.core_skeleton.predicate)) {
+        warnings.push(`[${sa.sentence_ref}] core_skeleton 缺失`);
       }
-      if (sa.chunk_breakdown?.length <= 1 && sa.original_sentence?.length > 40) {
-        warnings.push(`[${sa.sentence_ref}] chunk_breakdown 不足`);
+      if (!sa.evidence_type) {
+        warnings.push(`[${sa.sentence_ref}] evidence_type 缺失`);
+      }
+      if (sa.misreading_traps?.every(isShallowMisreadPoint)) {
+        warnings.push(`[${sa.sentence_ref}] misreading_traps 全部太泛`);
+      }
+      if (sa.chunk_layers?.length <= 1 && sa.original_sentence?.length > 40) {
+        warnings.push(`[${sa.sentence_ref}] chunk_layers 不足`);
+      }
+      if ((sa.chunk_layers || []).length > 0 && !(sa.chunk_layers || []).some((item) => String(item?.role || "").includes("核心信息"))) {
+        warnings.push(`[${sa.sentence_ref}] chunk_layers 没有标出核心信息`);
+      }
+      if ((sa.grammar_focus || []).length === 0 && sa.original_sentence?.length > 35) {
+        warnings.push(`[${sa.sentence_ref}] grammar_focus 缺失`);
       }
     }
   }
@@ -264,9 +468,11 @@ function buildAnalyzePassageRepairPrompt({ title, paragraphs, keySentences, prev
     "",
     "额外要求：",
     "1. paragraph_cards.theme 不要写成“本段主要讲了什么”或“第X段承担什么作用”。",
-    "2. teaching_focuses 必须写成具体教学动作，而不是抽象建议。",
-    "3. passage_overview 必须像老师带读整篇文章，而不是做摘要。",
-    "4. sentence_core 必须指出主语、谓语、核心宾补，不允许再写空泛总结。",
+    "2. relation_to_previous 和 exam_value 必须具体到逻辑推进和考试题型，不能只写泛泛判断。",
+    "3. teaching_focuses 必须写成具体教学动作，而不是抽象建议。",
+    "4. passage_overview 必须像老师带读整篇文章，而不是做摘要；likely_question_types 和 logic_pitfalls 不能空。",
+    "5. sentence_function 必须明确说明这句在论证中做什么；core_skeleton 必须指出主语、谓语、核心宾补。",
+    "6. evidence_type 不能漏；chunk_layers 至少有一项 role 是“核心信息”，并说明 attaches_to。",
     "",
     "你上一次的 JSON 为：",
     JSON.stringify(previousResult)
@@ -434,8 +640,8 @@ export async function analyzePassage({ title = "", paragraphs = [], keySentences
 
   console.log("[ai/analyze-passage] done", {
     elapsed: `${elapsed}ms`,
-    paragraphCards: paragraphCards.length,
-    sentenceAnalyses: sentenceAnalyses.length,
+    paragraphCards: normalized.paragraph_cards.length,
+    sentenceAnalyses: normalized.sentence_analyses.length,
     qualityWarnings: qualityWarnings.length
   });
 

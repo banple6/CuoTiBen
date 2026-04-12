@@ -27,19 +27,23 @@ async def call_pp_structure_v3(
     请求格式:
         POST  AI_STUDIO_API_URL
         Header: Authorization: token <ACCESS_TOKEN>
-        Body (JSON): { "file": "<base64>", "fileType": 1 }
+        Body (JSON): { "file": "<base64>", "fileType": 0/1, ...optional flags }
 
     返回: AI Studio 原始 JSON 响应 (dict)
     """
     file_b64 = base64.b64encode(file_bytes).decode("ascii")
 
-    # file_type 推断: 1=PDF, 2=图片
+    # 百度 layout-parsing: PDF=0, 图片=1
     ext = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
-    file_type = 1 if ext == "pdf" else 2
+    file_type = 0 if ext == "pdf" else 1
 
     payload = {
         "file": file_b64,
         "fileType": file_type,
+        "useDocOrientationClassify": config.AI_STUDIO_USE_DOC_ORIENTATION_CLASSIFY,
+        "useDocUnwarping": config.AI_STUDIO_USE_DOC_UNWARPING,
+        "useTextlineOrientation": config.AI_STUDIO_USE_TEXTLINE_ORIENTATION,
+        "useChartRecognition": config.AI_STUDIO_USE_CHART_RECOGNITION,
     }
 
     headers = {

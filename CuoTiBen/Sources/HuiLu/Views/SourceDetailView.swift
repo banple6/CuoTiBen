@@ -729,19 +729,25 @@ private struct ProfessorAnalysisTab: View {
 
             professorCard {
                 SentenceExplainBlock(title: "文章主题", content: overview.articleTheme, tone: .node)
-                SentenceExplainBlock(title: "作者核心问题意识", content: overview.authorCoreQuestion, tone: .structure)
+                SentenceExplainBlock(title: "作者真正关心的问题", content: overview.authorCoreQuestion, tone: .structure)
+                SentenceExplainBlock(title: "段落推进路径", content: overview.progressionPath, tone: .structure)
                 if !overview.syntaxHighlights.isEmpty {
                     SentenceExplainListBlock(title: "最重要的句法学习点", items: overview.syntaxHighlights, tone: .grammar)
                 }
-                if !overview.readingTraps.isEmpty {
-                    SentenceExplainListBlock(title: "最重要的阅读陷阱", items: overview.readingTraps, tone: .misread)
+                if !overview.likelyQuestionTypes.isEmpty {
+                    SentenceExplainListBlock(title: "最容易出的题", items: overview.likelyQuestionTypes, tone: .rewrite)
                 }
-                SentenceExplainBlock(title: "行文推进路径", content: overview.progressionPath, tone: .structure)
+                if !overview.logicPitfalls.isEmpty {
+                    SentenceExplainListBlock(title: "最容易错的逻辑点", items: overview.logicPitfalls, tone: .misread)
+                }
                 if !overview.paragraphFunctionMap.isEmpty {
                     SentenceExplainListBlock(title: "各段功能图", items: overview.paragraphFunctionMap, tone: .sentence)
                 }
+                if !overview.readingTraps.isEmpty {
+                    SentenceExplainListBlock(title: "补充阅读陷阱", items: overview.readingTraps, tone: .misread)
+                }
                 if !overview.vocabularyHighlights.isEmpty {
-                    SentenceExplainListBlock(title: "最重要的词汇/搭配学习点", items: overview.vocabularyHighlights, tone: .vocabulary)
+                    SentenceExplainListBlock(title: "补充词汇/搭配亮点", items: overview.vocabularyHighlights, tone: .vocabulary)
                 }
             }
         }
@@ -759,6 +765,7 @@ private struct ProfessorAnalysisTab: View {
                     }
 
                     SentenceExplainBlock(title: "段落主旨", content: card.theme, tone: .sentence)
+                    SentenceExplainBlock(title: "段落角色", content: card.argumentRole.teachingDescription, tone: .structure)
 
                     if let coreSentence = bundle.sentence(id: card.coreSentenceID) {
                         Button {
@@ -783,12 +790,14 @@ private struct ProfessorAnalysisTab: View {
                         .buttonStyle(.plain)
                     }
 
-                    if !card.teachingFocuses.isEmpty {
-                        SentenceExplainListBlock(title: "教学重点", items: card.teachingFocuses, tone: .grammar)
+                    SentenceExplainBlock(title: "与上一段关系", content: card.relationToPrevious, tone: .neutral)
+                    SentenceExplainBlock(title: "对应题型价值", content: card.examValue, tone: .rewrite)
+                    if let blindSpot = card.studentBlindSpot, !blindSpot.isEmpty {
+                        SentenceExplainBlock(title: "学生最容易读偏的点", content: blindSpot, tone: .misread)
                     }
 
-                    if let blindSpot = card.studentBlindSpot, !blindSpot.isEmpty {
-                        SentenceExplainBlock(title: "学生易错点", content: blindSpot, tone: .misread)
+                    if !card.teachingFocuses.isEmpty {
+                        SentenceExplainListBlock(title: "教学重点", items: card.teachingFocuses, tone: .grammar)
                     }
 
                     let relatedQuestionHints = relatedQuestionHints(for: card.segmentID)
@@ -799,9 +808,6 @@ private struct ProfessorAnalysisTab: View {
                             tone: .rewrite
                         )
                     }
-
-                    SentenceExplainBlock(title: "与上一段关系", content: card.relationToPrevious, tone: .neutral)
-                    SentenceExplainBlock(title: "对应题型价值", content: card.examValue, tone: .rewrite)
 
                     if !card.keywords.isEmpty {
                         SentenceExplainListBlock(title: "关键词", items: card.keywords, tone: .vocabulary)

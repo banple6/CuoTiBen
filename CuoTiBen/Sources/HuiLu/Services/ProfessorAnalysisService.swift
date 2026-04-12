@@ -42,6 +42,8 @@ enum ProfessorAnalysisService {
         let article_theme: String?
         let author_core_question: String?
         let progression_path: String?
+        let likely_question_types: [String]?
+        let logic_pitfalls: [String]?
         let paragraph_function_map: [String]?
         let syntax_highlights: [String]?
         let reading_traps: [String]?
@@ -62,6 +64,10 @@ enum ProfessorAnalysisService {
 
     struct SentenceAnalysisDTO: Decodable {
         let sentence_ref: String?
+        let sentence_function: String?
+        let core_skeleton: ProfessorCoreSkeleton?
+        let chunk_layers: [ProfessorChunkLayer]?
+        let grammar_focus: [ProfessorGrammarFocus]?
         let natural_chinese_meaning: String?
         let sentence_core: String?
         let chunk_breakdown: [String]?
@@ -69,8 +75,12 @@ enum ProfessorAnalysisService {
         let vocabulary_in_context: [VocabularyDTO]?
         let misread_points: [String]?
         let exam_rewrite_points: [String]?
+        let misreading_traps: [String]?
+        let exam_paraphrase_routes: [String]?
         let simplified_english: String?
+        let simpler_rewrite: String?
         let mini_exercise: String?
+        let mini_check: String?
         let hierarchy_rebuild: [String]?
         let syntactic_variation: String?
         let evidence_type: String?
@@ -334,6 +344,8 @@ enum ProfessorAnalysisService {
             articleTheme: dto.article_theme ?? "",
             authorCoreQuestion: dto.author_core_question ?? "",
             progressionPath: dto.progression_path ?? "",
+            likelyQuestionTypes: dto.likely_question_types ?? [],
+            logicPitfalls: dto.logic_pitfalls ?? [],
             paragraphFunctionMap: dto.paragraph_function_map ?? [],
             syntaxHighlights: dto.syntax_highlights ?? [],
             readingTraps: dto.reading_traps ?? [],
@@ -401,6 +413,10 @@ enum ProfessorAnalysisService {
 
             let analysis = ProfessorSentenceAnalysis(
                 originalSentence: sentence.text,
+                sentenceFunction: dto.sentence_function ?? "",
+                coreSkeleton: dto.core_skeleton,
+                chunkLayers: dto.chunk_layers ?? [],
+                grammarFocus: dto.grammar_focus ?? [],
                 naturalChineseMeaning: dto.natural_chinese_meaning ?? "",
                 sentenceCore: dto.sentence_core ?? "",
                 chunkBreakdown: dto.chunk_breakdown ?? [],
@@ -412,8 +428,12 @@ enum ProfessorAnalysisService {
                 },
                 misreadPoints: dto.misread_points ?? [],
                 examRewritePoints: dto.exam_rewrite_points ?? [],
+                misreadingTraps: dto.misreading_traps ?? [],
+                examParaphraseRoutes: dto.exam_paraphrase_routes ?? [],
                 simplifiedEnglish: dto.simplified_english ?? "",
+                simplerRewrite: dto.simpler_rewrite ?? "",
                 miniExercise: dto.mini_exercise,
+                miniCheck: dto.mini_check,
                 hierarchyRebuild: dto.hierarchy_rebuild ?? [],
                 syntacticVariation: dto.syntactic_variation,
                 evidenceType: dto.evidence_type,
