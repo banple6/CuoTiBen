@@ -8,8 +8,8 @@ import { getDashScopeClient } from "../lib/dashscope.js";
 // ─────────────────────────────────────────────
 
 const MAX_PARAGRAPHS = 20;
-const MAX_KEY_SENTENCES = 12;
-const MAX_PARAGRAPH_CHARS = 1200;
+const MAX_KEY_SENTENCES = 8;
+const MAX_PARAGRAPH_CHARS = 900;
 
 function buildAnalyzePassagePrompt({ title, paragraphs, keySentences }) {
   const safeParagraphs = paragraphs.slice(0, MAX_PARAGRAPHS);
@@ -76,21 +76,12 @@ function buildAnalyzePassagePrompt({ title, paragraphs, keySentences }) {
     "  grammar_focus：数组，每项包含 phenomenon、function、why_it_matters。只保留真正帮助理解的 1-3 个。",
     "  faithful_translation：忠实翻译。中文自然，但要尽量贴住原句真实意思，不要偷换成教学评论。",
     "  teaching_interpretation：教学解读。说明这句话真正承担什么功能、该先抓哪一层、学生最可能错在哪。",
-    "  natural_chinese_meaning：兼容旧字段，内容与 teaching_interpretation 保持一致。",
-    "  sentence_core：直接写清“主语 + 谓语 + 核心宾语/补语”是什么。格式尽量写成“主语：...｜谓语：...｜核心补足：...”。不要说'本句主要讲了...'。",
-    "  chunk_breakdown：字符串数组，把句子按自然语义块断开，不是逐词切。每项要标明作用，如“框架让步：... / 核心信息：... / 补充说明：...” 。",
-    "  grammar_points：数组，每项包含 name 和 explanation。只保留真正帮助理解的 1-3 个语法点。explanation 必须说清'它在这句里到底起什么作用'，不要贴标签。",
     "  vocabulary_in_context：数组，每项包含 term 和 meaning。meaning 是本句中的具体含义，不要给通用词典义。",
     "  misreading_traps：字符串数组，学生最容易在这句话上犯的 1-3 个误读。必须具体说明会把哪一层挂错。",
     "  exam_paraphrase_routes：字符串数组，1-3 条，这句话在阅读理解题中可能怎么被改写出题。必须给出具体改写路线。",
-    "  misread_points：字符串数组，学生最容易在这句话上犯的 1-3 个错误。必须具体，例如'容易把 once known mainly for 误读为主句而忽略真正主干 a debate has emerged'。",
-    "  exam_rewrite_points：字符串数组，1-3 条，这句话在阅读理解题中可能怎么被改写出题。必须给出具体改写示例。",
     "  simpler_rewrite：用更简单的英语重写这句话，保持原意。",
-    "  simplified_english：用更简单的英语重写这句话，保持原意。",
+    "  simpler_rewrite_translation：中文说明这条简化改写在说什么、保留了原句哪层意思、主要简化了哪层结构。",
     "  mini_check：一个针对性微练习，测试学生是否真的理解了本句。",
-    "  mini_exercise：一个针对性微练习，测试学生是否真的理解了本句。",
-    "  hierarchy_rebuild：字符串数组（长难句才用）。按'先看主干 → 再加第一层修饰 → 再加第二层修饰'的顺序拆解。短句返回空数组。",
-    "  syntactic_variation：用不同句式重写这句话。",
     "",
     "═══════════════════════",
     "质量底线（违反任何一条都视为失败）：",
@@ -99,9 +90,9 @@ function buildAnalyzePassagePrompt({ title, paragraphs, keySentences }) {
     "2. faithful_translation 必须像可靠译文，teaching_interpretation 才负责老师口吻的解释，两者不能混写。",
     "3. evidence_type 不能空缺，也不能乱给；它决定了学生先把这句当背景、转折还是核心判断。",
     "4. misread_points 绝不能是泛泛的'注意理解'，必须说清学生具体会怎么误读。",
-    "5. exam_paraphrase_routes / exam_rewrite_points 绝不能只说'可能考同义替换'，必须给出具体的替换示例。",
-    "6. chunk_layers / chunk_breakdown 不能只按逗号切，要按语义关系切，而且至少有一项标为“核心信息”。",
-    "7. grammar_focus / grammar_points 的解释不能只给术语名称，必须说清在本句中的具体作用。",
+    "5. exam_paraphrase_routes 绝不能只说'可能考同义替换'，必须给出具体的替换示例。",
+    "6. chunk_layers 不能只按逗号切，要按语义关系切，而且至少有一项标为“核心信息”。",
+    "7. grammar_focus 的解释不能只给术语名称，必须说清在本句中的具体作用。",
     "8. teaching_focuses 不能是抽象建议（如'注意语法'），必须是具体的教学行动。",
     "9. 所有中文解释口吻：严谨但平易的英语教授。",
     "10. 如果信息不足，返回空字符串或空数组，不能删字段。"
@@ -315,6 +306,7 @@ function normalizeSentenceAnalysis(raw, sourceSentence) {
   const rawMisread = firstDefined(raw, ["misreading_traps", "misread_points", "common_misreadings"]);
   const rawRewrite = firstDefined(raw, ["exam_paraphrase_routes", "exam_rewrite_points", "exam_paraphrase_points"]);
   const rawSimplerRewrite = firstDefined(raw, ["simpler_rewrite", "simplified_english"]);
+  const rawSimplerRewriteTranslation = firstDefined(raw, ["simpler_rewrite_translation", "rewrite_translation"]);
   const rawFaithfulTranslation = firstDefined(raw, ["faithful_translation", "translation", "natural_chinese_meaning"]);
   const rawTeachingInterpretation = firstDefined(raw, ["teaching_interpretation", "natural_chinese_meaning", "translation"]);
   const rawChunkBreakdown = normalizeArray(raw.chunk_breakdown).map(String).filter(Boolean);
@@ -332,6 +324,7 @@ function normalizeSentenceAnalysis(raw, sourceSentence) {
   const misreadingTraps = normalizeArray(rawMisread).map(String).filter(Boolean).slice(0, 3);
   const examParaphraseRoutes = normalizeArray(rawRewrite).map(String).filter(Boolean).slice(0, 3);
   const simplerRewrite = normalizeString(rawSimplerRewrite);
+  const simplerRewriteTranslation = normalizeString(rawSimplerRewriteTranslation);
   const faithfulTranslation = normalizeString(rawFaithfulTranslation);
   const teachingInterpretation = normalizeString(rawTeachingInterpretation, faithfulTranslation);
   const miniCheck = normalizeString(firstDefined(raw, ["mini_check", "mini_exercise"]));
@@ -374,6 +367,7 @@ function normalizeSentenceAnalysis(raw, sourceSentence) {
     exam_paraphrase_routes: examParaphraseRoutes,
     simplified_english: simplerRewrite,
     simpler_rewrite: simplerRewrite,
+    simpler_rewrite_translation: simplerRewriteTranslation,
     mini_exercise: miniCheck,
     mini_check: miniCheck,
     hierarchy_rebuild: normalizeArray(raw.hierarchy_rebuild).map(String).filter(Boolean),

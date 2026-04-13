@@ -11,6 +11,7 @@ enum ProfessorAnalysisService {
     private static let minimumParagraphChars = 220
     private static let hardParagraphChars = 920
     private static let maxParagraphSentences = 4
+    private static let maxProfessorKeySentences = 8
     private static let analyzePassageTimeout: TimeInterval = 150
 
     private struct ParagraphAnalysisGroup {
@@ -370,7 +371,12 @@ enum ProfessorAnalysisService {
         from bundle: StructuredSourceBundle,
         paragraphGroups: [ParagraphAnalysisGroup]
     ) -> [KeySentenceInput] {
-        var selected: [KeySentenceInput] = []
+        struct Candidate {
+            let priority: Int
+            let input: KeySentenceInput
+        }
+
+        var candidates: [Candidate] = []
         var seenIDs: Set<String> = []
 
         let sentencesBySegment = Dictionary(grouping: bundle.sentences, by: { $0.segmentID })
@@ -394,16 +400,31 @@ enum ProfessorAnalysisService {
                 guard seenIDs.insert(sentence.id).inserted else { continue }
 
                 let ref = "S_\(segIdx)_\(sentence.localIndex)"
-                selected.append(KeySentenceInput(
-                    ref: ref,
-                    text: sentence.text,
-                    paragraph_index: paragraphIndex
-                ))
+                let priority = isCore ? 0 : (isKey ? 1 : 2)
+                candidates.append(
+                    Candidate(
+                        priority: priority,
+                        input: KeySentenceInput(
+                            ref: ref,
+                            text: sentence.text,
+                            paragraph_index: paragraphIndex
+                        )
+                    )
+                )
             }
         }
 
-        // 限制最大数量
-        return Array(selected.prefix(12))
+        let ordered = candidates.sorted { lhs, rhs in
+            if lhs.input.paragraph_index != rhs.input.paragraph_index {
+                return lhs.input.paragraph_index < rhs.input.paragraph_index
+            }
+            if lhs.priority != rhs.priority {
+                return lhs.priority < rhs.priority
+            }
+            return lhs.input.ref < rhs.input.ref
+        }
+
+        return Array(ordered.prefix(maxProfessorKeySentences).map(\.input))
     }
 
     private static func buildParagraphAnalysisGroups(from bundle: StructuredSourceBundle) -> [ParagraphAnalysisGroup] {
