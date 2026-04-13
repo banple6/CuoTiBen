@@ -113,7 +113,7 @@ struct SourceDetailView: View {
         case .original:
             return "原文"
         case .outline:
-            return "结构树"
+            return "教学树"
         case .professor:
             return "句子讲解"
         }
@@ -412,7 +412,7 @@ struct SourceDetailView: View {
                 onJumpHandled: handleOriginalJumpHandled
             )
         } else if selectedTab == .outline {
-            SourceOutlineTab(
+            TeachingTreeCanvasView(
                 nodes: structuredSource.outline,
                 highlightedNodeID: highlightedOutlineNodeID,
                 jumpTargetNodeID: jumpTargetOutlineNodeID,

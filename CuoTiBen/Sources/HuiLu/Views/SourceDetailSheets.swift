@@ -1527,6 +1527,11 @@ struct ProfessorAnalysisPanel: View {
 
             StructuredCoreSkeletonCard(analysis: analysis)
 
+            TranslationInterpretationGroup(
+                analysis: analysis,
+                highlightTokens: analysis.vocabularyInContext.map(\.term)
+            )
+
             StructuredChunkLayerCard(analysis: analysis)
 
             SentenceExplainListBlock(
@@ -1546,23 +1551,6 @@ struct ProfessorAnalysisPanel: View {
                 items: analysis.renderedExamParaphraseRoutes,
                 tone: .rewrite
             )
-
-            if let faithfulTranslation = analysis.renderedFaithfulTranslation.nonEmpty {
-                SentenceExplainBlock(
-                    title: "忠实翻译",
-                    content: faithfulTranslation,
-                    tone: .translation,
-                    highlightTokens: analysis.vocabularyInContext.map(\.term)
-                )
-            }
-
-            if let teachingInterpretation = analysis.renderedTeachingInterpretation.nonEmpty {
-                SentenceExplainBlock(
-                    title: "教学解读",
-                    content: teachingInterpretation,
-                    tone: .teaching
-                )
-            }
 
             if analysis.renderedSimplerRewrite.nonEmpty != nil {
                 RewriteCardWithTranslationToggle(
@@ -1604,6 +1592,36 @@ struct ProfessorAnalysisPanel: View {
                     tone: .node
                 )
             }
+        }
+    }
+}
+
+private struct TranslationInterpretationGroup: View {
+    let analysis: ProfessorSentenceAnalysis
+    let highlightTokens: [String]
+
+    private var faithfulTranslationText: String {
+        analysis.renderedFaithfulTranslation.nonEmpty ?? "暂无忠实翻译。当前结果里还没有稳定可用的直译内容。"
+    }
+
+    private var teachingInterpretationText: String {
+        analysis.renderedTeachingInterpretation.nonEmpty ?? "暂无教学解读。当前结果里还没有稳定可用的教授式说明。"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            SentenceExplainBlock(
+                title: "忠实翻译",
+                content: faithfulTranslationText,
+                tone: .translation,
+                highlightTokens: highlightTokens
+            )
+
+            SentenceExplainBlock(
+                title: "教学解读",
+                content: teachingInterpretationText,
+                tone: .teaching
+            )
         }
     }
 }
@@ -1732,16 +1750,14 @@ private struct RewriteCardWithTranslationToggle: View {
             HStack(alignment: .center) {
                 sectionMarker(text: "英文简化改写", tone: .rewrite)
                 Spacer(minLength: 0)
-                if explanation.nonEmpty != nil {
-                    Button(showsExplanation ? "隐藏译意" : "显示译意") {
-                        withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
-                            showsExplanation.toggle()
-                        }
+                Button(showsExplanation ? "隐藏译意" : "显示译意") {
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
+                        showsExplanation.toggle()
                     }
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .buttonStyle(.plain)
-                    .foregroundStyle(ExplainHighlightTone.rewrite.accent.opacity(0.9))
                 }
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .buttonStyle(.plain)
+                .foregroundStyle(ExplainHighlightTone.rewrite.accent.opacity(0.9))
             }
 
             VStack(alignment: .leading, spacing: 10) {
@@ -1778,10 +1794,10 @@ private struct RewriteCardWithTranslationToggle: View {
                     .padding(.leading, 10)
             }
 
-            if showsExplanation, let visibleExplanation = explanation.nonEmpty {
+            if showsExplanation {
                 SentenceExplainBlock(
                     title: "改写译意",
-                    content: visibleExplanation,
+                    content: explanation.nonEmpty ?? "暂无改写译意",
                     tone: .translation
                 )
                 .transition(.opacity.combined(with: .move(edge: .top)))

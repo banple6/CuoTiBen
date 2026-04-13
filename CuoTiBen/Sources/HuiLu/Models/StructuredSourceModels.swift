@@ -629,10 +629,6 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
     var renderedFaithfulTranslation: String {
         let explicit = purifiedChineseExplanation(faithfulTranslation)
         if !explicit.isEmpty { return explicit }
-        let legacy = purifiedChineseExplanation(naturalChineseMeaning)
-        if !legacy.isEmpty && purifiedChineseExplanation(teachingInterpretation).isEmpty {
-            return legacy
-        }
         return ""
     }
 

@@ -21,7 +21,7 @@ private enum OutlineCanvasDensityMode: String, CaseIterable, Identifiable {
     }
 }
 
-struct SourceOutlineTab: View {
+struct TeachingTreeCanvasView: View {
     let nodes: [OutlineNode]
     let highlightedNodeID: String?
     let jumpTargetNodeID: String?
@@ -378,6 +378,26 @@ struct SourceOutlineTab: View {
         DispatchQueue.main.async {
             onJumpHandled()
         }
+    }
+}
+
+struct SourceOutlineTab: View {
+    let nodes: [OutlineNode]
+    let highlightedNodeID: String?
+    let jumpTargetNodeID: String?
+    let ancestorNodeIDs: [String]
+    let onNodeTap: (OutlineNode) -> Void
+    let onJumpHandled: () -> Void
+
+    var body: some View {
+        TeachingTreeCanvasView(
+            nodes: nodes,
+            highlightedNodeID: highlightedNodeID,
+            jumpTargetNodeID: jumpTargetNodeID,
+            ancestorNodeIDs: ancestorNodeIDs,
+            onNodeTap: onNodeTap,
+            onJumpHandled: onJumpHandled
+        )
     }
 }
 
