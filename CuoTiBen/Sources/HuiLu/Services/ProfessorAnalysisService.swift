@@ -6,6 +6,63 @@ import Foundation
 
 enum ProfessorAnalysisService {
 
+    private static let maxProfessorParagraphs = 20
+    private static let preferredParagraphChars = 560
+    private static let minimumParagraphChars = 220
+    private static let hardParagraphChars = 920
+    private static let maxParagraphSentences = 4
+    private static let analyzePassageTimeout: TimeInterval = 150
+
+    private struct ParagraphAnalysisGroup {
+        let requestIndex: Int
+        let text: String
+        let segmentIDs: [String]
+        let segmentIndexes: [Int]
+        let anchorLabels: [String]
+        let sentenceIDs: [String]
+        let charCount: Int
+        let pageRange: ClosedRange<Int>?
+    }
+
+    private struct MutableParagraphGroup {
+        var segments: [Segment] = []
+        var sentenceIDs: [String] = []
+        var charCount: Int = 0
+        var pages: [Int] = []
+
+        var isEmpty: Bool { segments.isEmpty }
+        var segmentIDs: [String] { segments.map(\.id) }
+        var segmentIndexes: [Int] { segments.map(\.index) }
+        var anchorLabels: [String] { segments.map(\.anchorLabel) }
+        var sentenceCount: Int { sentenceIDs.count }
+        var pageRange: ClosedRange<Int>? {
+            guard let first = pages.min(), let last = pages.max() else { return nil }
+            return first ... last
+        }
+
+        mutating func append(_ segment: Segment) {
+            segments.append(segment)
+            sentenceIDs.append(contentsOf: segment.sentenceIDs)
+            charCount += segment.text.count
+            if let page = segment.page {
+                pages.append(page)
+            }
+        }
+
+        func finalized(requestIndex: Int) -> ParagraphAnalysisGroup {
+            ParagraphAnalysisGroup(
+                requestIndex: requestIndex,
+                text: segments.map(\.text).joined(separator: "\n\n"),
+                segmentIDs: segmentIDs,
+                segmentIndexes: segmentIndexes,
+                anchorLabels: anchorLabels,
+                sentenceIDs: sentenceIDs,
+                charCount: charCount,
+                pageRange: pageRange
+            )
+        }
+    }
+
     // MARK: - 请求/响应模型
 
     struct ParagraphInput: Encodable {
@@ -133,16 +190,17 @@ enum ProfessorAnalysisService {
         guard !endpointURLs.isEmpty else { throw AnalysisError.missingBaseURL }
 
         // 从 bundle 构建请求
-        let paragraphInputs = bundle.segments.enumerated().map { idx, segment in
-            ParagraphInput(index: idx, text: segment.text)
+        let paragraphGroups = buildParagraphAnalysisGroups(from: bundle)
+        let paragraphInputs = paragraphGroups.map {
+            ParagraphInput(index: $0.requestIndex, text: $0.text)
         }
 
         // 选取关键句（每段核心句 + 所有 isKeySentence  + 超长句）
-        let keySentenceInputs = selectKeySentences(from: bundle)
+        let keySentenceInputs = selectKeySentences(from: bundle, paragraphGroups: paragraphGroups)
 
         TextPipelineDiagnostics.log(
             "AI",
-            "[AI][ProfessorAnalysis] 开始批量教学分析: paragraphs=\(paragraphInputs.count) keySentences=\(keySentenceInputs.count) title=\(title)",
+            "[AI][ProfessorAnalysis] 开始批量教学分析: paragraphs=\(paragraphInputs.count)/segments=\(bundle.segments.count) keySentences=\(keySentenceInputs.count) title=\(title)",
             severity: .info
         )
 
@@ -158,7 +216,7 @@ enum ProfessorAnalysisService {
 
         for (index, url) in endpointURLs.enumerated() {
             for attempt in 0..<2 {
-                var request = URLRequest(url: url, timeoutInterval: 90)
+                var request = URLRequest(url: url, timeoutInterval: analyzePassageTimeout)
                 request.httpMethod = "POST"
                 request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
                 request.httpBody = requestData
@@ -288,8 +346,9 @@ enum ProfessorAnalysisService {
         let aiOverview = convertOverview(payload.passage_overview)
         let aiParagraphCards = convertParagraphCards(
             payload.paragraph_cards ?? [],
+            paragraphGroups: paragraphGroups,
             segments: bundle.segments,
-            sentencesBySegment: Dictionary(grouping: bundle.sentences, by: { $0.segmentID })
+            sentences: bundle.sentences
         )
         let aiSentenceCards = convertSentenceCards(
             payload.sentence_analyses ?? [],
@@ -307,15 +366,24 @@ enum ProfessorAnalysisService {
 
     // MARK: - 关键句选取
 
-    private static func selectKeySentences(from bundle: StructuredSourceBundle) -> [KeySentenceInput] {
+    private static func selectKeySentences(
+        from bundle: StructuredSourceBundle,
+        paragraphGroups: [ParagraphAnalysisGroup]
+    ) -> [KeySentenceInput] {
         var selected: [KeySentenceInput] = []
         var seenIDs: Set<String> = []
 
         let sentencesBySegment = Dictionary(grouping: bundle.sentences, by: { $0.segmentID })
+        let paragraphIndexBySegmentID = paragraphGroups.reduce(into: [String: Int]()) { partialResult, group in
+            for segmentID in group.segmentIDs {
+                partialResult[segmentID] = group.requestIndex
+            }
+        }
 
         for (segIdx, segment) in bundle.segments.enumerated() {
             let sentences = sentencesBySegment[segment.id] ?? []
             let paragraphCard = bundle.paragraphCard(forSegmentID: segment.id)
+            let paragraphIndex = paragraphIndexBySegmentID[segment.id] ?? min(segIdx, maxProfessorParagraphs - 1)
 
             for sentence in sentences {
                 let isCore = sentence.id == paragraphCard?.coreSentenceID
@@ -329,13 +397,76 @@ enum ProfessorAnalysisService {
                 selected.append(KeySentenceInput(
                     ref: ref,
                     text: sentence.text,
-                    paragraph_index: segIdx
+                    paragraph_index: paragraphIndex
                 ))
             }
         }
 
         // 限制最大数量
         return Array(selected.prefix(12))
+    }
+
+    private static func buildParagraphAnalysisGroups(from bundle: StructuredSourceBundle) -> [ParagraphAnalysisGroup] {
+        let orderedSegments = bundle.segments.sorted { lhs, rhs in
+            if lhs.index != rhs.index { return lhs.index < rhs.index }
+            return lhs.id < rhs.id
+        }
+
+        var groups: [MutableParagraphGroup] = []
+        var current = MutableParagraphGroup()
+
+        for segment in orderedSegments {
+            let trimmedText = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedText.isEmpty else { continue }
+
+            if current.isEmpty {
+                current.append(segment)
+                continue
+            }
+
+            let pageChanged = current.pages.last != segment.page
+            let currentIsReady = current.charCount >= preferredParagraphChars || current.sentenceCount >= maxParagraphSentences
+            let wouldExceedHardLimit = current.charCount + trimmedText.count > hardParagraphChars
+            let shouldWrapForLargeIncoming = current.charCount >= minimumParagraphChars && trimmedText.count >= preferredParagraphChars / 2
+            let shouldStartNewGroup =
+                wouldExceedHardLimit ||
+                (currentIsReady && (pageChanged || shouldWrapForLargeIncoming))
+
+            if shouldStartNewGroup {
+                groups.append(current)
+                current = MutableParagraphGroup()
+            }
+
+            current.append(segment)
+        }
+
+        if !current.isEmpty {
+            groups.append(current)
+        }
+
+        while groups.count > maxProfessorParagraphs, groups.count >= 2 {
+            var mergeIndex = 0
+            var smallestCombinedCount = Int.max
+
+            for index in 0 ..< groups.count - 1 {
+                let combinedCount = groups[index].charCount + groups[index + 1].charCount
+                if combinedCount < smallestCombinedCount {
+                    smallestCombinedCount = combinedCount
+                    mergeIndex = index
+                }
+            }
+
+            var merged = groups[mergeIndex]
+            let next = groups[mergeIndex + 1]
+            for segment in next.segments {
+                merged.append(segment)
+            }
+            groups.replaceSubrange(mergeIndex ... mergeIndex + 1, with: [merged])
+        }
+
+        return groups.enumerated().map { index, group in
+            group.finalized(requestIndex: index)
+        }
     }
 
     // MARK: - DTO → 本地模型转换
@@ -357,38 +488,47 @@ enum ProfessorAnalysisService {
 
     private static func convertParagraphCards(
         _ dtos: [ParagraphCardDTO],
+        paragraphGroups: [ParagraphAnalysisGroup],
         segments: [Segment],
-        sentencesBySegment: [String: [Sentence]]
+        sentences: [Sentence]
     ) -> [ParagraphTeachingCard] {
-        dtos.compactMap { dto in
-            guard let paragraphIndex = dto.paragraph_index,
-                  paragraphIndex < segments.count else { return nil }
+        let segmentIndex = Dictionary(uniqueKeysWithValues: segments.map { ($0.id, $0) })
+        let sentenceIndex = Dictionary(uniqueKeysWithValues: sentences.map { ($0.id, $0) })
 
-            let segment = segments[paragraphIndex]
-            let sentences = sentencesBySegment[segment.id] ?? []
+        return dtos.flatMap { dto -> [ParagraphTeachingCard] in
+            guard let paragraphIndex = dto.paragraph_index,
+                  paragraphIndex < paragraphGroups.count else { return [] }
+
+            let group = paragraphGroups[paragraphIndex]
+            let groupSegments = group.segmentIDs.compactMap { segmentIndex[$0] }
+            let groupSentences = group.sentenceIDs.compactMap { sentenceIndex[$0] }
+            guard !groupSegments.isEmpty else { return [] }
 
             let roleString = dto.argument_role ?? "support"
             let role = ParagraphArgumentRole(rawValue: roleString) ?? .support
 
             let coreLocalIndex = dto.core_sentence_local_index ?? 0
-            let coreSentenceID = sentences.first { $0.localIndex == coreLocalIndex }?.id
-                ?? sentences.first?.id
+            let coreSentenceID = groupSentences.indices.contains(coreLocalIndex)
+                ? groupSentences[coreLocalIndex].id
+                : groupSentences.first?.id
 
-            return ParagraphTeachingCard(
-                id: segment.id,
-                segmentID: segment.id,
-                paragraphIndex: paragraphIndex,
-                anchorLabel: segment.anchorLabel,
-                theme: dto.theme ?? "",
-                argumentRole: role,
-                coreSentenceID: coreSentenceID,
-                keywords: dto.keywords ?? [],
-                relationToPrevious: dto.relation_to_previous ?? "",
-                examValue: dto.exam_value ?? "",
-                teachingFocuses: dto.teaching_focuses ?? [],
-                studentBlindSpot: dto.student_blind_spot,
-                isAIGenerated: true
-            )
+            return groupSegments.map { segment in
+                ParagraphTeachingCard(
+                    id: segment.id,
+                    segmentID: segment.id,
+                    paragraphIndex: segment.index,
+                    anchorLabel: segment.anchorLabel,
+                    theme: dto.theme ?? "",
+                    argumentRole: role,
+                    coreSentenceID: coreSentenceID,
+                    keywords: dto.keywords ?? [],
+                    relationToPrevious: dto.relation_to_previous ?? "",
+                    examValue: dto.exam_value ?? "",
+                    teachingFocuses: dto.teaching_focuses ?? [],
+                    studentBlindSpot: dto.student_blind_spot,
+                    isAIGenerated: true
+                )
+            }
         }
     }
 
