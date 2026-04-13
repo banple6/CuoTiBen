@@ -122,27 +122,31 @@ struct TeachingTreeCanvasView: View {
         layout: TeachingTreeCanvasLayout,
         viewportSize: CGSize
     ) -> some View {
-        LazyVStack(alignment: .leading, spacing: densityMode.rowSpacing) {
-            ForEach(visibleNodes) { node in
+        ZStack(alignment: .topLeading) {
+            ForEach(layout.entries) { entry in
                 OutlineTreeNodeRow(
-                    node: node,
+                    node: entry.node,
                     highlightedNodeID: highlightedNodeID,
                     densityMode: densityMode,
                     expandedNodeIDs: $expandedNodeIDs,
-                    onNodeTap: onNodeTap
+                    onNodeTap: onNodeTap,
+                    isCanvasCard: true
                 )
+                .frame(width: entry.frame.width, alignment: .topLeading)
+                .offset(x: entry.frame.minX, y: entry.frame.minY)
+                .id(entry.node.id)
             }
         }
-        .padding(.horizontal, densityMode == .detailed ? 24 : 18)
-        .padding(.vertical, densityMode == .detailed ? 22 : 16)
         .frame(
-            width: max(layout.contentBoundingRect.width + 48, viewportSize.width - 12),
+            width: max(layout.contentBoundingRect.width + 42, viewportSize.width - 12),
             alignment: .topLeading
         )
         .frame(
-            minHeight: max(layout.contentBoundingRect.height + 44, viewportSize.height - 140),
+            minHeight: max(layout.contentBoundingRect.height + 42, viewportSize.height - 140),
             alignment: .topLeading
         )
+        .padding(.horizontal, densityMode == .detailed ? 20 : 16)
+        .padding(.vertical, densityMode == .detailed ? 18 : 14)
         .scaleEffect(canvasScale, anchor: .topLeading)
         .animation(.spring(response: 0.28, dampingFraction: 0.88), value: canvasScale)
     }
@@ -407,6 +411,7 @@ private struct OutlineTreeNodeRow: View {
     let densityMode: OutlineCanvasDensityMode
     @Binding var expandedNodeIDs: Set<String>
     let onNodeTap: (OutlineNode) -> Void
+    var isCanvasCard: Bool = false
 
     private var isExpanded: Bool {
         expandedNodeIDs.contains(node.id)
@@ -464,7 +469,8 @@ private struct OutlineTreeNodeRow: View {
     }
 
     private var rowLeadingInset: CGFloat {
-        CGFloat(normalizedDepth) * (densityMode == .detailed ? 54 : 42)
+        guard !isCanvasCard else { return 0 }
+        return CGFloat(normalizedDepth) * (densityMode == .detailed ? 54 : 42)
     }
 
     private var titleColor: Color {
@@ -496,6 +502,7 @@ private struct OutlineTreeNodeRow: View {
             }
         }
         .padding(rowPadding)
+        .frame(maxWidth: isCanvasCard ? .infinity : nil, alignment: .topLeading)
         .background(nodeBackground)
         .id(node.id)
     }
