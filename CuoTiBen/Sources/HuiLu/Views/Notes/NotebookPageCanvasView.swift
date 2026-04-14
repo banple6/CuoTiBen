@@ -70,23 +70,25 @@ struct NotebookPageCanvasView: View {
                             geo.size.height - 20)
             let pageH = min(max(max(baseH, paper.size.height), contentHeight + 300), Self.maxPageHeight)
 
-            NotebookScrollHost(
-                initialInkData: initialInkData,
-                viewportController: vm.viewportController,
-                inkToolState: $inkToolState,
+                NotebookScrollHost(
+                    initialInkData: initialInkData,
+                    viewportController: vm.viewportController,
+                    inkToolState: $inkToolState,
                 pageWidth: pageWidth,
                 pageHeight: pageH,
                 isTextMode: isTextMode,
                 isSelectMode: isSelectMode,
                 isTextObjectInteractionMode: isTextObjectInteractionMode,
                 doubleTapBehavior: doubleTapBehavior,
-                editorSelection: $editorSelection,
-                inkActionBridge: inkActionBridge,
-                onInkChanged: {
-                    vm.markInkDirty()
-                    vm.scheduleAutosave(using: appViewModel, bridge: inkActionBridge)
-                }
-            ) {
+                    editorSelection: $editorSelection,
+                    inkActionBridge: inkActionBridge,
+                    onInkChanged: {
+                        vm.markInkDirty()
+                    },
+                    onViewportChanged: {
+                        vm.noteViewportDidChange()
+                    }
+                ) {
                 ZStack(alignment: .topLeading) {
                     PaperLayerView(pageWidth: pageWidth, pageHeight: pageH, paper: paper)
 
@@ -177,6 +179,7 @@ struct NotebookScrollHost<Paper: View>: UIViewControllerRepresentable {
     @Binding var editorSelection: EditorSelection
     let inkActionBridge: InkActionBridge
     var onInkChanged: (() -> Void)?
+    var onViewportChanged: (() -> Void)?
     @ViewBuilder let paperContent: () -> Paper
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -296,6 +299,7 @@ struct NotebookScrollHost<Paper: View>: UIViewControllerRepresentable {
         weak var canvas: PKCanvasView?
         var lastAppliedTool: PKTool?
         var lastAppliedToolState: NoteInkToolState?
+        private var lastViewportSnapshot: CanvasViewportState?
         private var debounce: DispatchWorkItem?
         private var lastToolState: NoteInkToolState?
         /// Tracks whether the current tool is a lasso and user has completed a stroke.
@@ -328,6 +332,11 @@ struct NotebookScrollHost<Paper: View>: UIViewControllerRepresentable {
                 visibleRect: visibleRect,
                 fitMode: fitMode
             )
+            let nextState = parent.viewportController.state
+            if shouldPublishViewportChange(nextState) {
+                lastViewportSnapshot = nextState
+                parent.onViewportChanged?()
+            }
         }
 
         func viewForZooming(in scrollView: UIScrollView) -> UIView? {
@@ -340,6 +349,20 @@ struct NotebookScrollHost<Paper: View>: UIViewControllerRepresentable {
 
         func scrollViewDidZoom(_ scrollView: UIScrollView) {
             syncViewport(using: scrollView)
+        }
+
+        private func shouldPublishViewportChange(_ nextState: CanvasViewportState) -> Bool {
+            guard let lastViewportSnapshot else { return true }
+            let zoomDelta = abs(nextState.zoomScale - lastViewportSnapshot.zoomScale)
+            let offsetDelta = hypot(
+                nextState.contentOffset.x - lastViewportSnapshot.contentOffset.x,
+                nextState.contentOffset.y - lastViewportSnapshot.contentOffset.y
+            )
+            let visibleOriginDelta = hypot(
+                nextState.visibleRect.origin.x - lastViewportSnapshot.visibleRect.origin.x,
+                nextState.visibleRect.origin.y - lastViewportSnapshot.visibleRect.origin.y
+            )
+            return zoomDelta > 0.01 || offsetDelta > 8 || visibleOriginDelta > 8 || nextState.fitMode != lastViewportSnapshot.fitMode
         }
 
         func canvasViewDidBeginUsingTool(_ cv: PKCanvasView) {
@@ -1159,7 +1182,6 @@ private struct CanvasOverlayLayerView: View {
 
             Button(role: .destructive) {
                 vm.deleteCanvasObject(id: element.id)
-                vm.scheduleAutosave(using: appViewModel, delayNanoseconds: 150_000_000)
             } label: {
                 Image(systemName: "trash")
                     .font(.system(size: 11, weight: .semibold))
@@ -1194,7 +1216,6 @@ private struct CanvasOverlayLayerView: View {
                 dragStartFrame = nil
                 vm.moveCanvasObject(id: element.id, to: next.origin)
                 vm.endCanvasInteraction()
-                vm.scheduleAutosave(using: appViewModel, delayNanoseconds: 150_000_000)
             }
     }
 
@@ -1239,7 +1260,6 @@ private struct CanvasOverlayLayerView: View {
                 resizeStartFrame = nil
                 vm.resizeCanvasObject(id: element.id, to: next)
                 vm.endCanvasInteraction()
-                vm.scheduleAutosave(using: appViewModel, delayNanoseconds: 150_000_000)
             }
     }
 

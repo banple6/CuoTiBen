@@ -97,11 +97,9 @@ struct CanvasTextObjectsLayer: View {
                         guard editingObjectID == obj.id else { return }
                         editingObjectID = nil
                         lastEditDismissTime = Date()
-                        vm.scheduleAutosave(using: appViewModel)
                     },
                     onCommitMove: { newPosition in
                         vm.moveTextObject(id: obj.id, to: newPosition)
-                        vm.scheduleAutosave(using: appViewModel)
                     },
                     onCommitResize: { newX, newY, newWidth, newHeight in
                         vm.resizeTextObject(
@@ -111,7 +109,6 @@ struct CanvasTextObjectsLayer: View {
                             width: newWidth,
                             height: newHeight
                         )
-                        vm.scheduleAutosave(using: appViewModel)
                     }
                 )
                 .zIndex(isSelected(obj.id) || isEditing(obj.id) ? 10_000 : Double(obj.zIndex))

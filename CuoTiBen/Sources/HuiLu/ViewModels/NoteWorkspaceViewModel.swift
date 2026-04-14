@@ -141,6 +141,26 @@ enum CanvasViewportGesturePolicy: String {
     case textEditing
 }
 
+enum CanvasAutosaveReason: String, Hashable {
+    case contentMutation
+    case viewportChange
+    case inkChange
+    case explicitSave
+
+    var defaultDelayNanoseconds: UInt64 {
+        switch self {
+        case .contentMutation:
+            return 450_000_000
+        case .viewportChange:
+            return 900_000_000
+        case .inkChange:
+            return 1_000_000_000
+        case .explicitSave:
+            return 120_000_000
+        }
+    }
+}
+
 @MainActor
 final class CanvasToolController: ObservableObject {
     @Published private(set) var currentTool: CanvasResolvedTool = .pen
@@ -446,6 +466,19 @@ struct DeleteCanvasObjectAction: CanvasCommand {
     }
 }
 
+struct DeleteCanvasObjectsAction: CanvasCommand {
+    let elements: [CanvasElement]
+    var label: String { "DeleteCanvasObjectsAction" }
+
+    func execute(in vm: NoteWorkspaceViewModel) {
+        elements.forEach { vm.applyDeleteCanvasElement(id: $0.id) }
+    }
+
+    func undo(in vm: NoteWorkspaceViewModel) {
+        elements.forEach { vm.applyUpsertCanvasElement($0) }
+    }
+}
+
 struct MoveCanvasObjectAction: CanvasCommand {
     let objectID: UUID
     let fromFrame: CGRect
@@ -503,6 +536,22 @@ struct ReorderCanvasObjectAction: CanvasCommand {
 
     func undo(in vm: NoteWorkspaceViewModel) {
         vm.applyCanvasElementZIndex(id: objectID, zIndex: fromZIndex)
+    }
+}
+
+struct BatchUpdateCanvasObjectsAction: CanvasCommand {
+    let title: String
+    let before: [CanvasElement]
+    let after: [CanvasElement]
+
+    var label: String { title }
+
+    func execute(in vm: NoteWorkspaceViewModel) {
+        after.forEach { vm.applyReplaceCanvasElement($0) }
+    }
+
+    func undo(in vm: NoteWorkspaceViewModel) {
+        before.forEach { vm.applyReplaceCanvasElement($0) }
     }
 }
 
@@ -582,6 +631,8 @@ final class NoteWorkspaceViewModel: ObservableObject {
     let viewportController: CanvasViewportController
     let historyController = CanvasHistoryController()
 
+    private weak var persistenceAppViewModel: AppViewModel?
+    private weak var persistenceInkActionBridge: InkActionBridge?
     private var autosaveTask: Task<Void, Never>?
 
     init(note: Note) {
@@ -626,6 +677,44 @@ final class NoteWorkspaceViewModel: ObservableObject {
             return "保存中"
         }
         return isDirty ? "未保存" : "已保存"
+    }
+
+    var canvasSelectionSummary: String {
+        let count = selectionController.selectedObjectIDs.count
+        let kindLabel = selectionController.selectionKind?.label ?? "未选中对象"
+        guard count > 0 else { return kindLabel }
+        if count == 1, let primary = primarySelectedCanvasElement {
+            let frame = primary.effectiveFrame.integral
+            return "\(kindLabel) · \(Int(frame.width))×\(Int(frame.height))"
+        }
+        return "\(kindLabel) · \(count) 个对象"
+    }
+
+    var viewportStatusText: String {
+        let mode: String
+        switch viewportController.state.fitMode {
+        case .fitWidth:
+            mode = "适宽"
+        case .fitPage:
+            mode = "整页"
+        case .free:
+            mode = "自由"
+        }
+        return "\(viewportController.zoomHUDLabel) · \(mode)"
+    }
+
+    var selectedCanvasElements: [CanvasElement] {
+        selectionController.selectedObjectIDs.compactMap { id in
+            canvasElement(with: id)
+        }
+    }
+
+    var primarySelectionIsLocked: Bool {
+        primarySelectedCanvasElement?.metadata.isLocked ?? false
+    }
+
+    var primarySelectionIsVisible: Bool {
+        primarySelectedCanvasElement?.metadata.isVisible ?? true
     }
 
     var paperConfiguration: NotePaperConfiguration {
@@ -707,6 +796,17 @@ final class NoteWorkspaceViewModel: ObservableObject {
         }
     }
 
+    func bindPersistence(using appViewModel: AppViewModel, inkActionBridge: InkActionBridge? = nil) {
+        persistenceAppViewModel = appViewModel
+        persistenceInkActionBridge = inkActionBridge
+    }
+
+    func unbindPersistence() {
+        autosaveTask?.cancel()
+        persistenceAppViewModel = nil
+        persistenceInkActionBridge = nil
+    }
+
     func updateTitle(_ newValue: String) {
         title = newValue
         markDirty()
@@ -765,7 +865,7 @@ final class NoteWorkspaceViewModel: ObservableObject {
 
     /// Mark as dirty without triggering redundant body re-renders.
     func markInkDirty() {
-        if !isDirty { isDirty = true }
+        markDirty(reason: .inkChange)
     }
 
     func addTextBlock() {
@@ -1129,6 +1229,96 @@ final class NoteWorkspaceViewModel: ObservableObject {
         )
     }
 
+    func toggleSelectedObjectsLock() {
+        let selected = selectedCanvasElements
+        guard !selected.isEmpty else { return }
+        let shouldLock = selected.contains { !$0.metadata.isLocked }
+        let updated = selected.map { element in
+            element.withMetadata { metadata in
+                metadata.isLocked = shouldLock
+            }
+        }
+        historyController.perform(
+            BatchUpdateCanvasObjectsAction(
+                title: shouldLock ? "LockCanvasObjects" : "UnlockCanvasObjects",
+                before: selected,
+                after: updated
+            ),
+            in: self
+        )
+    }
+
+    func toggleSelectedObjectsVisibility() {
+        let selected = selectedCanvasElements
+        guard !selected.isEmpty else { return }
+        let shouldShow = selected.contains { !$0.metadata.isVisible }
+        let updated = selected.map { element in
+            element.withMetadata { metadata in
+                metadata.isVisible = shouldShow
+            }
+        }
+        historyController.perform(
+            BatchUpdateCanvasObjectsAction(
+                title: shouldShow ? "ShowCanvasObjects" : "HideCanvasObjects",
+                before: selected,
+                after: updated
+            ),
+            in: self
+        )
+        if shouldShow {
+            selectionController.refreshSelection(from: canvasObjectElements)
+        } else {
+            selectionController.clear()
+        }
+    }
+
+    func bringSelectedObjectsToFront() {
+        let selected = selectedCanvasElements.sorted { $0.resolvedZIndex < $1.resolvedZIndex }
+        guard !selected.isEmpty else { return }
+        var nextZ = (canvasObjectElements.map(\.resolvedZIndex).max() ?? -1) + 1
+        let updated = selected.map { element in
+            defer { nextZ += 1 }
+            return element.withMetadata { metadata in
+                metadata.zIndex = nextZ
+            }
+        }
+        historyController.perform(
+            BatchUpdateCanvasObjectsAction(
+                title: "BringCanvasObjectsToFront",
+                before: selected,
+                after: updated
+            ),
+            in: self
+        )
+    }
+
+    func sendSelectedObjectsToBack() {
+        let selected = selectedCanvasElements.sorted { $0.resolvedZIndex < $1.resolvedZIndex }
+        guard !selected.isEmpty else { return }
+        var nextZ = (canvasObjectElements.map(\.resolvedZIndex).min() ?? 0) - selected.count
+        let updated = selected.map { element in
+            defer { nextZ += 1 }
+            return element.withMetadata { metadata in
+                metadata.zIndex = nextZ
+            }
+        }
+        historyController.perform(
+            BatchUpdateCanvasObjectsAction(
+                title: "SendCanvasObjectsToBack",
+                before: selected,
+                after: updated
+            ),
+            in: self
+        )
+    }
+
+    func deleteSelectedCanvasObjects() {
+        let selected = selectedCanvasElements
+        guard !selected.isEmpty else { return }
+        historyController.perform(DeleteCanvasObjectsAction(elements: selected), in: self)
+        selectionController.clear()
+    }
+
     func updatePaperStyle(_ style: NotePaperStyle) {
         var next = paperConfiguration
         next.style = style
@@ -1235,16 +1425,24 @@ final class NoteWorkspaceViewModel: ObservableObject {
         bridge: InkActionBridge? = nil,
         delayNanoseconds: UInt64 = 1_200_000_000
     ) {
-        autosaveTask?.cancel()
-        autosaveTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: delayNanoseconds)
-            guard !Task.isCancelled, let self else { return }
-            if let bridge {
-                self.syncInkFromBridge(bridge)
-            }
-            guard self.isDirty else { return }
-            _ = self.save(using: appViewModel)
-        }
+        bindPersistence(using: appViewModel, inkActionBridge: bridge)
+        requestAutosave(reason: .contentMutation, delayNanoseconds: delayNanoseconds)
+    }
+
+    func noteViewportDidChange() {
+        requestAutosave(reason: .viewportChange)
+    }
+
+    func undoLastChange() {
+        historyController.undo(in: self)
+        selectionController.refreshSelection(from: canvasObjectElements)
+        markDirty(reason: .explicitSave, autosaveDelayNanoseconds: CanvasAutosaveReason.explicitSave.defaultDelayNanoseconds)
+    }
+
+    func redoLastChange() {
+        historyController.redo(in: self)
+        selectionController.refreshSelection(from: canvasObjectElements)
+        markDirty(reason: .explicitSave, autosaveDelayNanoseconds: CanvasAutosaveReason.explicitSave.defaultDelayNanoseconds)
     }
 
     func syncCanvasTool(workspaceTool: WorkspaceTool, inkState: NoteInkToolState) {
@@ -1378,8 +1576,12 @@ final class NoteWorkspaceViewModel: ObservableObject {
         return blocks.first?.id
     }
 
-    fileprivate func markDirty() {
+    fileprivate func markDirty(
+        reason: CanvasAutosaveReason = .contentMutation,
+        autosaveDelayNanoseconds: UInt64? = nil
+    ) {
         if !isDirty { isDirty = true }
+        requestAutosave(reason: reason, delayNanoseconds: autosaveDelayNanoseconds)
     }
 
     fileprivate func canvasElement(with id: UUID) -> CanvasElement? {
@@ -1656,5 +1858,21 @@ final class NoteWorkspaceViewModel: ObservableObject {
             pathNodes: pathNodes,
             nearbyNodes: nearby
         )
+    }
+
+    private func requestAutosave(reason: CanvasAutosaveReason, delayNanoseconds: UInt64? = nil) {
+        guard persistenceAppViewModel != nil else { return }
+        autosaveTask?.cancel()
+        let delay = delayNanoseconds ?? reason.defaultDelayNanoseconds
+        autosaveTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: delay)
+            guard let self, !Task.isCancelled else { return }
+            guard let appViewModel = self.persistenceAppViewModel else { return }
+            if let bridge = self.persistenceInkActionBridge {
+                self.syncInkFromBridge(bridge)
+            }
+            guard self.isDirty else { return }
+            _ = self.save(using: appViewModel)
+        }
     }
 }

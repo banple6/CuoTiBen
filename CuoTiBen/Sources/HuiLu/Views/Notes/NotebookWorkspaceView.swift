@@ -387,6 +387,40 @@ struct NotebookWorkspaceView: View {
 
                 // ── Right: reference toggle + close ──
                 HStack(spacing: 10) {
+                    if let noteVM {
+                        canvasStatusChip(noteVM)
+
+                        Button {
+                            noteVM.undoLastChange()
+                        } label: {
+                            Image(systemName: "arrow.uturn.backward")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(noteVM.historyController.canUndo ? WS.primary : WS.outline.opacity(0.35))
+                                .frame(width: 28, height: 28)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                        .fill(noteVM.historyController.canUndo ? WS.secondaryContainer.opacity(0.22) : WS.surfaceContainerHigh.opacity(0.35))
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!noteVM.historyController.canUndo)
+
+                        Button {
+                            noteVM.redoLastChange()
+                        } label: {
+                            Image(systemName: "arrow.uturn.forward")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(noteVM.historyController.canRedo ? WS.primary : WS.outline.opacity(0.35))
+                                .frame(width: 28, height: 28)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                        .fill(noteVM.historyController.canRedo ? WS.secondaryContainer.opacity(0.22) : WS.surfaceContainerHigh.opacity(0.35))
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!noteVM.historyController.canRedo)
+                    }
+
                     Button {
                         withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
                             referencePanelOpen.toggle()
@@ -554,6 +588,12 @@ struct NotebookWorkspaceView: View {
             // Text object inspector — for free-form canvas text objects
             else if case .textObject(let objID) = editorSelection {
                 textObjectInspectorStrip(objectID: objID)
+            }
+            else if let noteVM,
+                    let selectionKind = noteVM.selectionController.selectionKind,
+                    selectionKind != .inkSelection,
+                    !noteVM.selectionController.selectedObjectIDs.isEmpty {
+                objectInspectorStrip(vm: noteVM)
             }
             // Default dim text inspector when no text is selected
             else {
@@ -943,6 +983,99 @@ struct NotebookWorkspaceView: View {
             .padding(.horizontal, 3)
     }
 
+    private func canvasStatusChip(_ vm: NoteWorkspaceViewModel) -> some View {
+        VStack(alignment: .trailing, spacing: 2) {
+            Text(vm.viewportStatusText)
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(WS.primary.opacity(0.88))
+            if !vm.selectionController.selectedObjectIDs.isEmpty {
+                Text(vm.canvasSelectionSummary)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(WS.outline.opacity(0.72))
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(WS.surfaceContainerHigh.opacity(0.48))
+        )
+    }
+
+    private func objectInspectorStrip(vm: NoteWorkspaceViewModel) -> some View {
+        HStack(spacing: 0) {
+            Text(vm.canvasSelectionSummary)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(WS.primary.opacity(0.9))
+                .padding(.horizontal, 10)
+                .frame(height: 30)
+
+            inspectorDivider
+
+            Button {
+                vm.toggleSelectedObjectsLock()
+            } label: {
+                Image(systemName: vm.primarySelectionIsLocked ? "lock.fill" : "lock.open")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(WS.onSurface.opacity(0.72))
+                    .frame(width: 30, height: 28)
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                vm.toggleSelectedObjectsVisibility()
+            } label: {
+                Image(systemName: vm.primarySelectionIsVisible ? "eye" : "eye.slash")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(WS.onSurface.opacity(0.72))
+                    .frame(width: 30, height: 28)
+            }
+            .buttonStyle(.plain)
+
+            inspectorDivider
+
+            Button {
+                vm.sendSelectedObjectsToBack()
+            } label: {
+                Image(systemName: "square.3.layers.3d.bottom.filled")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(WS.primary.opacity(0.75))
+                    .frame(width: 30, height: 28)
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                vm.bringSelectedObjectsToFront()
+            } label: {
+                Image(systemName: "square.3.layers.3d.top.filled")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(WS.primary.opacity(0.75))
+                    .frame(width: 30, height: 28)
+            }
+            .buttonStyle(.plain)
+
+            inspectorDivider
+
+            Button(role: .destructive) {
+                vm.deleteSelectedCanvasObjects()
+                editorSelection = .none
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(WS.error.opacity(0.8))
+                    .frame(width: 30, height: 28)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(
+            Capsule(style: .continuous)
+                .fill(WS.surfaceContainerHigh.opacity(0.5))
+        )
+    }
+
     // ── Style helpers ──
 
     /// Applies a single text style axis change, keeping other axes as-is.
@@ -1210,12 +1343,22 @@ struct NotebookWorkspaceView: View {
     @ViewBuilder
     private var referencePanelView: some View {
         if let note = selectedNote {
-            ReferencePanelHost(
-                note: note,
-                appViewModel: appViewModel,
-                activeTab: $referencePanelActiveTab
-            )
-            .id(note.id)
+            if let noteVM {
+                ReferencePanel(
+                    vm: noteVM,
+                    appViewModel: appViewModel,
+                    onOpenSource: { _ in },
+                    activeTab: $referencePanelActiveTab
+                )
+                .id(note.id)
+            } else {
+                ReferencePanelHost(
+                    note: note,
+                    appViewModel: appViewModel,
+                    activeTab: $referencePanelActiveTab
+                )
+                .id(note.id)
+            }
         } else {
             EmptyView()
         }
@@ -1337,12 +1480,14 @@ private struct NotebookPageCanvasHost: View {
         )
         .onAppear {
             vm.reload(using: appViewModel)
+            vm.bindPersistence(using: appViewModel, inkActionBridge: inkActionBridge)
             vm.syncCanvasTool(workspaceTool: activeTool, inkState: inkToolState)
             vm.syncCanvasSelection(editorSelection)
             activeVM = vm
         }
         .onDisappear {
             onDisappearHandler(vm)
+            vm.unbindPersistence()
             activeVM = nil
         }
     }
