@@ -46,26 +46,26 @@ function buildAnalyzePassagePrompt({ title, paragraphs, keySentences }) {
     "JSON 必须包含三个顶层字段：passage_overview、paragraph_cards、sentence_analyses。",
     "",
     "一、passage_overview 对象：",
-    "  article_theme：用中文一段话概括文章真正在谈什么，不要描述格式。",
-    "  author_core_question：用中文一句话说清作者真正在回答什么问题。",
-    "  progression_path：用中文描述从第1段到最后一段，作者的论证推进路线。",
-    "  syntax_highlights：字符串数组，最值得关注的 3-5 个句法结构。",
+    "  article_theme：像课堂讲义里的总标题说明，用中文一段话点明文章真正讨论的问题，不要写成'文章主要讲了什么'。",
+    "  author_core_question：用中文一句话说清作者真正追问的问题，要像老师在黑板上写出的核心问题。",
+    "  progression_path：用中文描述从第1段到最后一段，作者怎样一步步推进判断。推荐使用“先……→再……→最后……”这种讲义式表达。",
+    "  syntax_highlights：字符串数组，最值得关注的 3-5 个句法结构。每项都要写出“结构｜为什么值得学｜最容易挂错哪里”。",
     "  likely_question_types：字符串数组，最容易出的 3-5 类题。每项必须像“主旨题：最后一段如何收束前文判断”这种具体表达。",
-    "  logic_pitfalls：字符串数组，学生最容易错的 3-5 个逻辑点。要写清是范围、让步、因果、指代还是态度读偏。",
-    "  paragraph_function_map：字符串数组，每项 '第X段｜角色｜一句话功能'。",
+    "  logic_pitfalls：字符串数组，学生最容易错的 3-5 个逻辑点。要写清是范围、让步、因果、指代还是态度读偏，并指出会错在哪里。",
+    "  paragraph_function_map：字符串数组，每项 '第X段｜角色｜一句话功能'。语气要像老师带着学生看结构图。",
     "  reading_traps：字符串数组，学生最容易误读的 3-5 个点。",
     "  vocabulary_highlights：字符串数组，最值得学习的 5-8 个词汇/搭配。",
     "",
     "二、paragraph_cards 数组（每段一项）：",
     "  paragraph_index：段落编号（从0开始）。",
-    "  theme：中文，本段到底在说什么（不能是'本段主要讲了...'式的废话）。",
+    "  theme：中文，本段真正要立住的判断或说明点。不能是'本段主要讲了...'式的废话，要像讲义里的段落主旨。",
     "  argument_role：必须为以下之一：background / support / objection / transition / evidence / conclusion。",
     "  core_sentence_local_index：段内最关键的一句话的序号（从0开始）。",
     "  keywords：5个本段最重要的英语关键词或短语。",
-    "  relation_to_previous：中文，本段和上一段之间的逻辑关系，不要说'承接上文'这类空话。",
-    "  exam_value：中文，说清这段内容在阅读理解考试中最可能对应什么题型和什么陷阱。",
-    "  teaching_focuses：字符串数组，2-3个具体教学动作。每条都必须体现“先读哪层 / 为什么重要 / 学生会怎么错”。",
-    "  student_blind_spot：中文一句话，学生最容易在本段读偏的点。",
+    "  relation_to_previous：中文，本段和上一段之间的逻辑关系，不要说'承接上文'这类空话，要写清上一段做了什么、这一段怎么接或怎么转。",
+    "  exam_value：中文，说清这段内容在阅读理解考试中最可能对应什么题型、命题人会抓哪层信息、学生最容易掉进什么陷阱。",
+    "  teaching_focuses：字符串数组，2-3个具体教学动作。每条都必须体现“先读哪层 / 为什么重要 / 学生会怎么错”，像老师课堂提示。",
+    "  student_blind_spot：中文一句话，学生最容易在本段读偏的点。要写成能直接提醒学生的讲义批注。",
     "",
     "三、sentence_analyses 数组（每个关键句一项）：",
     "  sentence_ref：对应输入的 [S_X_Y] 编号。",
@@ -94,8 +94,9 @@ function buildAnalyzePassagePrompt({ title, paragraphs, keySentences }) {
     "6. chunk_layers 不能只按逗号切，要按语义关系切，而且至少有一项标为“核心信息”。",
     "7. grammar_focus 的解释不能只给术语名称，必须说清在本句中的具体作用。",
     "8. teaching_focuses 不能是抽象建议（如'注意语法'），必须是具体的教学行动。",
-    "9. 所有中文解释口吻：严谨但平易的英语教授。",
-    "10. 如果信息不足，返回空字符串或空数组，不能删字段。"
+    "9. passage_overview 和 paragraph_cards 的口吻必须像课堂讲义，不像摘要器或题解答案。",
+    "10. 所有中文解释口吻：严谨但平易的英语教授。",
+    "11. 如果信息不足，返回空字符串或空数组，不能删字段。"
   ].join("\n");
 }
 
@@ -105,6 +106,48 @@ function normalizeArray(value) {
 
 function normalizeString(value, fallback = "") {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function isChineseDominantText(text) {
+  if (!text || typeof text !== "string") return false;
+  const chineseMatches = text.match(/[\u4e00-\u9fff]/g) || [];
+  const latinMatches = text.match(/[A-Za-z]/g) || [];
+  if (chineseMatches.length === 0) return false;
+  return chineseMatches.length >= Math.max(3, latinMatches.length * 0.55);
+}
+
+function extractChineseDominantClauses(text) {
+  if (!text || typeof text !== "string") return [];
+  return text
+    .split(/[；;。！？!?]\s*/g)
+    .map((clause) => clause.trim())
+    .filter((clause) => clause.length >= 4 && isChineseDominantText(clause));
+}
+
+function purifyChineseExplanation(text) {
+  const normalized = normalizeString(text);
+  if (!normalized) return "";
+  if (isChineseDominantText(normalized)) return normalized;
+
+  const clauses = extractChineseDominantClauses(normalized);
+  if (clauses.length > 0) {
+    return clauses.join("；");
+  }
+
+  return normalized;
+}
+
+function purifyChineseDisplayText(text) {
+  return purifyChineseExplanation(text)
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function purifyChineseList(values, limit = 4) {
+  return normalizeArray(values)
+    .map((item) => purifyChineseDisplayText(String(item)))
+    .filter(Boolean)
+    .slice(0, limit);
 }
 
 function firstDefined(raw, keys) {
@@ -234,8 +277,8 @@ function normalizeGrammarFocus(raw, fallbackPoints) {
     ? raw
       .map((item) => ({
         phenomenon: normalizeString(item?.phenomenon),
-        function: normalizeString(item?.function),
-        why_it_matters: normalizeString(firstDefined(item, ["why_it_matters", "whyItMatters"]))
+        function: purifyChineseDisplayText(item?.function),
+        why_it_matters: purifyChineseDisplayText(firstDefined(item, ["why_it_matters", "whyItMatters"]))
       }))
       .filter((item) => item.phenomenon || item.function || item.why_it_matters)
     : [];
@@ -247,7 +290,7 @@ function normalizeGrammarFocus(raw, fallbackPoints) {
   return normalizeArray(fallbackPoints)
     .map((item) => ({
       phenomenon: normalizeString(item?.name),
-      function: normalizeString(item?.explanation),
+      function: purifyChineseDisplayText(item?.explanation),
       why_it_matters: "这个结构一旦挂错范围或修饰对象，整句主干就会被带偏。"
     }))
     .filter((item) => item.phenomenon || item.function)
@@ -269,14 +312,14 @@ function normalizePassageOverview(raw) {
     };
   }
   return {
-    article_theme: normalizeString(raw.article_theme),
-    author_core_question: normalizeString(raw.author_core_question),
-    progression_path: normalizeString(raw.progression_path),
-    likely_question_types: normalizeArray(raw.likely_question_types).map(String).filter(Boolean),
-    logic_pitfalls: normalizeArray(raw.logic_pitfalls).map(String).filter(Boolean),
-    paragraph_function_map: normalizeArray(raw.paragraph_function_map).map(String),
-    syntax_highlights: normalizeArray(raw.syntax_highlights).map(String),
-    reading_traps: normalizeArray(raw.reading_traps).map(String),
+    article_theme: purifyChineseExplanation(raw.article_theme),
+    author_core_question: purifyChineseDisplayText(raw.author_core_question),
+    progression_path: purifyChineseExplanation(raw.progression_path),
+    likely_question_types: purifyChineseList(raw.likely_question_types, 5),
+    logic_pitfalls: purifyChineseList(raw.logic_pitfalls, 5),
+    paragraph_function_map: purifyChineseList(raw.paragraph_function_map, 8),
+    syntax_highlights: purifyChineseList(raw.syntax_highlights, 5),
+    reading_traps: purifyChineseList(raw.reading_traps, 5),
     vocabulary_highlights: normalizeArray(raw.vocabulary_highlights).map(String)
   };
 }
@@ -287,14 +330,14 @@ function normalizeParagraphCard(raw) {
   const role = validRoles.includes(raw.argument_role) ? raw.argument_role : "support";
   return {
     paragraph_index: typeof raw.paragraph_index === "number" ? raw.paragraph_index : 0,
-    theme: normalizeString(raw.theme),
+    theme: purifyChineseExplanation(raw.theme),
     argument_role: role,
     core_sentence_local_index: typeof raw.core_sentence_local_index === "number" ? raw.core_sentence_local_index : 0,
     keywords: normalizeArray(raw.keywords).map(String).filter(Boolean).slice(0, 8),
-    relation_to_previous: normalizeString(raw.relation_to_previous),
-    exam_value: normalizeString(raw.exam_value),
-    teaching_focuses: normalizeArray(raw.teaching_focuses).map(String).filter(Boolean).slice(0, 4),
-    student_blind_spot: normalizeString(raw.student_blind_spot)
+    relation_to_previous: purifyChineseDisplayText(raw.relation_to_previous),
+    exam_value: purifyChineseExplanation(raw.exam_value),
+    teaching_focuses: purifyChineseList(raw.teaching_focuses, 4),
+    student_blind_spot: purifyChineseDisplayText(raw.student_blind_spot)
   };
 }
 
@@ -320,14 +363,18 @@ function normalizeSentenceAnalysis(raw, sourceSentence) {
   const coreSkeleton = normalizeCoreSkeleton(firstDefined(raw, ["core_skeleton"]), normalizeString(raw.sentence_core));
   const chunkLayers = normalizeChunkLayers(firstDefined(raw, ["chunk_layers"]), rawChunkBreakdown);
   const grammarFocus = normalizeGrammarFocus(firstDefined(raw, ["grammar_focus"]), rawGrammarPoints);
-  const sentenceFunction = normalizeString(raw.sentence_function, buildSentenceFunctionFromEvidenceType(evidenceType));
-  const misreadingTraps = normalizeArray(rawMisread).map(String).filter(Boolean).slice(0, 3);
-  const examParaphraseRoutes = normalizeArray(rawRewrite).map(String).filter(Boolean).slice(0, 3);
+  const sentenceFunction = purifyChineseDisplayText(
+    normalizeString(raw.sentence_function, buildSentenceFunctionFromEvidenceType(evidenceType))
+  );
+  const misreadingTraps = purifyChineseList(rawMisread, 3);
+  const examParaphraseRoutes = purifyChineseList(rawRewrite, 3);
   const simplerRewrite = normalizeString(rawSimplerRewrite);
-  const simplerRewriteTranslation = normalizeString(rawSimplerRewriteTranslation);
-  const faithfulTranslation = normalizeString(rawFaithfulTranslation);
-  const teachingInterpretation = normalizeString(rawTeachingInterpretation, faithfulTranslation);
-  const miniCheck = normalizeString(firstDefined(raw, ["mini_check", "mini_exercise"]));
+  const simplerRewriteTranslation = purifyChineseExplanation(rawSimplerRewriteTranslation);
+  const faithfulTranslation = purifyChineseExplanation(rawFaithfulTranslation);
+  const teachingInterpretation = purifyChineseExplanation(
+    normalizeString(rawTeachingInterpretation, faithfulTranslation)
+  );
+  const miniCheck = purifyChineseDisplayText(firstDefined(raw, ["mini_check", "mini_exercise"]));
   const derivedChunkBreakdown = chunkLayers
     .map((item) => {
       const role = item.role || "语块";
@@ -357,7 +404,7 @@ function normalizeSentenceAnalysis(raw, sourceSentence) {
     vocabulary_in_context: normalizeArray(rawVocabulary)
       .map((item) => ({
         term: normalizeString(item?.term),
-        meaning: normalizeString(item?.meaning)
+        meaning: purifyChineseExplanation(item?.meaning)
       }))
       .filter((item) => item.term)
       .slice(0, 6),
@@ -396,11 +443,17 @@ function validateAnalysisQuality(result) {
   if (!result.passage_overview?.article_theme || result.passage_overview.article_theme.includes("文章主要讲了")) {
     warnings.push("passage_overview.article_theme 太空");
   }
+  if (result.passage_overview?.article_theme && !isChineseDominantText(result.passage_overview.article_theme)) {
+    warnings.push("passage_overview.article_theme 中文纯度不足");
+  }
   if (!result.passage_overview?.author_core_question || result.passage_overview.author_core_question.includes("作者真正要回答的问题可以概括为")) {
     warnings.push("passage_overview.author_core_question 太模板化");
   }
   if (!result.passage_overview?.progression_path || result.passage_overview.progression_path.length < 12) {
     warnings.push("passage_overview.progression_path 不够具体");
+  }
+  if (result.passage_overview?.progression_path && !result.passage_overview.progression_path.includes("→") && !(result.passage_overview.progression_path.includes("先") && result.passage_overview.progression_path.includes("再"))) {
+    warnings.push("passage_overview.progression_path 不像讲义式推进路径");
   }
   if ((result.passage_overview?.likely_question_types || []).length < 2) {
     warnings.push("passage_overview.likely_question_types 太弱");
@@ -414,6 +467,12 @@ function validateAnalysisQuality(result) {
       if (!card.theme || card.theme.includes("本段主要讲") || card.theme.includes("承担")) {
         warnings.push(`[P${card.paragraph_index}] theme 太空`);
       }
+      if (card.theme && !isChineseDominantText(card.theme)) {
+        warnings.push(`[P${card.paragraph_index}] theme 中文纯度不足`);
+      }
+      if (card.theme && !(card.theme.includes("真正") || card.theme.includes("关键") || card.theme.includes("核心") || card.theme.includes("要立住"))) {
+        warnings.push(`[P${card.paragraph_index}] theme 讲义感不足`);
+      }
       if (!card.relation_to_previous || card.relation_to_previous === "承接上文") {
         warnings.push(`[P${card.paragraph_index}] relation_to_previous 太空`);
       }
@@ -422,6 +481,9 @@ function validateAnalysisQuality(result) {
       }
       if ((card.teaching_focuses || []).length === 0) {
         warnings.push(`[P${card.paragraph_index}] teaching_focuses 缺失`);
+      }
+      if ((card.teaching_focuses || []).some((item) => !item.includes("先") && !item.includes("别") && !item.includes("容易"))) {
+        warnings.push(`[P${card.paragraph_index}] teaching_focuses 讲义感不足`);
       }
       if (!card.student_blind_spot || card.student_blind_spot.length < 10) {
         warnings.push(`[P${card.paragraph_index}] student_blind_spot 太弱`);
@@ -437,8 +499,14 @@ function validateAnalysisQuality(result) {
       if (!sa.faithful_translation || sa.faithful_translation.includes("真正要") || sa.faithful_translation.includes("重点在")) {
         warnings.push(`[${sa.sentence_ref}] faithful_translation 不像忠实翻译`);
       }
+      if (sa.faithful_translation && !isChineseDominantText(sa.faithful_translation)) {
+        warnings.push(`[${sa.sentence_ref}] faithful_translation 中文纯度不足`);
+      }
       if (!sa.teaching_interpretation || sa.teaching_interpretation.length < 10) {
         warnings.push(`[${sa.sentence_ref}] teaching_interpretation 太弱`);
+      }
+      if (sa.teaching_interpretation && !isChineseDominantText(sa.teaching_interpretation)) {
+        warnings.push(`[${sa.sentence_ref}] teaching_interpretation 中文纯度不足`);
       }
       if (isShallowSentenceCore(sa.sentence_core)) {
         warnings.push(`[${sa.sentence_ref}] sentence_core 太浅: "${sa.sentence_core?.slice(0, 40)}"`);
@@ -478,7 +546,7 @@ function buildAnalyzePassageRepairPrompt({ title, paragraphs, keySentences, prev
     "1. paragraph_cards.theme 不要写成“本段主要讲了什么”或“第X段承担什么作用”。",
     "2. relation_to_previous 和 exam_value 必须具体到逻辑推进和考试题型，不能只写泛泛判断。",
     "3. teaching_focuses 必须写成具体教学动作，而不是抽象建议。",
-    "4. passage_overview 必须像老师带读整篇文章，而不是做摘要；likely_question_types 和 logic_pitfalls 不能空。",
+    "4. passage_overview 必须像老师带读整篇文章，而不是做摘要；progression_path 要像讲义里的推进图，likely_question_types 和 logic_pitfalls 不能空。",
     "5. faithful_translation 必须是忠实翻译，不能混入“真正要你抓”这类教学评论；teaching_interpretation 才负责老师口吻。",
     "6. sentence_function 必须明确说明这句在论证中做什么；core_skeleton 必须指出主语、谓语、核心宾补。",
     "7. evidence_type 不能漏；chunk_layers 至少有一项 role 是“核心信息”，并说明 attaches_to。",

@@ -269,9 +269,8 @@ function normalizeExplainResult(raw, sourceSentence, paragraph_role = "") {
   const rawFaithfulTranslation = firstDefined(raw, ["faithful_translation", "translation", "natural_chinese_meaning"]);
   const rawTeachingInterpretation = firstDefined(raw, ["teaching_interpretation", "natural_chinese_meaning", "translation"]);
   const evidenceType = normalizeEvidenceType(rawEvidenceType, inferEvidenceTypeFromParagraphRole(paragraph_role));
-  const sentenceFunction = typeof raw.sentence_function === "string" && raw.sentence_function.trim()
-    ? raw.sentence_function.trim()
-    : buildSentenceFunctionFromEvidenceType(evidenceType);
+  const sentenceFunction = purifyChineseDisplayText(raw.sentence_function)
+    || buildSentenceFunctionFromEvidenceType(evidenceType);
   const coreSkeleton = normalizeCoreSkeleton(firstDefined(raw, ["core_skeleton"]), sourceSentence);
   const chunkLayers = normalizeChunkLayers(firstDefined(raw, ["chunk_layers"]), sourceSentence);
   const grammarFocus = normalizeGrammarFocus(firstDefined(raw, ["grammar_focus"]), sourceSentence);
@@ -303,21 +302,22 @@ function normalizeExplainResult(raw, sourceSentence, paragraph_role = "") {
   const vocabularyInContext = normalizeArray(rawVocabulary)
     .map((item) => ({
       term: typeof item?.term === "string" ? item.term.trim() : "",
-      meaning: typeof item?.meaning === "string" ? item.meaning.trim() : ""
+      meaning: purifyChineseExplanation(typeof item?.meaning === "string" ? item.meaning.trim() : "")
     }))
     .filter((item) => item.term || item.meaning);
-  const misreadingTraps = normalizeArray(rawMisread)
+  const rawMisreadingTraps = normalizeArray(rawMisread)
     .map((item) => typeof item === "string" ? item.trim() : "")
     .filter(Boolean);
-  const examParaphraseRoutes = normalizeArray(rawRewritePoints)
+  const rawExamParaphraseRoutes = normalizeArray(rawRewritePoints)
     .map((item) => typeof item === "string" ? item.trim() : "")
     .filter(Boolean);
-  const faithfulTranslation = typeof rawFaithfulTranslation === "string" ? rawFaithfulTranslation.trim() : "";
-  const teachingInterpretation = typeof rawTeachingInterpretation === "string" ? rawTeachingInterpretation.trim() : "";
+  const misreadingTraps = purifyChineseList(rawMisreadingTraps, 4);
+  const examParaphraseRoutes = purifyChineseList(rawExamParaphraseRoutes, 4);
+  const faithfulTranslation = purifyChineseExplanation(rawFaithfulTranslation);
+  const teachingInterpretation = purifyChineseExplanation(rawTeachingInterpretation);
   const simplerRewrite = typeof rawSimplerRewrite === "string" ? rawSimplerRewrite.trim() : "";
-  const simplerRewriteTranslation = typeof rawSimplerRewriteTranslation === "string"
-    ? rawSimplerRewriteTranslation.trim()
-    : buildRewriteTranslationExplanation({
+  const simplerRewriteTranslation = purifyChineseExplanation(rawSimplerRewriteTranslation)
+    || buildRewriteTranslationExplanation({
       simplerRewrite,
       faithfulTranslation,
       coreSkeleton,
@@ -403,6 +403,67 @@ function isChineseDominantText(text) {
 
   if (chineseCount === 0) return false;
   return chineseCount >= Math.max(8, latinCount * 2);
+}
+
+function extractChineseDominantClauses(text) {
+  const normalized = typeof text === "string" ? text.trim() : "";
+  if (!normalized) return [];
+
+  return normalized
+    .split(/\n+/)
+    .flatMap((line) => line.split(/[。！？；]/))
+    .map((item) => item.trim())
+    .filter((item) => {
+      if (!item) return false;
+      const chineseCount = (item.match(/[\u4e00-\u9fff]/g) || []).length;
+      const latinCount = (item.match(/[A-Za-z]/g) || []).length;
+      return chineseCount >= 8 && chineseCount > latinCount;
+    });
+}
+
+function purifyChineseExplanation(text) {
+  const normalized = typeof text === "string" ? text.trim() : "";
+  if (!normalized) return "";
+  if (isChineseDominantText(normalized)) return normalized;
+
+  const recovered = extractChineseDominantClauses(normalized);
+  return recovered.length > 0 ? recovered.join("。") : "";
+}
+
+function purifyChineseDisplayText(text) {
+  const normalized = typeof text === "string" ? text.trim() : "";
+  if (!normalized) return "";
+
+  const rangeIndex = normalized.indexOf("：") >= 0
+    ? normalized.indexOf("：")
+    : normalized.indexOf(":");
+
+  if (rangeIndex > 0) {
+    const head = normalized.slice(0, rangeIndex).trim();
+    const body = purifyChineseExplanation(normalized.slice(rangeIndex + 1));
+    if (body) {
+      return `${head}：${body}`;
+    }
+  }
+
+  return purifyChineseExplanation(normalized);
+}
+
+function purifyChineseList(values, limit = 4) {
+  const ordered = [];
+  const seen = new Set();
+
+  for (const value of Array.isArray(values) ? values : []) {
+    const normalized = purifyChineseDisplayText(String(value || ""));
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    ordered.push(normalized);
+    if (ordered.length >= limit) break;
+  }
+
+  return ordered;
 }
 
 const explainStopwords = new Set([

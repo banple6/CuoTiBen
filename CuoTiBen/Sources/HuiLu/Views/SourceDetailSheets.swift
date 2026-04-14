@@ -1394,6 +1394,22 @@ struct ProfessorTeachingStatusHeader: View {
     let snapshot: ProfessorTeachingStatusSnapshot
     var compact: Bool = false
 
+    private var displayedSentenceFunction: String {
+        conciseTeachingHeaderText(snapshot.currentSentenceFunction, maxLength: compact ? 54 : 92)
+    }
+
+    private var displayedTeachingFocus: String {
+        conciseTeachingHeaderText(snapshot.currentTeachingFocus, maxLength: compact ? 42 : 68)
+    }
+
+    private var displayedSentenceAnchor: String {
+        conciseTeachingHeaderChip(snapshot.currentSentenceAnchor, fallback: "等待定位")
+    }
+
+    private var displayedParagraphRole: String {
+        conciseTeachingHeaderChip(snapshot.currentParagraphRole, fallback: "段落角色待识别")
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: compact ? 10 : 14) {
             HStack(alignment: .top, spacing: 10) {
@@ -1415,19 +1431,19 @@ struct ProfessorTeachingStatusHeader: View {
 
             statusRow(
                 label: "当前锚点",
-                primaryChip: (snapshot.currentSentenceAnchor, .sentence),
-                secondaryChip: (snapshot.currentParagraphRole, .structure)
+                primaryChip: (displayedSentenceAnchor, .sentence),
+                secondaryChip: (displayedParagraphRole, .structure)
             )
 
             statusField(
                 label: "当前句定位",
-                content: snapshot.currentSentenceFunction,
+                content: displayedSentenceFunction,
                 tone: .node
             )
 
             statusField(
                 label: "当前教学焦点",
-                content: snapshot.currentTeachingFocus,
+                content: displayedTeachingFocus,
                 tone: .teaching
             )
         }
@@ -1446,6 +1462,8 @@ struct ProfessorTeachingStatusHeader: View {
         Text(text)
             .font(.system(size: 12, weight: .semibold, design: .rounded))
             .foregroundStyle(tone.accent.opacity(0.9))
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(
@@ -1496,6 +1514,7 @@ struct ProfessorTeachingStatusHeader: View {
                 .foregroundStyle(Color.black.opacity(0.78))
                 .lineSpacing(4)
                 .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(compact ? 3 : 4)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
                 .background(
@@ -1605,7 +1624,13 @@ private struct TranslationInterpretationGroup: View {
     }
 
     private var teachingInterpretationText: String {
-        analysis.renderedTeachingInterpretation.nonEmpty ?? "暂无教学解读。当前结果里还没有稳定可用的教授式说明。"
+        if let explicit = analysis.renderedTeachingInterpretation.nonEmpty,
+           !explanationLooksDuplicated(explicit, comparedTo: faithfulTranslationText) {
+            return explicit
+        }
+
+        let synthesized = synthesizedTeachingInterpretation(for: analysis)
+        return synthesized.nonEmpty ?? "暂无教学解读。当前结果里还没有稳定可用的教授式说明。"
     }
 
     var body: some View {
@@ -1761,6 +1786,10 @@ private struct RewriteCardWithTranslationToggle: View {
             }
 
             VStack(alignment: .leading, spacing: 10) {
+                Text("保留原意，只把句法压缩成更直接的表达。")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.black.opacity(0.48))
+
                 if !highlightTokens.isEmpty {
                     HighlightTokenRow(tokens: highlightTokens, tone: .rewrite)
                 }
@@ -1783,7 +1812,7 @@ private struct RewriteCardWithTranslationToggle: View {
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            .stroke(ExplainHighlightTone.rewrite.stroke, lineWidth: 1)
+                    .stroke(ExplainHighlightTone.rewrite.stroke, lineWidth: 1)
                     )
             )
             .overlay(alignment: .leading) {
@@ -1811,4 +1840,58 @@ private extension String {
         let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
+}
+
+private func explanationLooksDuplicated(_ lhs: String, comparedTo rhs: String) -> Bool {
+    let left = pedagogicalSignature(lhs)
+    let right = pedagogicalSignature(rhs)
+    guard !left.isEmpty, !right.isEmpty else { return false }
+    return left == right || left.contains(right) || right.contains(left)
+}
+
+private func pedagogicalSignature(_ value: String) -> String {
+    value
+        .lowercased()
+        .replacingOccurrences(of: "[\\s\\p{Punct}]+", with: "", options: .regularExpression)
+}
+
+private func synthesizedTeachingInterpretation(for analysis: ProfessorSentenceAnalysis) -> String {
+    var parts: [String] = []
+
+    if let sentenceFunction = analysis.renderedSentenceFunction.nonEmpty {
+        parts.append(sentenceFunction)
+    }
+
+    if let firstTrap = analysis.renderedMisreadingTraps.first?.nonEmpty {
+        parts.append("最容易读偏的是：\(firstTrap)")
+    }
+
+    if let firstRoute = analysis.renderedExamParaphraseRoutes.first?.nonEmpty, parts.count < 2 {
+        parts.append("命题人常会从这里改写：\(firstRoute)")
+    }
+
+    return parts.joined(separator: " ")
+}
+
+private func conciseTeachingHeaderChip(_ value: String, fallback: String) -> String {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return fallback }
+    if trimmed.count <= 18 { return trimmed }
+    return String(trimmed.prefix(18)) + "…"
+}
+
+private func conciseTeachingHeaderText(_ value: String, maxLength: Int) -> String {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return "待补充" }
+
+    let firstSentence = trimmed
+        .components(separatedBy: CharacterSet(charactersIn: "。！？\n"))
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .first(where: { !$0.isEmpty }) ?? trimmed
+
+    if firstSentence.count <= maxLength {
+        return firstSentence
+    }
+
+    return String(firstSentence.prefix(maxLength)) + "…"
 }

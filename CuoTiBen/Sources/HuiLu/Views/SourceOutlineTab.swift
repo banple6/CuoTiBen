@@ -8,15 +8,59 @@ private enum OutlineCanvasDensityMode: String, CaseIterable, Identifiable {
 
     var rowSpacing: CGFloat {
         switch self {
-        case .detailed: return 12
-        case .compact: return 8
+        case .detailed: return 18
+        case .compact: return 10
         }
     }
 
     var branchSpacing: CGFloat {
         switch self {
-        case .detailed: return 10
-        case .compact: return 6
+        case .detailed: return 12
+        case .compact: return 8
+        }
+    }
+
+    var indent: CGFloat {
+        switch self {
+        case .detailed: return 72
+        case .compact: return 54
+        }
+    }
+
+    var baseWidth: CGFloat {
+        switch self {
+        case .detailed: return 344
+        case .compact: return 292
+        }
+    }
+
+    var minWidth: CGFloat {
+        switch self {
+        case .detailed: return 232
+        case .compact: return 214
+        }
+    }
+
+    var titleLineLimit: Int {
+        switch self {
+        case .detailed: return 3
+        case .compact: return 2
+        }
+    }
+
+    var summaryLineLimit: Int {
+        switch self {
+        case .detailed: return 3
+        case .compact: return 2
+        }
+    }
+
+    var canvasInset: CGSize {
+        switch self {
+        case .detailed:
+            return CGSize(width: 28, height: 24)
+        case .compact:
+            return CGSize(width: 20, height: 18)
         }
     }
 }
@@ -34,43 +78,36 @@ struct TeachingTreeCanvasView: View {
     @State private var densityMode: OutlineCanvasDensityMode = .detailed
     @State private var canvasScale: CGFloat = 1.0
     @State private var scaleAnchor: CGFloat = 1.0
+    @State private var canvasOffset: CGSize = .zero
+    @State private var offsetAnchor: CGSize = .zero
     @State private var viewportSize: CGSize = .zero
     @State private var hasPerformedInitialFit = false
     @State private var userAdjustedZoom = false
 
-    private let minScale: CGFloat = 0.72
-    private let maxScale: CGFloat = 1.75
+    private let minScale: CGFloat = 0.68
+    private let maxScale: CGFloat = 1.65
 
     var body: some View {
-        ScrollViewReader { proxy in
-            outlineCanvasContainer(with: proxy)
-        }
-    }
-
-    private func outlineCanvasContainer(with proxy: ScrollViewProxy) -> some View {
         GeometryReader { proxyGeometry in
-            outlineCanvasScene(with: proxy, proxyGeometry: proxyGeometry)
+            outlineCanvasScene(proxyGeometry: proxyGeometry)
         }
     }
 
     @ViewBuilder
-    private func outlineCanvasScene(with proxy: ScrollViewProxy, proxyGeometry: GeometryProxy) -> some View {
+    private func outlineCanvasScene(proxyGeometry: GeometryProxy) -> some View {
         let layout = TeachingTreeCanvasLayout(
             nodes: visibleNodes,
             densityMode: densityMode,
             highlightedNodeID: jumpTargetNodeID ?? highlightedNodeID
         )
+        let viewportRect = currentViewportRect(layout: layout, viewportSize: viewportSize)
 
         ZStack(alignment: .topTrailing) {
-            outlineCanvasMainContent(with: proxy, proxyGeometry: proxyGeometry, layout: layout)
-            miniMapOverlay(with: proxy, proxyGeometry: proxyGeometry, layout: layout)
+            outlineCanvasMainContent(proxyGeometry: proxyGeometry, layout: layout)
+            miniMapOverlay(proxyGeometry: proxyGeometry, layout: layout, viewportRect: viewportRect)
         }
         .onAppear {
-            handleCanvasAppear(with: proxy, proxyGeometry: proxyGeometry)
-        }
-        .onChange(of: proxyGeometry.size) { newSize in
-            viewportSize = newSize
-            fitToContent(in: newSize, layout: layout, force: false)
+            handleCanvasAppear(layout: layout)
         }
         .onChange(of: ancestorNodeIDs) { _ in
             expandAncestors()
@@ -82,48 +119,69 @@ struct TeachingTreeCanvasView: View {
         .onChange(of: densityMode) { _ in
             fitToContent(in: viewportSize, layout: layout, force: true)
         }
+        .onChange(of: expandedNodeIDs) { _ in
+            clampCanvasState(layout: layout, animated: true)
+            ensureHighlightedNodeVisible(layout: layout, animated: false)
+        }
         .onChange(of: jumpTargetNodeID) { target in
             guard target != nil else { return }
             expandAncestors()
-            focusCurrentNode(with: proxy, animated: true)
+            focusCurrentNode(layout: layout, viewportSize: viewportSize, animated: true, ensureReadableScale: true)
             deferJumpHandled()
         }
         .onChange(of: highlightedNodeID) { _ in
             guard jumpTargetNodeID == nil else { return }
-            focusCurrentNode(with: proxy, animated: true)
+            ensureHighlightedNodeVisible(layout: layout, animated: true)
         }
     }
 
     private func outlineCanvasMainContent(
-        with proxy: ScrollViewProxy,
         proxyGeometry: GeometryProxy,
         layout: TeachingTreeCanvasLayout
     ) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            outlineToolbar(with: proxy, layout: layout, viewportSize: proxyGeometry.size)
+            outlineToolbar(layout: layout, viewportSize: viewportSize)
 
-            ScrollView([.horizontal, .vertical], showsIndicators: false) {
-                outlineCanvasTree(layout: layout, viewportSize: proxyGeometry.size)
+            GeometryReader { canvasGeometry in
+                let canvasViewportSize = canvasGeometry.size
+                let visibleRect = currentViewportRect(layout: layout, viewportSize: canvasViewportSize)
+                let renderedEntries = visibleEntries(for: layout, viewportRect: visibleRect)
+
+                ZStack(alignment: .topLeading) {
+                    canvasBackground
+                    outlineCanvasTree(layout: layout, entries: renderedEntries)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+                .overlay(alignment: .topTrailing) {
+                    zoomBadge
+                        .padding(14)
+                }
+                .contentShape(Rectangle())
+                .simultaneousGesture(dragGesture(layout: layout, viewportSize: canvasViewportSize))
+                .simultaneousGesture(magnificationGesture(layout: layout, viewportSize: canvasViewportSize))
+                .onTapGesture(count: 2) {
+                    focusCurrentNode(layout: layout, viewportSize: canvasViewportSize, animated: true, ensureReadableScale: true)
+                }
+                .onAppear {
+                    viewportSize = canvasViewportSize
+                    fitToContent(in: canvasViewportSize, layout: layout, force: false)
+                }
+                .onChange(of: canvasViewportSize) { newSize in
+                    viewportSize = newSize
+                    fitToContent(in: newSize, layout: layout, force: false)
+                    clampCanvasState(layout: layout, animated: false)
+                }
             }
-            .background(canvasBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
-            .overlay(alignment: .topTrailing) {
-                zoomBadge
-                    .padding(14)
-            }
-            .simultaneousGesture(magnificationGesture(with: proxy))
-            .onTapGesture(count: 2) {
-                focusCurrentNode(with: proxy, animated: true)
-            }
+            .frame(minHeight: 320)
         }
     }
 
     private func outlineCanvasTree(
         layout: TeachingTreeCanvasLayout,
-        viewportSize: CGSize
+        entries: [TeachingTreeCanvasLayout.Entry]
     ) -> some View {
         ZStack(alignment: .topLeading) {
-            ForEach(layout.entries) { entry in
+            ForEach(entries) { entry in
                 OutlineTreeNodeRow(
                     node: entry.node,
                     highlightedNodeID: highlightedNodeID,
@@ -138,55 +196,46 @@ struct TeachingTreeCanvasView: View {
             }
         }
         .frame(
-            width: max(layout.contentBoundingRect.width + 42, viewportSize.width - 12),
+            width: layout.contentBoundingRect.width,
             alignment: .topLeading
         )
         .frame(
-            minHeight: max(layout.contentBoundingRect.height + 42, viewportSize.height - 140),
+            height: layout.contentBoundingRect.height,
             alignment: .topLeading
         )
-        .padding(.horizontal, densityMode == .detailed ? 20 : 16)
-        .padding(.vertical, densityMode == .detailed ? 18 : 14)
         .scaleEffect(canvasScale, anchor: .topLeading)
+        .offset(x: canvasOffset.width, y: canvasOffset.height)
         .animation(.spring(response: 0.28, dampingFraction: 0.88), value: canvasScale)
+        .animation(.spring(response: 0.28, dampingFraction: 0.88), value: canvasOffset)
     }
 
     @ViewBuilder
     private func miniMapOverlay(
-        with proxy: ScrollViewProxy,
         proxyGeometry: GeometryProxy,
-        layout: TeachingTreeCanvasLayout
+        layout: TeachingTreeCanvasLayout,
+        viewportRect: CGRect
     ) -> some View {
         if !layout.entries.isEmpty {
             TeachingTreeMiniMap(
                 layout: layout,
                 highlightedNodeID: jumpTargetNodeID ?? highlightedNodeID,
-                densityMode: densityMode
+                densityMode: densityMode,
+                viewportRect: viewportRect
             ) { node in
                 onNodeTap(node)
-                DispatchQueue.main.async {
-                    withAnimation(.spring(response: 0.32, dampingFraction: 0.88)) {
-                        proxy.scrollTo(node.id, anchor: .center)
-                    }
-                }
+                focusNode(node.id, layout: layout, viewportSize: viewportSize, animated: true, ensureReadableScale: false)
             }
             .padding(.top, 64)
             .padding(.trailing, min(max(proxyGeometry.size.width * 0.018, 10), 18))
         }
     }
 
-    private func handleCanvasAppear(with proxy: ScrollViewProxy, proxyGeometry: GeometryProxy) {
-        viewportSize = proxyGeometry.size
+    private func handleCanvasAppear(layout: TeachingTreeCanvasLayout) {
         applyInitialExpansionIfNeeded()
         expandAncestors()
         DispatchQueue.main.async {
-            let refreshedLayout = TeachingTreeCanvasLayout(
-                nodes: visibleNodes,
-                densityMode: densityMode,
-                highlightedNodeID: jumpTargetNodeID ?? highlightedNodeID
-            )
-            fitToContent(in: proxyGeometry.size, layout: refreshedLayout, force: true)
-            focusCurrentNode(with: proxy, animated: false)
+            fitToContent(in: viewportSize, layout: layout, force: false)
+            ensureHighlightedNodeVisible(layout: layout, animated: false)
             if jumpTargetNodeID != nil {
                 deferJumpHandled()
             }
@@ -218,7 +267,6 @@ struct TeachingTreeCanvasView: View {
 
     @ViewBuilder
     private func outlineToolbar(
-        with proxy: ScrollViewProxy,
         layout: TeachingTreeCanvasLayout,
         viewportSize: CGSize
     ) -> some View {
@@ -235,8 +283,16 @@ struct TeachingTreeCanvasView: View {
 
             Button {
                 withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
-                    canvasScale = max(minScale, canvasScale - 0.12)
-                    scaleAnchor = canvasScale
+                    let targetScale = clampedScale(canvasScale - 0.12)
+                    let targetOffset = adjustedOffsetForScaleChange(
+                        from: canvasScale,
+                        to: targetScale,
+                        viewportSize: viewportSize
+                    )
+                    canvasScale = targetScale
+                    scaleAnchor = targetScale
+                    canvasOffset = clampedOffset(targetOffset, viewportSize: viewportSize, layout: layout, scale: targetScale)
+                    offsetAnchor = canvasOffset
                     userAdjustedZoom = true
                 }
             } label: {
@@ -246,8 +302,16 @@ struct TeachingTreeCanvasView: View {
 
             Button {
                 withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
-                    canvasScale = min(maxScale, canvasScale + 0.12)
-                    scaleAnchor = canvasScale
+                    let targetScale = clampedScale(canvasScale + 0.12)
+                    let targetOffset = adjustedOffsetForScaleChange(
+                        from: canvasScale,
+                        to: targetScale,
+                        viewportSize: viewportSize
+                    )
+                    canvasScale = targetScale
+                    scaleAnchor = targetScale
+                    canvasOffset = clampedOffset(targetOffset, viewportSize: viewportSize, layout: layout, scale: targetScale)
+                    offsetAnchor = canvasOffset
                     userAdjustedZoom = true
                 }
             } label: {
@@ -257,14 +321,14 @@ struct TeachingTreeCanvasView: View {
 
             Button {
                 fitToContent(in: viewportSize, layout: layout, force: true)
-                focusCurrentNode(with: proxy, animated: true)
+                focusCurrentNode(layout: layout, viewportSize: viewportSize, animated: true, ensureReadableScale: true)
             } label: {
                 toolbarIcon(systemName: "arrow.up.left.and.arrow.down.right")
             }
             .buttonStyle(.plain)
 
             Button {
-                focusCurrentNode(with: proxy, animated: true)
+                focusCurrentNode(layout: layout, viewportSize: viewportSize, animated: true, ensureReadableScale: true)
             } label: {
                 Label("聚焦当前", systemImage: "scope")
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
@@ -285,34 +349,45 @@ struct TeachingTreeCanvasView: View {
             .background(Color.white.opacity(0.78), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
-    private func magnificationGesture(with proxy: ScrollViewProxy) -> some Gesture {
+    private func dragGesture(
+        layout: TeachingTreeCanvasLayout,
+        viewportSize: CGSize
+    ) -> some Gesture {
+        DragGesture(minimumDistance: 6)
+            .onChanged { value in
+                let proposed = CGSize(
+                    width: offsetAnchor.width + value.translation.width,
+                    height: offsetAnchor.height + value.translation.height
+                )
+                canvasOffset = clampedOffset(proposed, viewportSize: viewportSize, layout: layout, scale: canvasScale)
+                userAdjustedZoom = true
+            }
+            .onEnded { _ in
+                offsetAnchor = canvasOffset
+            }
+    }
+
+    private func magnificationGesture(
+        layout: TeachingTreeCanvasLayout,
+        viewportSize: CGSize
+    ) -> some Gesture {
         MagnificationGesture()
             .onChanged { value in
-                canvasScale = clampedScale(scaleAnchor * value)
+                let targetScale = clampedScale(scaleAnchor * value)
+                let targetOffset = adjustedOffsetForScaleChange(
+                    from: canvasScale,
+                    to: targetScale,
+                    viewportSize: viewportSize
+                )
+                canvasScale = targetScale
+                canvasOffset = clampedOffset(targetOffset, viewportSize: viewportSize, layout: layout, scale: targetScale)
                 userAdjustedZoom = true
             }
             .onEnded { _ in
                 scaleAnchor = canvasScale
-                focusCurrentNode(with: proxy, animated: true)
+                offsetAnchor = canvasOffset
+                ensureHighlightedNodeVisible(layout: layout, animated: true)
             }
-    }
-
-    private func focusCurrentNode(with proxy: ScrollViewProxy, animated: Bool) {
-        guard let targetID = jumpTargetNodeID ?? highlightedNodeID else { return }
-
-        let action = {
-            proxy.scrollTo(targetID, anchor: .center)
-        }
-
-        DispatchQueue.main.async {
-            if animated {
-                withAnimation(.spring(response: 0.34, dampingFraction: 0.88)) {
-                    action()
-                }
-            } else {
-                action()
-            }
-        }
     }
 
     private func clampedScale(_ scale: CGFloat) -> CGFloat {
@@ -349,14 +424,114 @@ struct TeachingTreeCanvasView: View {
         }
     }
 
+    private func visibleEntries(
+        for layout: TeachingTreeCanvasLayout,
+        viewportRect: CGRect
+    ) -> [TeachingTreeCanvasLayout.Entry] {
+        let preloadPadding = max(120, 220 / max(canvasScale, 0.1))
+        let expandedRect = viewportRect.insetBy(dx: -preloadPadding, dy: -preloadPadding)
+        let emphasizedIDs = Set(ancestorNodeIDs + [highlightedNodeID, jumpTargetNodeID].compactMap { $0 })
+
+        return layout.entries.filter { entry in
+            expandedRect.intersects(entry.frame) || emphasizedIDs.contains(entry.node.id)
+        }
+    }
+
+    private func currentViewportRect(
+        layout: TeachingTreeCanvasLayout,
+        viewportSize: CGSize
+    ) -> CGRect {
+        guard viewportSize.width > 0, viewportSize.height > 0 else {
+            return layout.contentBoundingRect
+        }
+
+        let scale = max(canvasScale, 0.001)
+        let rawRect = CGRect(
+            x: (-canvasOffset.width) / scale,
+            y: (-canvasOffset.height) / scale,
+            width: viewportSize.width / scale,
+            height: viewportSize.height / scale
+        )
+        let intersection = rawRect.intersection(layout.contentBoundingRect)
+        return intersection.isNull ? layout.contentBoundingRect : intersection
+    }
+
+    private func adjustedOffsetForScaleChange(
+        from oldScale: CGFloat,
+        to newScale: CGFloat,
+        viewportSize: CGSize
+    ) -> CGSize {
+        guard viewportSize.width > 0, viewportSize.height > 0, oldScale > 0 else {
+            return canvasOffset
+        }
+
+        let viewportCenter = CGPoint(x: viewportSize.width / 2, y: viewportSize.height / 2)
+        let contentPoint = CGPoint(
+            x: (viewportCenter.x - canvasOffset.width) / oldScale,
+            y: (viewportCenter.y - canvasOffset.height) / oldScale
+        )
+
+        return CGSize(
+            width: viewportCenter.x - contentPoint.x * newScale,
+            height: viewportCenter.y - contentPoint.y * newScale
+        )
+    }
+
+    private func clampCanvasState(layout: TeachingTreeCanvasLayout, animated: Bool) {
+        guard viewportSize.width > 0, viewportSize.height > 0 else { return }
+        let target = clampedOffset(canvasOffset, viewportSize: viewportSize, layout: layout, scale: canvasScale)
+        if animated {
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
+                canvasOffset = target
+            }
+        } else {
+            canvasOffset = target
+        }
+        offsetAnchor = canvasOffset
+    }
+
+    private func clampedOffset(
+        _ proposed: CGSize,
+        viewportSize: CGSize,
+        layout: TeachingTreeCanvasLayout,
+        scale: CGFloat
+    ) -> CGSize {
+        guard viewportSize.width > 0, viewportSize.height > 0 else { return proposed }
+
+        let contentWidth = layout.contentBoundingRect.width * scale
+        let contentHeight = layout.contentBoundingRect.height * scale
+        let horizontalPadding = min(max(18, viewportSize.width * 0.08), 48)
+        let verticalPadding = min(max(18, viewportSize.height * 0.06), 44)
+
+        let clampedX: CGFloat
+        if contentWidth <= viewportSize.width - horizontalPadding * 2 {
+            clampedX = (viewportSize.width - contentWidth) / 2
+        } else {
+            let minX = viewportSize.width - contentWidth - horizontalPadding
+            let maxX = horizontalPadding
+            clampedX = min(max(proposed.width, minX), maxX)
+        }
+
+        let clampedY: CGFloat
+        if contentHeight <= viewportSize.height - verticalPadding * 2 {
+            clampedY = (viewportSize.height - contentHeight) / 2
+        } else {
+            let minY = viewportSize.height - contentHeight - verticalPadding
+            let maxY = verticalPadding
+            clampedY = min(max(proposed.height, minY), maxY)
+        }
+
+        return CGSize(width: clampedX, height: clampedY)
+    }
+
     private func fitToContent(in size: CGSize, layout: TeachingTreeCanvasLayout, force: Bool) {
         guard size.width > 0, size.height > 0, layout.contentBoundingRect.width > 0, layout.contentBoundingRect.height > 0 else {
             return
         }
         guard force || !hasPerformedInitialFit || !userAdjustedZoom else { return }
 
-        let availableWidth = max(size.width - 84, 280)
-        let availableHeight = max(size.height - 180, 240)
+        let availableWidth = max(size.width - 48, 280)
+        let availableHeight = max(size.height - 48, 240)
         let scale = min(
             maxScale,
             max(
@@ -368,14 +543,86 @@ struct TeachingTreeCanvasView: View {
             )
         )
 
+        let centeredOffset = clampedOffset(
+            CGSize(
+                width: (size.width - layout.contentBoundingRect.width * scale) / 2,
+                height: (size.height - layout.contentBoundingRect.height * scale) / 2
+            ),
+            viewportSize: size,
+            layout: layout,
+            scale: scale
+        )
+
         withAnimation(.spring(response: 0.3, dampingFraction: 0.88)) {
             canvasScale = scale
             scaleAnchor = scale
+            canvasOffset = centeredOffset
+            offsetAnchor = centeredOffset
         }
         hasPerformedInitialFit = true
         if force {
             userAdjustedZoom = false
         }
+    }
+
+    private func focusCurrentNode(
+        layout: TeachingTreeCanvasLayout,
+        viewportSize: CGSize,
+        animated: Bool,
+        ensureReadableScale: Bool
+    ) {
+        guard let targetID = jumpTargetNodeID ?? highlightedNodeID else { return }
+        focusNode(targetID, layout: layout, viewportSize: viewportSize, animated: animated, ensureReadableScale: ensureReadableScale)
+    }
+
+    private func focusNode(
+        _ nodeID: String,
+        layout: TeachingTreeCanvasLayout,
+        viewportSize: CGSize,
+        animated: Bool,
+        ensureReadableScale: Bool
+    ) {
+        guard viewportSize.width > 0, viewportSize.height > 0 else { return }
+        guard let entry = layout.entry(id: nodeID) else { return }
+
+        let targetScale = ensureReadableScale
+            ? max(canvasScale, densityMode == .detailed ? 0.94 : 0.82)
+            : canvasScale
+        let proposedOffset = CGSize(
+            width: viewportSize.width / 2 - entry.frame.midX * targetScale,
+            height: viewportSize.height / 2 - entry.frame.midY * targetScale
+        )
+        let targetOffset = clampedOffset(proposedOffset, viewportSize: viewportSize, layout: layout, scale: targetScale)
+
+        if animated {
+            withAnimation(.spring(response: 0.34, dampingFraction: 0.88)) {
+                canvasScale = targetScale
+                scaleAnchor = targetScale
+                canvasOffset = targetOffset
+                offsetAnchor = targetOffset
+            }
+        } else {
+            canvasScale = targetScale
+            scaleAnchor = targetScale
+            canvasOffset = targetOffset
+            offsetAnchor = targetOffset
+        }
+    }
+
+    private func ensureHighlightedNodeVisible(
+        layout: TeachingTreeCanvasLayout,
+        animated: Bool
+    ) {
+        guard viewportSize.width > 0, viewportSize.height > 0 else { return }
+        guard let targetID = jumpTargetNodeID ?? highlightedNodeID else { return }
+        guard let entry = layout.entry(id: targetID) else { return }
+
+        let viewportRect = currentViewportRect(layout: layout, viewportSize: viewportSize)
+        let extraInset = max(28, 64 / max(canvasScale, 0.1))
+        let visibleRect = viewportRect.insetBy(dx: -extraInset, dy: -extraInset)
+
+        guard !visibleRect.contains(entry.frame) else { return }
+        focusNode(targetID, layout: layout, viewportSize: viewportSize, animated: animated, ensureReadableScale: false)
     }
 
     private func deferJumpHandled() {
@@ -544,6 +791,7 @@ private struct OutlineTreeNodeRow: View {
                     .foregroundStyle(titleColor)
                     .lineSpacing(3)
                     .multilineTextAlignment(.leading)
+                    .lineLimit(densityMode.titleLineLimit)
 
                 if shouldShowSummary {
                     Text(node.summary)
@@ -551,7 +799,7 @@ private struct OutlineTreeNodeRow: View {
                         .foregroundStyle(summaryColor)
                         .lineSpacing(3)
                         .multilineTextAlignment(.leading)
-                        .lineLimit(densityMode == .compact ? 2 : nil)
+                        .lineLimit(densityMode.summaryLineLimit)
                 }
 
                 if shouldShowAnchorBadge {
@@ -752,7 +1000,8 @@ private struct TeachingTreeCanvasLayout {
         densityMode: OutlineCanvasDensityMode,
         highlightedNodeID: String?
     ) {
-        var currentY: CGFloat = 0
+        let inset = densityMode.canvasInset
+        var currentY: CGFloat = inset.height
         var maxX: CGFloat = 0
         var built: [Entry] = []
 
@@ -772,8 +1021,8 @@ private struct TeachingTreeCanvasLayout {
         self.contentBoundingRect = CGRect(
             x: 0,
             y: 0,
-            width: max(maxX, 360),
-            height: max(currentY, 240)
+            width: max(maxX + inset.width, 320),
+            height: max(currentY + inset.height, 240)
         )
     }
 
@@ -784,12 +1033,16 @@ private struct TeachingTreeCanvasLayout {
         originY: CGFloat
     ) -> CGRect {
         let depth = max(node.depth, 0)
-        let baseWidth: CGFloat = densityMode == .detailed ? 366 : 318
-        let width = max(220, baseWidth - CGFloat(min(depth, 4)) * 26)
-        let x = CGFloat(depth) * (densityMode == .detailed ? 54 : 42)
-        let titleLines = ceil(CGFloat(max(node.title.count, 12)) / (densityMode == .detailed ? 20 : 24))
+        let inset = densityMode.canvasInset
+        let width = max(densityMode.minWidth, densityMode.baseWidth - CGFloat(min(depth, 4)) * 26)
+        let x = inset.width + CGFloat(depth) * densityMode.indent
+        let titleCount = max(min(node.title.count, densityMode.titleLineLimit * 22), 12)
+        let titleLines = min(CGFloat(densityMode.titleLineLimit), ceil(CGFloat(titleCount) / (densityMode == .detailed ? 18 : 21)))
         let shouldShowSummary = densityMode == .detailed || highlightedNodeID == node.id || depth <= 1
-        let summaryLines = shouldShowSummary ? min(4, ceil(CGFloat(max(node.summary.count, 12)) / (densityMode == .detailed ? 28 : 32))) : 0
+        let summaryCount = max(min(node.summary.count, densityMode.summaryLineLimit * 34), 12)
+        let summaryLines = shouldShowSummary
+            ? min(CGFloat(densityMode.summaryLineLimit), ceil(CGFloat(summaryCount) / (densityMode == .detailed ? 28 : 32)))
+            : 0
         let shouldShowAnchor = densityMode == .detailed || highlightedNodeID == node.id || depth == 0
         let height = (densityMode == .detailed ? 60 : 48)
             + titleLines * (densityMode == .detailed ? 20 : 18)
@@ -798,12 +1051,17 @@ private struct TeachingTreeCanvasLayout {
 
         return CGRect(x: x, y: originY, width: width, height: height)
     }
+
+    func entry(id: String) -> Entry? {
+        entries.first(where: { $0.node.id == id })
+    }
 }
 
 private struct TeachingTreeMiniMap: View {
     let layout: TeachingTreeCanvasLayout
     let highlightedNodeID: String?
     let densityMode: OutlineCanvasDensityMode
+    let viewportRect: CGRect
     let onNodeTap: (OutlineNode) -> Void
 
     var body: some View {
@@ -850,6 +1108,24 @@ private struct TeachingTreeMiniMap: View {
                             x: frame.minX * adjustedScale + max(frame.width * adjustedScale, 18) / 2 + 6,
                             y: frame.minY * adjustedScale + max(frame.height * adjustedScale, 8) / 2 + 6
                         )
+                    }
+
+                    if !viewportRect.isNull {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(Color.black.opacity(0.32), lineWidth: 1.2)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .fill(Color.white.opacity(0.12))
+                            )
+                            .frame(
+                                width: max(viewportRect.width * adjustedScale, 26),
+                                height: max(viewportRect.height * adjustedScale, 16)
+                            )
+                            .position(
+                                x: viewportRect.minX * adjustedScale + max(viewportRect.width * adjustedScale, 26) / 2 + 6,
+                                y: viewportRect.minY * adjustedScale + max(viewportRect.height * adjustedScale, 16) / 2 + 6
+                            )
+                            .allowsHitTesting(false)
                     }
                 }
             }

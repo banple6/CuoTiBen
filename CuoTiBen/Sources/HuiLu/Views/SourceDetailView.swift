@@ -127,8 +127,8 @@ struct SourceDetailView: View {
             ?? "先选中一句或一个教学节点，系统会把当前句的定位、主干和教学焦点放到这里。"
         let paragraphRole = currentParagraphCardForTeachingStatus?.argumentRole.displayName
             ?? "段落角色待识别"
-        let teachingFocus = currentParagraphCardForTeachingStatus?.teachingFocuses.first?.nonEmpty
-            ?? currentParagraphCardForTeachingStatus?.theme.nonEmpty
+        let teachingFocus = currentParagraphCardForTeachingStatus?.displayedTeachingFocuses.first?.nonEmpty
+            ?? currentParagraphCardForTeachingStatus?.displayedTheme.nonEmpty
             ?? "教学焦点待提取"
 
         return ProfessorTeachingStatusSnapshot(
@@ -799,23 +799,23 @@ private struct ProfessorAnalysisTab: View {
             MarkerTitle(text: "文章总览", tint: AppPalette.paperTapeBlue.opacity(0.28))
 
             professorCard {
-                SentenceExplainBlock(title: "文章主题", content: overview.articleTheme, tone: .node)
-                SentenceExplainBlock(title: "作者真正关心的问题", content: overview.authorCoreQuestion, tone: .structure)
-                SentenceExplainBlock(title: "段落推进路径", content: overview.progressionPath, tone: .structure)
-                if !overview.syntaxHighlights.isEmpty {
-                    SentenceExplainListBlock(title: "最重要的句法学习点", items: overview.syntaxHighlights, tone: .grammar)
+                SentenceExplainBlock(title: "文章主题", content: overview.displayedArticleTheme, tone: .node)
+                SentenceExplainBlock(title: "作者真正关心的问题", content: overview.displayedAuthorCoreQuestion, tone: .structure)
+                SentenceExplainBlock(title: "段落推进路径", content: overview.displayedProgressionPath, tone: .structure)
+                if !overview.displayedSyntaxHighlights.isEmpty {
+                    SentenceExplainListBlock(title: "最重要的句法学习点", items: overview.displayedSyntaxHighlights, tone: .grammar)
                 }
-                if !overview.likelyQuestionTypes.isEmpty {
-                    SentenceExplainListBlock(title: "最容易出的题", items: overview.likelyQuestionTypes, tone: .rewrite)
+                if !overview.displayedLikelyQuestionTypes.isEmpty {
+                    SentenceExplainListBlock(title: "最容易出的题", items: overview.displayedLikelyQuestionTypes, tone: .rewrite)
                 }
-                if !overview.logicPitfalls.isEmpty {
-                    SentenceExplainListBlock(title: "最容易错的逻辑点", items: overview.logicPitfalls, tone: .misread)
+                if !overview.displayedLogicPitfalls.isEmpty {
+                    SentenceExplainListBlock(title: "最容易错的逻辑点", items: overview.displayedLogicPitfalls, tone: .misread)
                 }
-                if !overview.paragraphFunctionMap.isEmpty {
-                    SentenceExplainListBlock(title: "各段功能图", items: overview.paragraphFunctionMap, tone: .sentence)
+                if !overview.displayedParagraphFunctionMap.isEmpty {
+                    SentenceExplainListBlock(title: "各段功能图", items: overview.displayedParagraphFunctionMap, tone: .sentence)
                 }
-                if !overview.readingTraps.isEmpty {
-                    SentenceExplainListBlock(title: "补充阅读陷阱", items: overview.readingTraps, tone: .misread)
+                if !overview.displayedReadingTraps.isEmpty {
+                    SentenceExplainListBlock(title: "补充阅读陷阱", items: overview.displayedReadingTraps, tone: .misread)
                 }
                 if !overview.vocabularyHighlights.isEmpty {
                     SentenceExplainListBlock(title: "补充词汇/搭配亮点", items: overview.vocabularyHighlights, tone: .vocabulary)
@@ -835,7 +835,7 @@ private struct ProfessorAnalysisTab: View {
                         SketchBadge(title: card.argumentRole.displayName, tint: AppPalette.paperHighlightMint.opacity(0.5))
                     }
 
-                    SentenceExplainBlock(title: "段落主旨", content: card.theme, tone: .sentence)
+                    SentenceExplainBlock(title: "段落主旨", content: card.displayedTheme, tone: .sentence)
                     SentenceExplainBlock(title: "段落角色", content: card.argumentRole.teachingDescription, tone: .structure)
 
                     if let coreSentence = bundle.sentence(id: card.coreSentenceID) {
@@ -861,14 +861,14 @@ private struct ProfessorAnalysisTab: View {
                         .buttonStyle(.plain)
                     }
 
-                    SentenceExplainBlock(title: "与上一段关系", content: card.relationToPrevious, tone: .neutral)
-                    SentenceExplainBlock(title: "对应题型价值", content: card.examValue, tone: .rewrite)
-                    if let blindSpot = card.studentBlindSpot, !blindSpot.isEmpty {
+                    SentenceExplainBlock(title: "与上一段关系", content: card.displayedRelationToPrevious, tone: .neutral)
+                    SentenceExplainBlock(title: "对应题型价值", content: card.displayedExamValue, tone: .rewrite)
+                    if let blindSpot = card.displayedStudentBlindSpot, !blindSpot.isEmpty {
                         SentenceExplainBlock(title: "学生最容易读偏的点", content: blindSpot, tone: .misread)
                     }
 
-                    if !card.teachingFocuses.isEmpty {
-                        SentenceExplainListBlock(title: "教学重点", items: card.teachingFocuses, tone: .grammar)
+                    if !card.displayedTeachingFocuses.isEmpty {
+                        SentenceExplainListBlock(title: "教学重点", items: card.displayedTeachingFocuses, tone: .grammar)
                     }
 
                     let relatedQuestionHints = relatedQuestionHints(for: card.segmentID)
@@ -936,7 +936,7 @@ private struct ProfessorAnalysisTab: View {
                     }
 
                     if !link.supportParagraphIDs.isEmpty {
-                        let paragraphLabels = link.supportParagraphIDs.compactMap { bundle.paragraphCard(forSegmentID: $0)?.theme }
+                        let paragraphLabels = link.supportParagraphIDs.compactMap { bundle.paragraphCard(forSegmentID: $0)?.displayedTheme }
                         SentenceExplainListBlock(title: "支撑段落", items: paragraphLabels, tone: .structure)
                     }
 

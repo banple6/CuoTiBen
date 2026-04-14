@@ -610,7 +610,7 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
     }
 
     var renderedSentenceFunction: String {
-        let explicit = sentenceFunction.trimmingCharacters(in: .whitespacesAndNewlines)
+        let explicit = purifiedChineseDisplayText(sentenceFunction)
         if !explicit.isEmpty { return explicit }
         if let role = professorSentenceRolePresentation(for: evidenceType) {
             return "\(role.label)：\(role.description)"
@@ -716,17 +716,17 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
 
     var renderedGrammarFocus: [String] {
         if !grammarFocus.isEmpty {
-            return grammarFocus.map(\.rendered)
+            return purifiedChineseList(grammarFocus.map(\.rendered), limit: 3)
         }
-        return grammarPoints.map { "\($0.name)：\($0.explanation)" }
+        return purifiedChineseList(grammarPoints.map { "\($0.name)：\($0.explanation)" }, limit: 3)
     }
 
     var renderedMisreadingTraps: [String] {
-        !misreadingTraps.isEmpty ? misreadingTraps : misreadPoints
+        purifiedChineseList(!misreadingTraps.isEmpty ? misreadingTraps : misreadPoints, limit: 4)
     }
 
     var renderedExamParaphraseRoutes: [String] {
-        !examParaphraseRoutes.isEmpty ? examParaphraseRoutes : examRewritePoints
+        purifiedChineseList(!examParaphraseRoutes.isEmpty ? examParaphraseRoutes : examRewritePoints, limit: 4)
     }
 
     var renderedSimplerRewrite: String {
@@ -839,6 +839,63 @@ struct PassageOverview: Equatable, Hashable {
     let vocabularyHighlights: [String]
 }
 
+extension ParagraphTeachingCard {
+    var displayedTheme: String {
+        preferredPedagogicalText(theme, fallback: "", kind: .paragraphTheme)
+    }
+
+    var displayedRelationToPrevious: String {
+        preferredPedagogicalText(relationToPrevious, fallback: "", kind: .relation)
+    }
+
+    var displayedExamValue: String {
+        preferredPedagogicalText(examValue, fallback: "", kind: .examValue)
+    }
+
+    var displayedTeachingFocuses: [String] {
+        purifiedChineseList(teachingFocuses, limit: 4)
+    }
+
+    var displayedStudentBlindSpot: String? {
+        let purified = purifiedChineseDisplayText(studentBlindSpot ?? "")
+        return purified.isEmpty ? nil : purified
+    }
+}
+
+extension PassageOverview {
+    var displayedArticleTheme: String {
+        preferredPedagogicalText(articleTheme, fallback: "", kind: .overviewTheme)
+    }
+
+    var displayedAuthorCoreQuestion: String {
+        preferredPedagogicalText(authorCoreQuestion, fallback: "", kind: .overviewQuestion)
+    }
+
+    var displayedProgressionPath: String {
+        preferredPedagogicalText(progressionPath, fallback: "", kind: .overviewProgression)
+    }
+
+    var displayedLikelyQuestionTypes: [String] {
+        purifiedChineseList(likelyQuestionTypes, limit: 5)
+    }
+
+    var displayedLogicPitfalls: [String] {
+        purifiedChineseList(logicPitfalls, limit: 5)
+    }
+
+    var displayedParagraphFunctionMap: [String] {
+        purifiedChineseList(paragraphFunctionMap, limit: 8)
+    }
+
+    var displayedSyntaxHighlights: [String] {
+        purifiedChineseList(syntaxHighlights, limit: 5)
+    }
+
+    var displayedReadingTraps: [String] {
+        purifiedChineseList(readingTraps, limit: 5)
+    }
+}
+
 private enum PedagogicalTextKind {
     case faithfulTranslation
     case teachingInterpretation
@@ -873,10 +930,72 @@ private func isChineseDominant(_ value: String) -> Bool {
     return chineseCount >= max(8, latinCount * 2)
 }
 
+private func purifiedChineseDisplayText(_ value: String) -> String {
+    let trimmed = trimmedOrEmpty(value)
+    guard !trimmed.isEmpty else { return "" }
+
+    if let range = trimmed.range(of: "：") ?? trimmed.range(of: ":") {
+        let head = trimmedOrEmpty(String(trimmed[..<range.lowerBound]))
+        let body = purifiedChineseExplanation(String(trimmed[range.upperBound...]))
+        if !body.isEmpty {
+            return head.isEmpty ? body : "\(head)：\(body)"
+        }
+    }
+
+    return purifiedChineseExplanation(trimmed)
+}
+
+private func purifiedChineseSentences(from value: String) -> [String] {
+    let normalized = trimmedOrEmpty(value)
+    guard !normalized.isEmpty else { return [] }
+
+    return normalized
+        .components(separatedBy: CharacterSet(charactersIn: "\n"))
+        .flatMap { line in
+            line.split(whereSeparator: { "。！？；".contains($0) }).map(String.init)
+        }
+        .map(trimmedOrEmpty)
+        .filter { segment in
+            guard !segment.isEmpty else { return false }
+            let chineseCount = segment.unicodeScalars.filter { scalar in
+                scalar.value >= 0x4E00 && scalar.value <= 0x9FFF
+            }.count
+            let latinCount = segment.unicodeScalars.filter { scalar in
+                (scalar.value >= 0x41 && scalar.value <= 0x5A) ||
+                (scalar.value >= 0x61 && scalar.value <= 0x7A)
+            }.count
+            return chineseCount >= 8 && chineseCount > latinCount
+        }
+}
+
 private func purifiedChineseExplanation(_ value: String) -> String {
     let trimmed = trimmedOrEmpty(value)
     guard !trimmed.isEmpty else { return "" }
-    return isChineseDominant(trimmed) ? trimmed : ""
+    if isChineseDominant(trimmed) {
+        return trimmed
+    }
+
+    let recovered = purifiedChineseSentences(from: trimmed)
+    guard !recovered.isEmpty else { return "" }
+    return recovered.joined(separator: "。")
+}
+
+private func purifiedChineseList(_ values: [String], limit: Int) -> [String] {
+    var ordered: [String] = []
+    var seen: Set<String> = []
+
+    for value in values {
+        let normalized = purifiedChineseDisplayText(value)
+        guard !normalized.isEmpty else { continue }
+        let key = normalized.lowercased()
+        guard seen.insert(key).inserted else { continue }
+        ordered.append(normalized)
+        if ordered.count >= limit {
+            break
+        }
+    }
+
+    return ordered
 }
 
 private func pedagogicalList(_ preferred: [String], fallback: [String], limit: Int = 6) -> [String] {
@@ -906,6 +1025,7 @@ private func pedagogicalTextScore(_ value: String, kind: PedagogicalTextKind) ->
 
     switch kind {
     case .faithfulTranslation:
+        if !isChineseDominant(trimmed) { score -= 32 }
         if lower.contains("本段") || lower.contains("作者") || lower.contains("真正") || lower.contains("重点") {
             score -= 18
         }
@@ -913,6 +1033,7 @@ private func pedagogicalTextScore(_ value: String, kind: PedagogicalTextKind) ->
             score += 10
         }
     case .teachingInterpretation:
+        if !isChineseDominant(trimmed) { score -= 32 }
         if lower.contains("真正重点") || lower.contains("真正要你抓") || lower.contains("不要把") || lower.contains("先抓") {
             score += 12
         }
@@ -920,6 +1041,7 @@ private func pedagogicalTextScore(_ value: String, kind: PedagogicalTextKind) ->
             score -= 8
         }
     case .naturalMeaning:
+        if !isChineseDominant(trimmed) { score -= 28 }
         if lower.contains("这句话服务于本段") { score -= 24 }
         if lower.contains("不要平均翻译") { score -= 18 }
         if lower.contains("自然意思是") || lower.contains("真正想说的是") { score += 12 }
@@ -929,21 +1051,27 @@ private func pedagogicalTextScore(_ value: String, kind: PedagogicalTextKind) ->
         if lower.contains("谓语") { score += 18 }
         if lower.contains("宾语") || lower.contains("补语") { score += 12 }
     case .paragraphTheme:
+        if !isChineseDominant(trimmed) { score -= 24 }
         if lower.hasPrefix("第") && lower.contains("承担") { score -= 28 }
         if lower.contains("围绕") || lower.contains("真正要说明") { score += 10 }
     case .overviewTheme:
+        if !isChineseDominant(trimmed) { score -= 24 }
         if lower.contains("文章核心围绕") { score -= 20 }
         if lower.contains("本文真正讨论") || lower.contains("作者真正关注") { score += 14 }
     case .overviewQuestion:
+        if !isChineseDominant(trimmed) { score -= 24 }
         if lower.contains("作者真正要回答的问题可以概括为") { score -= 16 }
         if lower.contains("作者真正追问的是") || lower.contains("核心问题是") { score += 12 }
     case .overviewProgression:
+        if !isChineseDominant(trimmed) { score -= 20 }
         if lower.contains("→") { score += 8 }
         if lower.contains("先") && lower.contains("再") { score += 10 }
     case .relation:
+        if !isChineseDominant(trimmed) { score -= 20 }
         if lower == "承接上文" { score -= 40 }
         if lower.contains("转折") || lower.contains("推进") || lower.contains("限定") { score += 10 }
     case .examValue:
+        if !isChineseDominant(trimmed) { score -= 20 }
         if lower.contains("常见于") { score += 6 }
         if lower.contains("陷阱") || lower.contains("题型") { score += 10 }
     case .generic:
@@ -1526,8 +1654,8 @@ struct StructuredSourceBundle: Equatable {
                 depth: 1,
                 order: card.paragraphIndex,
                 nodeType: .paragraphTheme,
-                title: "第\(card.paragraphIndex + 1)段｜\(card.argumentRole.displayName)",
-                summary: card.theme,
+                title: pedagogicalParagraphTitle(card: card),
+                summary: pedagogicalParagraphSummary(card: card, linkedQuestions: linkedQuestions),
                 anchor: OutlineAnchor(
                     segmentID: card.segmentID,
                     sentenceID: card.coreSentenceID,
@@ -1565,11 +1693,11 @@ struct StructuredSourceBundle: Equatable {
 
     private static func pedagogicalRootSummary(overview: PassageOverview?) -> String {
         guard let overview else { return "正文教学树" }
-        let theme = trimmedOrEmpty(overview.articleTheme)
-        let question = trimmedOrEmpty(overview.authorCoreQuestion)
-        let progression = trimmedOrEmpty(overview.progressionPath)
-        let questionType = trimmedOrEmpty(overview.likelyQuestionTypes.first ?? "")
-        let logicPitfall = trimmedOrEmpty(overview.logicPitfalls.first ?? "")
+        let theme = trimmedOrEmpty(overview.displayedArticleTheme)
+        let question = trimmedOrEmpty(overview.displayedAuthorCoreQuestion)
+        let progression = trimmedOrEmpty(overview.displayedProgressionPath)
+        let questionType = trimmedOrEmpty(overview.displayedLikelyQuestionTypes.first ?? "")
+        let logicPitfall = trimmedOrEmpty(overview.displayedLogicPitfalls.first ?? "")
 
         let parts = [theme, question, progression, questionType.isEmpty ? "" : "高频题型：\(questionType)", logicPitfall.isEmpty ? "" : "逻辑易错：\(logicPitfall)"]
             .filter { !$0.isEmpty }
@@ -1577,9 +1705,57 @@ struct StructuredSourceBundle: Equatable {
         return parts.isEmpty ? "正文教学树" : parts.joined(separator: "｜")
     }
 
+    private static func pedagogicalParagraphTitle(card: ParagraphTeachingCard) -> String {
+        let theme = trimmedOrEmpty(card.displayedTheme)
+        let shortTheme = theme.count > 22 ? String(theme.prefix(22)) + "…" : theme
+        if !shortTheme.isEmpty {
+            return "第\(card.paragraphIndex + 1)段｜\(card.argumentRole.displayName)｜\(shortTheme)"
+        }
+        return "第\(card.paragraphIndex + 1)段｜\(card.argumentRole.displayName)"
+    }
+
+    private static func pedagogicalParagraphSummary(
+        card: ParagraphTeachingCard,
+        linkedQuestions: [QuestionEvidenceLink]
+    ) -> String {
+        var parts: [String] = []
+
+        let theme = trimmedOrEmpty(card.displayedTheme)
+        if !theme.isEmpty {
+            parts.append(theme)
+        }
+
+        let relation = trimmedOrEmpty(card.displayedRelationToPrevious)
+        if !relation.isEmpty {
+            parts.append("和上一段：\(relation)")
+        }
+
+        let examValue = trimmedOrEmpty(card.displayedExamValue)
+        if !examValue.isEmpty {
+            parts.append("题型价值：\(examValue)")
+        }
+
+        if let blindSpot = card.displayedStudentBlindSpot, !blindSpot.isEmpty {
+            parts.append("学生易偏：\(blindSpot)")
+        }
+
+        if let linkedQuestion = linkedQuestions.first {
+            let trap = trimmedOrEmpty(linkedQuestion.trapType)
+            let evidence = trimmedOrEmpty(linkedQuestion.paraphraseEvidence.first ?? "")
+            let hint = [trap, evidence].filter { !$0.isEmpty }.joined(separator: "｜")
+            if !hint.isEmpty {
+                parts.append("对应考点：\(hint)")
+            }
+        }
+
+        return pedagogicalList(parts, fallback: [theme, examValue], limit: 4).joined(separator: "；")
+    }
+
     private static func pedagogicalFocusTitle(card: ParagraphTeachingCard) -> String {
-        if let first = card.teachingFocuses.first, !trimmedOrEmpty(first).isEmpty {
-            return "教学重点｜\(trimmedOrEmpty(first))"
+        if let first = card.displayedTeachingFocuses.first, !trimmedOrEmpty(first).isEmpty {
+            let focus = trimmedOrEmpty(first)
+            let shortFocus = focus.count > 24 ? String(focus.prefix(24)) + "…" : focus
+            return "教学重点｜\(shortFocus)"
         }
         return "教学重点"
     }
@@ -1593,7 +1769,7 @@ struct StructuredSourceBundle: Equatable {
             trimmedOrEmpty(card.studentBlindSpot ?? "")
         ].filter { !$0.isEmpty }
 
-        parts.append(contentsOf: pedagogicalList(card.teachingFocuses, fallback: [], limit: 3))
+        parts.append(contentsOf: pedagogicalList(card.displayedTeachingFocuses, fallback: [], limit: 3))
 
         if let blindSpot = card.studentBlindSpot?.trimmingCharacters(in: .whitespacesAndNewlines), !blindSpot.isEmpty {
             parts.append("易偏点：\(blindSpot)")

@@ -675,7 +675,7 @@ enum NormalizedDocumentConverter {
                 depth: 2,
                 order: card.paragraphIndex * 10,
                 nodeType: .teachingFocus,
-                title: card.teachingFocuses.first.map { "教学重点｜\($0)" } ?? "教学重点",
+                title: teachingFocusTitle(card: card),
                 summary: focusSummary,
                 anchor: OutlineAnchor(
                     segmentID: card.segmentID,
@@ -695,8 +695,8 @@ enum NormalizedDocumentConverter {
                 depth: 1,
                 order: card.paragraphIndex,
                 nodeType: .paragraphTheme,
-                title: "第\(card.paragraphIndex + 1)段｜\(card.argumentRole.displayName)",
-                summary: card.theme,
+                title: teachingParagraphNodeTitle(card: card),
+                summary: teachingParagraphNodeSummary(card: card, linkedQuestions: linkedQuestions),
                 anchor: OutlineAnchor(
                     segmentID: card.segmentID,
                     sentenceID: card.coreSentenceID,
@@ -717,7 +717,7 @@ enum NormalizedDocumentConverter {
             order: 0,
             nodeType: .passageRoot,
             title: "文章主题与问题意识",
-            summary: [overview?.articleTheme, overview?.authorCoreQuestion, overview?.progressionPath, overview?.likelyQuestionTypes.first, overview?.logicPitfalls.first]
+            summary: [overview?.displayedArticleTheme, overview?.displayedAuthorCoreQuestion, overview?.displayedProgressionPath, overview?.displayedLikelyQuestionTypes.first, overview?.displayedLogicPitfalls.first]
                 .compactMap { $0?.nonEmpty }
                 .joined(separator: "｜")
                 .nonEmpty ?? "正文教学树",
@@ -1393,7 +1393,7 @@ enum NormalizedDocumentConverter {
         chunks: [String]
     ) -> String {
         let focus = shortSnippet(from: coreClause)
-        if let theme = paragraphTheme?.nonEmpty {
+        if paragraphTheme?.nonEmpty != nil {
             return ""
         }
         if let firstChunk = chunks.first, firstChunk != coreClause, firstChunk.count < 20, focus.count < 32 {
@@ -1591,13 +1591,13 @@ enum NormalizedDocumentConverter {
         card: ParagraphTeachingCard,
         linkedQuestions: [QuestionEvidenceLink]
     ) -> String {
-        var parts = [card.examValue]
+        var parts = [card.displayedExamValue]
 
-        if let blindSpot = card.studentBlindSpot?.nonEmpty {
+        if let blindSpot = card.displayedStudentBlindSpot?.nonEmpty {
             parts.append("易偏点：\(blindSpot)")
         }
 
-        parts.append(contentsOf: card.teachingFocuses)
+        parts.append(contentsOf: card.displayedTeachingFocuses)
 
         if let linkedQuestion = linkedQuestions.first {
             let evidence = linkedQuestion.paraphraseEvidence.first?.nonEmpty ?? ""
@@ -1609,7 +1609,58 @@ enum NormalizedDocumentConverter {
         }
 
         if parts.isEmpty {
-            parts.append(card.examValue)
+            parts.append(card.displayedExamValue)
+        }
+
+        return uniqueStrings(from: parts, limit: 4).joined(separator: "；")
+    }
+
+    private static func teachingFocusTitle(card: ParagraphTeachingCard) -> String {
+        guard let first = card.displayedTeachingFocuses.first?.nonEmpty else {
+            return "教学重点"
+        }
+        let short = first.count > 24 ? String(first.prefix(24)) + "…" : first
+        return "教学重点｜\(short)"
+    }
+
+    private static func teachingParagraphNodeTitle(card: ParagraphTeachingCard) -> String {
+        let theme = card.displayedTheme.nonEmpty ?? ""
+        let short = theme.count > 22 ? String(theme.prefix(22)) + "…" : theme
+        if !short.isEmpty {
+            return "第\(card.paragraphIndex + 1)段｜\(card.argumentRole.displayName)｜\(short)"
+        }
+        return "第\(card.paragraphIndex + 1)段｜\(card.argumentRole.displayName)"
+    }
+
+    private static func teachingParagraphNodeSummary(
+        card: ParagraphTeachingCard,
+        linkedQuestions: [QuestionEvidenceLink]
+    ) -> String {
+        var parts: [String] = []
+
+        if let theme = card.displayedTheme.nonEmpty {
+            parts.append(theme)
+        }
+
+        if let relation = card.displayedRelationToPrevious.nonEmpty {
+            parts.append("和上一段：\(relation)")
+        }
+
+        if let examValue = card.displayedExamValue.nonEmpty {
+            parts.append("题型价值：\(examValue)")
+        }
+
+        if let blindSpot = card.displayedStudentBlindSpot?.nonEmpty {
+            parts.append("学生易偏：\(blindSpot)")
+        }
+
+        if let linkedQuestion = linkedQuestions.first {
+            let trap = linkedQuestion.trapType.nonEmpty ?? ""
+            let evidence = linkedQuestion.paraphraseEvidence.first?.nonEmpty ?? ""
+            let hint = [trap, evidence].filter { !$0.isEmpty }.joined(separator: "｜")
+            if !hint.isEmpty {
+                parts.append("对应考点：\(hint)")
+            }
         }
 
         return uniqueStrings(from: parts, limit: 4).joined(separator: "；")
