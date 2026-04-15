@@ -1532,11 +1532,9 @@ struct ProfessorAnalysisPanel: View {
     var relatedEvidenceItems: [String] = []
     let onWordTap: (OutlineNodeKeyword) -> Void
 
-    @State private var showsRewriteMeaning = false
-
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            if let sentenceFunction = analysis.renderedSentenceFunction.nonEmpty {
+            if let sentenceFunction = conciseSentenceFunctionText(analysis.renderedSentenceFunction).nonEmpty {
                 SentenceExplainBlock(
                     title: "句子定位",
                     content: sentenceFunction,
@@ -1553,11 +1551,7 @@ struct ProfessorAnalysisPanel: View {
 
             StructuredChunkLayerCard(analysis: analysis)
 
-            SentenceExplainListBlock(
-                title: "关键语法点",
-                items: analysis.renderedGrammarFocus,
-                tone: .grammar
-            )
+            GrammarFocusLocalizedSection(analysis: analysis)
 
             SentenceExplainListBlock(
                 title: "学生易错点",
@@ -1572,11 +1566,15 @@ struct ProfessorAnalysisPanel: View {
             )
 
             if analysis.renderedSimplerRewrite.nonEmpty != nil {
-                RewriteCardWithTranslationToggle(
+                RewriteCardSection(
                     rewrite: analysis.renderedSimplerRewrite,
-                    explanation: analysis.renderedSimplerRewriteTranslation,
-                    highlightTokens: analysis.vocabularyInContext.map(\.term),
-                    showsExplanation: $showsRewriteMeaning
+                    highlightTokens: analysis.vocabularyInContext.map(\.term)
+                )
+
+                SentenceExplainBlock(
+                    title: "改写译意",
+                    content: analysis.renderedSimplerRewriteTranslation.nonEmpty ?? "暂无改写译意。",
+                    tone: .translation
                 )
             }
 
@@ -1606,7 +1604,7 @@ struct ProfessorAnalysisPanel: View {
 
             if !relatedEvidenceItems.isEmpty {
                 SentenceExplainListBlock(
-                    title: "相关知识点 / 题目证据",
+                    title: "相关证据 / 知识点",
                     items: relatedEvidenceItems,
                     tone: .node
                 )
@@ -1624,12 +1622,14 @@ private struct TranslationInterpretationGroup: View {
     }
 
     private var teachingInterpretationText: String {
+        let synthesized = synthesizedTeachingInterpretation(for: analysis)
+
         if let explicit = analysis.renderedTeachingInterpretation.nonEmpty,
-           !explanationLooksDuplicated(explicit, comparedTo: faithfulTranslationText) {
+           !explanationLooksDuplicated(explicit, comparedTo: faithfulTranslationText),
+           !shouldPreferSynthesizedTeachingInterpretation(explicit) {
             return explicit
         }
 
-        let synthesized = synthesizedTeachingInterpretation(for: analysis)
         return synthesized.nonEmpty ?? "暂无教学解读。当前结果里还没有稳定可用的教授式说明。"
     }
 
@@ -1658,14 +1658,38 @@ private struct StructuredCoreSkeletonCard: View {
         analysis.displayedCoreSkeleton
     }
 
+    private var hasStableSkeleton: Bool {
+        analysis.displayedStableCoreSkeleton?.isMeaningful == true
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             sectionMarker(text: "句子主干", tone: .structure)
 
-            VStack(spacing: 10) {
-                skeletonRow(label: "主语", content: skeleton.subject, tone: .structure)
-                skeletonRow(label: "谓语", content: skeleton.predicate, tone: .grammar)
-                skeletonRow(label: "核心补足", content: skeleton.complementOrObject, tone: .sentence)
+            if hasStableSkeleton {
+                VStack(spacing: 10) {
+                    skeletonRow(label: "主语", content: skeleton.subject, tone: .structure)
+                    skeletonRow(label: "谓语", content: skeleton.predicate, tone: .grammar)
+                    skeletonRow(label: "核心补足", content: skeleton.complementOrObject, tone: .sentence)
+                }
+            } else {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "text.alignleft")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(ExplainHighlightTone.structure.accent.opacity(0.85))
+
+                    Text("当前结果里主干拆分不稳定，建议先看语块切分和教学解读。")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Color.black.opacity(0.7))
+                        .lineSpacing(4)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 14)
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(ExplainHighlightTone.structure.softFill)
+                )
             }
         }
     }
@@ -1677,7 +1701,7 @@ private struct StructuredCoreSkeletonCard: View {
                 .foregroundStyle(tone.accent.opacity(0.9))
                 .frame(width: 68, alignment: .leading)
 
-            Text(content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "当前结果里没有单独提取这一栏。" : content)
+            Text(content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? compactSkeletonPlaceholder(for: label) : content)
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Color.black.opacity(0.78))
                 .lineSpacing(4)
@@ -1690,6 +1714,86 @@ private struct StructuredCoreSkeletonCard: View {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(tone.softFill)
         )
+    }
+}
+
+private struct GrammarFocusLocalizedSection: View {
+    let analysis: ProfessorSentenceAnalysis
+
+    private var items: [ProfessorGrammarFocusDisplayItem] {
+        analysis.displayedGrammarFocusCards
+    }
+
+    var body: some View {
+        if !items.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                sectionMarker(text: "关键语法点", tone: .grammar)
+
+                ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(alignment: .center, spacing: 8) {
+                            Text("第\(index + 1)点")
+                                .font(.system(size: 11, weight: .bold, design: .rounded))
+                                .foregroundStyle(Color.black.opacity(0.42))
+
+                            Text(item.title)
+                                .font(.system(size: 13, weight: .bold, design: .rounded))
+                                .foregroundStyle(ExplainHighlightTone.grammar.accent.opacity(0.92))
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 5)
+                                .background(
+                                    Capsule(style: .continuous)
+                                        .fill(ExplainHighlightTone.grammar.softFill)
+                                )
+
+                            if let tag = item.terminologyTag?.nonEmpty {
+                                Text(tag)
+                                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(Color.black.opacity(0.5))
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(
+                                        Capsule(style: .continuous)
+                                            .fill(Color.black.opacity(0.05))
+                                    )
+                            }
+                        }
+
+                        grammarMetaRow(label: "这是什么", value: item.whatItIs)
+                        grammarMetaRow(label: "在本句里", value: item.functionInSentence)
+                        grammarMetaRow(label: "为什么重要", value: item.whyItMatters)
+
+                        if let example = item.exampleEN?.nonEmpty {
+                            grammarMetaRow(label: "原句线索", value: example, usesMonospace: true)
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(Color.white.opacity(0.8))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    .stroke(ExplainHighlightTone.grammar.stroke, lineWidth: 1)
+                            )
+                    )
+                }
+            }
+        }
+    }
+
+    private func grammarMetaRow(label: String, value: String, usesMonospace: Bool = false) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(label)
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(Color.black.opacity(0.42))
+
+            Text(value)
+                .font(usesMonospace ? .system(size: 13, weight: .medium, design: .monospaced) : .system(size: 13, weight: .medium))
+                .foregroundStyle(Color.black.opacity(0.68))
+                .lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 
@@ -1764,26 +1868,13 @@ private struct StructuredChunkLayerCard: View {
     }
 }
 
-private struct RewriteCardWithTranslationToggle: View {
+private struct RewriteCardSection: View {
     let rewrite: String
-    let explanation: String
     let highlightTokens: [String]
-    @Binding var showsExplanation: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center) {
-                sectionMarker(text: "英文简化改写", tone: .rewrite)
-                Spacer(minLength: 0)
-                Button(showsExplanation ? "隐藏译意" : "显示译意") {
-                    withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
-                        showsExplanation.toggle()
-                    }
-                }
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .buttonStyle(.plain)
-                .foregroundStyle(ExplainHighlightTone.rewrite.accent.opacity(0.9))
-            }
+            sectionMarker(text: "英文简化改写", tone: .rewrite)
 
             VStack(alignment: .leading, spacing: 10) {
                 Text("保留原意，只把句法压缩成更直接的表达。")
@@ -1822,15 +1913,6 @@ private struct RewriteCardWithTranslationToggle: View {
                     .padding(.vertical, 14)
                     .padding(.leading, 10)
             }
-
-            if showsExplanation {
-                SentenceExplainBlock(
-                    title: "改写译意",
-                    content: explanation.nonEmpty ?? "暂无改写译意",
-                    tone: .translation
-                )
-                .transition(.opacity.combined(with: .move(edge: .top)))
-            }
         }
     }
 }
@@ -1855,11 +1937,64 @@ private func pedagogicalSignature(_ value: String) -> String {
         .replacingOccurrences(of: "[\\s\\p{Punct}]+", with: "", options: .regularExpression)
 }
 
+private func conciseSentenceFunctionText(_ value: String) -> String {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return "" }
+
+    let firstSentence = trimmed
+        .components(separatedBy: CharacterSet(charactersIn: "。！？\n"))
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .first(where: { !$0.isEmpty }) ?? trimmed
+
+    if firstSentence.count <= 44 {
+        return firstSentence
+    }
+    return String(firstSentence.prefix(43)) + "…"
+}
+
+private func shouldPreferSynthesizedTeachingInterpretation(_ value: String) -> Bool {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return true }
+
+    let teacherCue = trimmed.contains("先抓") || trimmed.contains("不要把") || trimmed.contains("真正") || trimmed.contains("读偏") || trimmed.contains("主干")
+    let translationCue = trimmed.contains("意思是") || trimmed.contains("可以译为") || trimmed.contains("译作") || trimmed.contains("说的是")
+
+    return translationCue && !teacherCue
+}
+
+private func compactSkeletonPlaceholder(for label: String) -> String {
+    switch label {
+    case "主语":
+        return "主语未单独提取"
+    case "谓语":
+        return "谓语未单独提取"
+    default:
+        return "无明显单独补足"
+    }
+}
+
 private func synthesizedTeachingInterpretation(for analysis: ProfessorSentenceAnalysis) -> String {
     var parts: [String] = []
 
-    if let sentenceFunction = analysis.renderedSentenceFunction.nonEmpty {
-        parts.append(sentenceFunction)
+    if let skeleton = analysis.displayedStableCoreSkeleton, skeleton.isMeaningful {
+        let boardCore = [skeleton.subject, skeleton.predicate, skeleton.complementOrObject]
+            .compactMap(\.nonEmpty)
+            .joined(separator: " ")
+        if !boardCore.isEmpty {
+            parts.append("先把“\(boardCore)”当成主句真正要成立的判断。")
+        }
+    }
+
+    if let firstLayer = analysis.displayedChunkLayers.first(where: {
+        let role = $0.role.lowercased()
+        return role.contains("前置") || role.contains("时间") || role.contains("让步") || role.contains("条件") || role.contains("后置")
+    }) {
+        let role = firstLayer.role.nonEmpty ?? "这一层"
+        parts.append("\(role)先当框架看，它只是帮主句补时间、范围或修饰关系。")
+    }
+
+    if let firstGrammar = analysis.displayedGrammarFocusCards.first {
+        parts.append("句中最关键的结构是“\(firstGrammar.title)”。\(firstGrammar.functionInSentence)")
     }
 
     if let firstTrap = analysis.renderedMisreadingTraps.first?.nonEmpty {

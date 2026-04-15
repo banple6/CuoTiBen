@@ -22,9 +22,9 @@ export function buildExplainSentencePrompt({ title, sentence, context, paragraph
     "original_sentence 必须回填原句。",
     "evidence_type 必须只能是：background_info / transition_signal / core_claim / supporting_evidence / counter_argument / conclusion_marker 之一。",
     "sentence_function 必须直接说明这句在论证里在做什么，如“核心判断句：作者真正要成立的判断在这里”。",
-    "core_skeleton 必须是对象，字段固定为 subject、predicate、complement_or_object。内容必须明确，不允许空泛总结。",
+    "core_skeleton 必须是对象，字段固定为 subject、predicate、complement_or_object。内容必须明确，不允许空泛总结。字段值里不允许再出现 [subject: ...] 这类 bracket 标记，只能保留真实成分内容。",
     "chunk_layers 必须是数组，每项都是对象，字段固定为 text、role、attaches_to、gloss。role 要说明它是核心信息、前置框架、后置修饰、补充说明还是让步/条件框架。",
-    "grammar_focus 必须是数组，每项都是对象，字段固定为 phenomenon、function、why_it_matters。只保留最关键的 1-3 个。",
+    "grammar_focus 必须是数组，每项都是对象，字段固定为 phenomenon、function、why_it_matters、title_zh、explanation_zh、why_it_matters_zh、example_en。function 必须写“这个结构在本句起什么作用”；explanation_zh 必须写“它是什么”；why_it_matters_zh 必须写“为什么重要”。只保留最关键的 1-3 个。",
     "faithful_translation 必须是忠实翻译：中文自然，但要尽量贴住原句真实意思，不要偷换成教学评论。",
     "teaching_interpretation 必须是教学解读：说明这句话真正承担什么功能、该先抓哪一层、为什么容易读错。",
     "natural_chinese_meaning 用于兼容旧字段，内容与 teaching_interpretation 保持一致。",
@@ -51,7 +51,7 @@ export function buildExplainSentencePrompt({ title, sentence, context, paragraph
     "2.1 faithful_translation 和 teaching_interpretation 都必须以中文为主；除专门术语、原句片段、语法标签外，不允许出现整段英文说明。",
     "3. core_skeleton 必须直接说清主句主干，不能写成“本句讲了什么”或“先抓主干”。",
     "4. chunk_layers 不是机械切分，必须说明每一块的功能和挂接对象。",
-    "5. grammar_focus 只保留最关键的 1-3 个语法点，而且必须说明它在这句里具体起什么作用，以及为什么做题时重要。",
+    "5. grammar_focus 只保留最关键的 1-3 个语法点。title_zh、explanation_zh、why_it_matters_zh 必须中文主导；function 也必须用中文说明它在本句里的作用。phenomenon/function/why_it_matters 只作为兼容字段。",
     "6. misreading_traps 必须明确学生最可能把哪一层挂错、读错或范围看错。",
     "7. exam_paraphrase_routes 要贴近阅读理解命题，如同义替换、因果偷换、范围缩放、态度弱化，并尽量给出具体改写路线。",
     "8. mini_check 必须是一个可立即检验理解的小问题，不要空泛提问。",
@@ -274,9 +274,12 @@ function normalizeExplainResult(raw, sourceSentence, paragraph_role = "") {
   const coreSkeleton = normalizeCoreSkeleton(firstDefined(raw, ["core_skeleton"]), sourceSentence);
   const chunkLayers = normalizeChunkLayers(firstDefined(raw, ["chunk_layers"]), sourceSentence);
   const grammarFocus = normalizeGrammarFocus(firstDefined(raw, ["grammar_focus"]), sourceSentence);
+  const renderedCoreSkeleton = renderCoreSkeleton(coreSkeleton);
   const sentenceCore = typeof raw.sentence_core === "string" && raw.sentence_core.trim()
-    ? raw.sentence_core.trim()
-    : renderCoreSkeleton(coreSkeleton) || buildFallbackSentenceCore(sourceSentence);
+    ? (containsLegacyBracketCoreMarkup(raw.sentence_core) || (!hasExplicitSentenceCore(raw.sentence_core) && renderedCoreSkeleton)
+      ? renderedCoreSkeleton || buildFallbackSentenceCore(sourceSentence)
+      : raw.sentence_core.trim())
+    : renderedCoreSkeleton || buildFallbackSentenceCore(sourceSentence);
   const chunkBreakdown = normalizeArray(raw.chunk_breakdown)
     .map((item) => typeof item === "string" ? item.trim() : "")
     .filter(Boolean);
@@ -296,8 +299,11 @@ function normalizeExplainResult(raw, sourceSentence, paragraph_role = "") {
   const grammarPoints = rawGrammarPoints.length > 0
     ? rawGrammarPoints
     : grammarFocus.map((item) => ({
-      name: item.phenomenon,
-      explanation: [item.function, item.why_it_matters ? `为什么重要：${item.why_it_matters}` : ""].filter(Boolean).join("｜")
+      name: item.title_zh || item.phenomenon,
+      explanation: [
+        item.explanation_zh || item.function,
+        item.why_it_matters_zh || item.why_it_matters ? `为什么重要：${item.why_it_matters_zh || item.why_it_matters}` : ""
+      ].filter(Boolean).join("｜")
     }));
   const vocabularyInContext = normalizeArray(rawVocabulary)
     .map((item) => ({
@@ -424,9 +430,10 @@ function extractChineseDominantClauses(text) {
 function purifyChineseExplanation(text) {
   const normalized = typeof text === "string" ? text.trim() : "";
   if (!normalized) return "";
-  if (isChineseDominantText(normalized)) return normalized;
+  const sanitized = sanitizePedagogicalChinese(normalized);
+  if (isChineseDominantText(sanitized) && !containsPedagogicalEnglishLeakage(sanitized)) return sanitized;
 
-  const recovered = extractChineseDominantClauses(normalized);
+  const recovered = extractChineseDominantClauses(sanitized);
   return recovered.length > 0 ? recovered.join("。") : "";
 }
 
@@ -464,6 +471,184 @@ function purifyChineseList(values, limit = 4) {
   }
 
   return ordered;
+}
+
+function grammarFocusTemplate(raw) {
+  const normalized = typeof raw === "string" ? raw.trim() : "";
+  const lower = normalized.toLowerCase();
+
+  if (normalized.includes("时间状语从句") || lower.includes("temporal clause") || lower.includes("adverbial clause") || lower.includes("after") || lower.includes("before") || lower.includes("when ") || lower.includes("once")) {
+    return {
+      title: "时间状语从句",
+      explanation: "这是用来交代时间背景的状语从句，说明事情在什么时间条件下发生。",
+      function: "它在这句里先搭时间背景，再把真正要成立的判断交给主句。",
+      why: "时间框架一旦错挂，背景信息就会被错读成核心判断。"
+    };
+  }
+  if (normalized.includes("压缩定语从句") || normalized.includes("省略关系从句") || lower.includes("reduced relative clause")) {
+    return {
+      title: "压缩定语从句",
+      explanation: "这是把完整关系从句压缩成更短修饰块的写法，本质上仍在补前面名词的信息。",
+      function: "它在这里负责压缩对前面名词的限定说明，不是在另起一个主句。",
+      why: "如果把这层误当成主干谓语，整句结构就会被拆坏。"
+    };
+  }
+  if (normalized.includes("宾语从句") || lower.includes("object clause")) {
+    return {
+      title: "宾语从句",
+      explanation: "这是跟在谓语后面、充当核心内容的从句，常回答“认为什么”“说明什么”。",
+      function: "它在这句里承接前面的谓语，真正承载作者要表达的内容对象。",
+      why: "宾语从句一旦挂错，学生会把说法来源和作者判断混在一起。"
+    };
+  }
+  if (normalized.includes("情态动词") || lower.includes("modal verb") || lower.includes("might") || lower.includes("may ") || lower.includes("could") || lower.includes("would") || lower.includes("should")) {
+    return {
+      title: "情态动词",
+      explanation: "情态动词本身不增加新事实，而是在调节语气强弱，表示可能、推测、限制或建议。",
+      function: "它在这句里控制作者判断的把握程度，不让语气走成绝对断言。",
+      why: "情态一旦忽略，题目里的态度强弱和作者把握程度就会读偏。"
+    };
+  }
+  if (normalized.includes("后置修饰") || lower.includes("postpositive modifier")) {
+    return {
+      title: "后置修饰",
+      explanation: "后置修饰是放在中心名词后面补信息的结构，读的时候要先找清楚它修饰谁。",
+      function: "它在这里负责给前面的名词补限定范围，不是在推进新的主句判断。",
+      why: "后置修饰挂错对象，是长难句里最常见的误读来源。"
+    };
+  }
+  if (normalized.includes("定语从句") || lower.includes("relative clause")) {
+    return {
+      title: "定语从句",
+      explanation: "定语从句是在给前面的名词补限定信息，告诉你“哪一个”“什么样的”。",
+      function: "它在这里继续限定前面的名词，不是作者另起一层新的判断。",
+      why: "修饰对象一旦看错，枝叶就会被误当成主干。"
+    };
+  }
+  if (normalized.includes("非谓语") || lower.includes("non-finite") || lower.includes("participle") || lower.includes("infinitive")) {
+    return {
+      title: "非谓语结构",
+      explanation: "非谓语是把完整动作压缩成信息块的写法，常用来补目的、原因、伴随或修饰关系。",
+      function: "它在这句里负责压缩附加信息，不能被当成新的完整谓语。",
+      why: "把非谓语误判成主句谓语，会直接拆错主干。"
+    };
+  }
+  if (normalized.includes("被动") || lower.includes("passive voice")) {
+    return {
+      title: "被动结构",
+      explanation: "被动结构会把动作承受者顶到前面，真正的施动者则可能后移甚至省略。",
+      function: "它在这句里改变了信息出场顺序，强调的是谁被作用而不是谁发出动作。",
+      why: "如果被动方向没看清，因果和细节关系很容易整体反过来。"
+    };
+  }
+  if (normalized.includes("否定") || lower.includes("negation")) {
+    return {
+      title: "否定范围",
+      explanation: "否定范围指的是否定词到底压在哪一层信息上，而不是看到 not 就结束。",
+      function: "它在这句里限制判断成立的范围，决定作者否定的是动作、比较项还是限定条件。",
+      why: "否定范围错一层，题目选项往往会整句反向。"
+    };
+  }
+  if (normalized.includes("让步框架") || lower.includes("concessive frame")) {
+    return {
+      title: "让步框架",
+      explanation: "让步框架会先承认一个条件、反方声音或看似成立的情况，再回到自己的真正判断。",
+      function: "它在这里先让一步，真正想成立的判断通常落在后面的主句。",
+      why: "学生最容易把让步内容错当成作者最终立场。"
+    };
+  }
+  if (normalized.includes("前置框架") || lower.includes("framing phrase")) {
+    return {
+      title: "前置框架",
+      explanation: "前置框架是先放在句首的背景交代层，用来限定主句判断成立的场景、时间或角度。",
+      function: "它在这里先定阅读坐标，再把真正判断交给后面的主句。",
+      why: "如果把前置框架误读成主干，整句重点就会跑偏。"
+    };
+  }
+
+  return null;
+}
+
+function normalizeMixedGrammarChinese(text) {
+  let normalized = typeof text === "string" ? text.trim() : "";
+  if (!normalized) return "";
+
+  const replacements = [
+    [/temporal clause/gi, "时间状语从句"],
+    [/time clause/gi, "时间状语从句"],
+    [/reduced relative clause/gi, "压缩定语从句"],
+    [/relative clause/gi, "定语从句"],
+    [/object clause/gi, "宾语从句"],
+    [/modal verb/gi, "情态动词"],
+    [/postpositive modifier/gi, "后置修饰"],
+    [/passive voice/gi, "被动结构"],
+    [/concessive frame/gi, "让步框架"],
+    [/framing phrase/gi, "前置框架"],
+    [/participle phrase/gi, "分词短语"],
+    [/infinitive phrase/gi, "不定式短语"],
+    [/non-finite/gi, "非谓语结构"],
+    [/adverbial clause/gi, "状语从句"]
+  ];
+
+  for (const [pattern, replacement] of replacements) {
+    normalized = normalized.replace(pattern, replacement);
+  }
+
+  normalized = normalized.replace(/([A-Za-z]+)\s*引导的/g, "由原句里的“$1 …”引出的");
+  return normalized;
+}
+
+function sanitizePedagogicalChinese(text) {
+  return normalizeMixedGrammarChinese(text)
+    .replace(/\[[A-Za-z_\s-]+:\s*[^\]]+\]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function containsPedagogicalEnglishLeakage(text) {
+  const normalized = typeof text === "string" ? text.trim() : "";
+  if (!normalized) return false;
+  if (/\[[A-Za-z_\s-]+:\s*[^\]]+\]/.test(normalized)) return true;
+  if (/[A-Za-z]{2,}\s*引导/.test(normalized)) return true;
+  return /[A-Za-z]{8,}(?:\s+[A-Za-z]{2,})+/.test(normalized);
+}
+
+function looksLikeGrammarRoleDescription(text) {
+  const normalized = typeof text === "string" ? text.trim() : "";
+  if (!normalized) return false;
+  return normalized.includes("本句")
+    || normalized.includes("在这句")
+    || normalized.includes("先抓")
+    || normalized.includes("不要把")
+    || normalized.includes("阅读时");
+}
+
+function localizeGrammarFocusItem(item) {
+  const template = grammarFocusTemplate(item.phenomenon || "");
+  const titleZh = purifyChineseDisplayText(item.title_zh) || template?.title || purifyChineseDisplayText(sanitizePedagogicalChinese(item.phenomenon));
+  const explicitExplanationZh = purifyChineseExplanation(item.explanation_zh);
+  const explanationZh = (!looksLikeGrammarRoleDescription(explicitExplanationZh) && explicitExplanationZh)
+    || template?.explanation
+    || purifyChineseExplanation(sanitizePedagogicalChinese(item.phenomenon))
+    || "这是本句里最值得先抓的一层结构。";
+  const functionZh = purifyChineseExplanation(sanitizePedagogicalChinese(item.function))
+    || template?.function
+    || "它在这句里负责限定主干、补充范围或交代背景。";
+  const whyZh = purifyChineseExplanation(item.why_it_matters_zh)
+    || purifyChineseExplanation(sanitizePedagogicalChinese(item.why_it_matters))
+    || template?.why
+    || "这个结构一旦挂错，主干、修饰范围和命题改写都会跟着读偏。";
+
+  return {
+    ...item,
+    phenomenon: item.phenomenon || titleZh,
+    function: functionZh,
+    why_it_matters: whyZh,
+    title_zh: titleZh,
+    explanation_zh: explanationZh,
+    why_it_matters_zh: whyZh,
+    example_en: typeof item.example_en === "string" ? item.example_en.trim() : ""
+  };
 }
 
 const explainStopwords = new Set([
@@ -625,12 +810,12 @@ function renderCoreSkeleton(coreSkeleton) {
     return "";
   }
 
-  const subject = typeof coreSkeleton.subject === "string" ? coreSkeleton.subject.trim() : "";
-  const predicate = typeof coreSkeleton.predicate === "string" ? coreSkeleton.predicate.trim() : "";
+  const subject = sanitizeCoreSkeletonField(typeof coreSkeleton.subject === "string" ? coreSkeleton.subject : "");
+  const predicate = sanitizeCoreSkeletonField(typeof coreSkeleton.predicate === "string" ? coreSkeleton.predicate : "");
   const complement = typeof coreSkeleton.complement_or_object === "string"
-    ? coreSkeleton.complement_or_object.trim()
+    ? sanitizeCoreSkeletonField(coreSkeleton.complement_or_object)
     : typeof coreSkeleton.complementOrObject === "string"
-      ? coreSkeleton.complementOrObject.trim()
+      ? sanitizeCoreSkeletonField(coreSkeleton.complementOrObject)
       : "";
 
   const parts = [];
@@ -640,23 +825,95 @@ function renderCoreSkeleton(coreSkeleton) {
   return parts.join("｜");
 }
 
+function containsLegacyBracketCoreMarkup(value) {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return /\[[A-Za-z_\s-]+:\s*[^\]]+\]/.test(normalized);
+}
+
 function normalizeCoreSkeleton(raw, fallbackSentence) {
   if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-    const subject = typeof raw.subject === "string" ? raw.subject.trim() : "";
-    const predicate = typeof raw.predicate === "string" ? raw.predicate.trim() : "";
+    const subject = sanitizeCoreSkeletonField(typeof raw.subject === "string" ? raw.subject : "");
+    const predicate = sanitizeCoreSkeletonField(typeof raw.predicate === "string" ? raw.predicate : "");
     const complement = typeof raw.complement_or_object === "string"
-      ? raw.complement_or_object.trim()
+      ? sanitizeCoreSkeletonField(raw.complement_or_object)
       : typeof raw.complementOrObject === "string"
-        ? raw.complementOrObject.trim()
+        ? sanitizeCoreSkeletonField(raw.complementOrObject)
         : typeof raw.object === "string"
-          ? raw.object.trim()
+          ? sanitizeCoreSkeletonField(raw.object)
           : "";
+    const compatible = parseCompatibleCoreSkeleton([subject, predicate, complement].join(" "));
+    if (compatible) {
+      return compatible;
+    }
     if (subject || predicate || complement) {
       return { subject, predicate, complement_or_object: complement };
     }
   }
 
-  return buildFallbackCoreSkeleton(fallbackSentence);
+  return parseCompatibleCoreSkeleton(fallbackSentence) || buildFallbackCoreSkeleton(fallbackSentence);
+}
+
+function sanitizeCoreSkeletonField(value) {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  if (!normalized) return "";
+  return normalized
+    .replace(/\[[A-Za-z_\s-]+:\s*([^\]]+)\]/g, "$1")
+    .replace(/^(主语|谓语|核心补足|宾语|补语|表语)\s*[：:]\s*/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function parseCompatibleCoreSkeleton(text) {
+  const rawNormalized = typeof text === "string" ? text.trim() : "";
+  if (!rawNormalized) return null;
+
+  if (containsLegacyBracketCoreMarkup(rawNormalized)) {
+    const bracketSkeleton = parseBracketCoreSkeleton(rawNormalized);
+    if (bracketSkeleton) {
+      return {
+        subject: sanitizeCoreSkeletonField(bracketSkeleton.subject),
+        predicate: sanitizeCoreSkeletonField(bracketSkeleton.predicate),
+        complement_or_object: sanitizeCoreSkeletonField(bracketSkeleton.complementOrObject || bracketSkeleton.complement_or_object || "")
+      };
+    }
+  }
+
+  const normalized = sanitizeCoreSkeletonField(rawNormalized);
+  if (!normalized) return null;
+
+  const segments = normalized
+    .replace(/\n/g, "｜")
+    .replace(/／/g, "｜")
+    .replace(/\//g, "｜")
+    .split("｜")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  let subject = "";
+  let predicate = "";
+  let complement = "";
+
+  for (const segment of segments) {
+    if (segment.includes("主语：") || segment.includes("主语:")) {
+      subject = sanitizeCoreSkeletonField(segment.replace(/主语[：:]/, ""));
+    } else if (segment.includes("谓语：") || segment.includes("谓语:")) {
+      predicate = sanitizeCoreSkeletonField(segment.replace(/谓语[：:]/, ""));
+    } else if (segment.includes("核心补足：") || segment.includes("核心补足:") || segment.includes("宾语：") || segment.includes("宾语:") || segment.includes("补语：") || segment.includes("表语：")) {
+      complement = sanitizeCoreSkeletonField(
+        segment
+          .replace(/核心补足[：:]/, "")
+          .replace(/宾语[：:]/, "")
+          .replace(/补语[：:]/, "")
+          .replace(/表语[：:]/, "")
+      );
+    }
+  }
+
+  if (subject || predicate || complement) {
+    return { subject, predicate, complement_or_object: complement };
+  }
+
+  return null;
 }
 
 function buildFallbackChunkLayers(sentence) {
@@ -732,7 +989,11 @@ function buildFallbackGrammarFocus(sentence) {
     items.push({
       phenomenon: "定语从句 / 后置修饰",
       function: `本句含有后置修饰，阅读时先抓“${coreClause}”这一主干，再回头判断从句到底修饰谁。`,
-      why_it_matters: "修饰对象一旦挂错，学生就会把枝叶误当成主干判断。"
+      why_it_matters: "修饰对象一旦挂错，学生就会把枝叶误当成主干判断。",
+      title_zh: "定语从句 / 后置修饰",
+      explanation_zh: `本句含有后置修饰，阅读时先抓“${coreClause}”这一主干，再回头判断从句到底修饰谁。`,
+      why_it_matters_zh: "修饰对象一旦挂错，学生就会把枝叶误当成主干判断。",
+      example_en: ""
     });
   }
 
@@ -740,7 +1001,11 @@ function buildFallbackGrammarFocus(sentence) {
     items.push({
       phenomenon: "非谓语结构",
       function: "这里的 to do / doing 更像压缩信息块，不是另起一个完整谓语。",
-      why_it_matters: "如果把非谓语误判成完整谓语，整句主干会被拆坏。"
+      why_it_matters: "如果把非谓语误判成完整谓语，整句主干会被拆坏。",
+      title_zh: "非谓语结构",
+      explanation_zh: "这里的 to do / doing 更像压缩信息块，不是另起一个完整谓语。",
+      why_it_matters_zh: "如果把非谓语误判成完整谓语，整句主干会被拆坏。",
+      example_en: ""
     });
   }
 
@@ -748,7 +1013,11 @@ function buildFallbackGrammarFocus(sentence) {
     items.push({
       phenomenon: "被动结构",
       function: "被动语态会把真正施动者后移或省略，阅读时要分清动作发出者和承受者。",
-      why_it_matters: "如果忽略被动方向，细节题和因果题很容易读反。"
+      why_it_matters: "如果忽略被动方向，细节题和因果题很容易读反。",
+      title_zh: "被动结构",
+      explanation_zh: "被动语态会把真正施动者后移或省略，阅读时要分清动作发出者和承受者。",
+      why_it_matters_zh: "如果忽略被动方向，细节题和因果题很容易读反。",
+      example_en: ""
     });
   }
 
@@ -756,7 +1025,11 @@ function buildFallbackGrammarFocus(sentence) {
     items.push({
       phenomenon: "否定范围",
       function: "本句带否定色彩，要看清否定落在谓语、比较项还是限定范围上。",
-      why_it_matters: "否定范围一旦看错，选项的态度和细节判断会整体反向。"
+      why_it_matters: "否定范围一旦看错，选项的态度和细节判断会整体反向。",
+      title_zh: "否定范围",
+      explanation_zh: "本句带否定色彩，要看清否定落在谓语、比较项还是限定范围上。",
+      why_it_matters_zh: "否定范围一旦看错，选项的态度和细节判断会整体反向。",
+      example_en: ""
     });
   }
 
@@ -764,17 +1037,21 @@ function buildFallbackGrammarFocus(sentence) {
     items.push({
       phenomenon: "主干优先",
       function: `先把“${coreClause}”这一主句读稳，再回头处理其余修饰层。`,
-      why_it_matters: "先主干后修饰，才能避免平均翻译。"
+      why_it_matters: "先主干后修饰，才能避免平均翻译。",
+      title_zh: "主干优先",
+      explanation_zh: `先把“${coreClause}”这一主句读稳，再回头处理其余修饰层。`,
+      why_it_matters_zh: "先主干后修饰，才能避免平均翻译。",
+      example_en: ""
     });
   }
 
-  return items.slice(0, 3);
+  return items.slice(0, 3).map(localizeGrammarFocusItem);
 }
 
 function normalizeGrammarFocus(raw, fallbackSentence) {
   if (Array.isArray(raw)) {
     const items = raw
-      .map((item) => ({
+      .map((item) => localizeGrammarFocusItem({
         phenomenon: typeof item?.phenomenon === "string" ? item.phenomenon.trim() : "",
         function: typeof item?.function === "string" ? item.function.trim() : "",
         why_it_matters: typeof item?.why_it_matters === "string"
@@ -782,8 +1059,29 @@ function normalizeGrammarFocus(raw, fallbackSentence) {
           : typeof item?.whyItMatters === "string"
             ? item.whyItMatters.trim()
             : ""
+        ,
+        title_zh: typeof item?.title_zh === "string"
+          ? item.title_zh.trim()
+          : typeof item?.titleZh === "string"
+            ? item.titleZh.trim()
+            : "",
+        explanation_zh: typeof item?.explanation_zh === "string"
+          ? item.explanation_zh.trim()
+          : typeof item?.explanationZh === "string"
+            ? item.explanationZh.trim()
+            : "",
+        why_it_matters_zh: typeof item?.why_it_matters_zh === "string"
+          ? item.why_it_matters_zh.trim()
+          : typeof item?.whyItMattersZh === "string"
+            ? item.whyItMattersZh.trim()
+            : "",
+        example_en: typeof item?.example_en === "string"
+          ? item.example_en.trim()
+          : typeof item?.exampleEn === "string"
+            ? item.exampleEn.trim()
+            : ""
       }))
-      .filter((item) => item.phenomenon || item.function || item.why_it_matters);
+      .filter((item) => item.phenomenon || item.function || item.why_it_matters || item.title_zh || item.explanation_zh || item.why_it_matters_zh);
     if (items.length > 0) {
       return items.slice(0, 3);
     }
@@ -1064,9 +1362,9 @@ function buildExplainSentenceRepairPrompt({
     "1. sentence_function 必须先判清这句是背景、推进、核心判断、证据、让步还是结论，并直接说清它在论证中做什么。",
     "2. faithful_translation 只负责忠实翻译，不能混入“真正要你抓”“这句在本段里”这类教学评论。",
     "3. teaching_interpretation 才负责老师口吻的解释，要直接说清学生该先抓哪一层、最容易把哪层挂错。",
-    "4. core_skeleton 必须明确 subject、predicate、complement_or_object，不能再写空泛总结。",
+    "4. core_skeleton 必须明确 subject、predicate、complement_or_object，不能再写空泛总结，字段值里也不能带 [subject: ...] 这种 bracket 标记。",
     "5. chunk_layers 每一项都要标明 role、attaches_to、gloss，至少要有一项 role 是“核心信息”。",
-    "6. grammar_focus 必须说清结构功能和为什么重要，不能只贴标签。",
+    "6. grammar_focus 必须说清结构功能和为什么重要，不能只贴标签；function 必须用中文说明它在本句里的作用，title_zh、explanation_zh、why_it_matters_zh 必须是中文主导的 UI 友好表述。",
     "7. misreading_traps 必须写清学生会把哪一层读错。",
     "8. exam_paraphrase_routes 必须写出命题人会怎么偷换。",
     "",
@@ -1142,8 +1440,11 @@ function enrichExplainResult(result, {
     sentence_core: result.sentence_core || renderCoreSkeleton(coreSkeleton) || buildFallbackSentenceCore(sentence),
     chunk_breakdown: labeledChunks,
     grammar_points: result.grammar_points.length > 0 ? result.grammar_points : grammarFocus.map((item) => ({
-      name: item.phenomenon,
-      explanation: [item.function, item.why_it_matters ? `为什么重要：${item.why_it_matters}` : ""].filter(Boolean).join("｜")
+      name: item.title_zh || item.phenomenon,
+      explanation: [
+        item.explanation_zh || item.function,
+        item.why_it_matters_zh || item.why_it_matters ? `为什么重要：${item.why_it_matters_zh || item.why_it_matters}` : ""
+      ].filter(Boolean).join("｜")
     })),
     vocabulary_in_context: result.vocabulary_in_context.length > 0
       ? result.vocabulary_in_context
@@ -1324,3 +1625,11 @@ export async function explainSentence({
     paragraph_role
   });
 }
+
+export const __testables = {
+  normalizeExplainResult,
+  normalizeCoreSkeleton,
+  normalizeGrammarFocus,
+  renderCoreSkeleton,
+  localizeGrammarFocusItem
+};

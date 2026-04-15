@@ -345,6 +345,10 @@ struct ProfessorCoreSkeleton: Codable, Equatable, Hashable {
         if !complementPart.isEmpty { parts.append("核心补足：\(complementPart)") }
         return parts.joined(separator: "｜")
     }
+
+    var isMeaningful: Bool {
+        !trimmedOrEmpty(subject).isEmpty || !trimmedOrEmpty(predicate).isEmpty || !trimmedOrEmpty(complementOrObject).isEmpty
+    }
 }
 
 struct ProfessorChunkLayer: Codable, Equatable, Hashable {
@@ -384,27 +388,73 @@ struct ProfessorChunkLayerDisplayItem: Equatable, Hashable {
     let gloss: String
 }
 
+struct ProfessorGrammarFocusDisplayItem: Equatable, Hashable {
+    let title: String
+    let whatItIs: String
+    let functionInSentence: String
+    let whyItMatters: String
+    let exampleEN: String?
+    let terminologyTag: String?
+}
+
 struct ProfessorGrammarFocus: Codable, Equatable, Hashable {
     let phenomenon: String
     let function: String
     let whyItMatters: String
+    let titleZh: String
+    let explanationZh: String
+    let whyItMattersZh: String
+    let exampleEn: String
 
     private enum CodingKeys: String, CodingKey {
         case phenomenon
         case function
         case whyItMatters = "why_it_matters"
+        case titleZh = "title_zh"
+        case explanationZh = "explanation_zh"
+        case whyItMattersZh = "why_it_matters_zh"
+        case exampleEn = "example_en"
+    }
+
+    init(
+        phenomenon: String,
+        function: String,
+        whyItMatters: String,
+        titleZh: String = "",
+        explanationZh: String = "",
+        whyItMattersZh: String = "",
+        exampleEn: String = ""
+    ) {
+        self.phenomenon = phenomenon
+        self.function = function
+        self.whyItMatters = whyItMatters
+        self.titleZh = titleZh
+        self.explanationZh = explanationZh
+        self.whyItMattersZh = whyItMattersZh
+        self.exampleEn = exampleEn
     }
 
     var rendered: String {
-        let phenomenonPart = phenomenon.trimmingCharacters(in: .whitespacesAndNewlines)
-        let functionPart = function.trimmingCharacters(in: .whitespacesAndNewlines)
-        let whyPart = whyItMatters.trimmingCharacters(in: .whitespacesAndNewlines)
+        let item = displayItem
 
         var parts: [String] = []
-        if !phenomenonPart.isEmpty { parts.append(phenomenonPart) }
-        if !functionPart.isEmpty { parts.append(functionPart) }
-        if !whyPart.isEmpty { parts.append("为什么重要：\(whyPart)") }
+        if !item.title.isEmpty { parts.append(item.title) }
+        if !item.whatItIs.isEmpty { parts.append("这是什么：\(item.whatItIs)") }
+        if !item.functionInSentence.isEmpty { parts.append("在本句里：\(item.functionInSentence)") }
+        if !item.whyItMatters.isEmpty { parts.append("为什么重要：\(item.whyItMatters)") }
         return parts.joined(separator: "｜")
+    }
+
+    var displayItem: ProfessorGrammarFocusDisplayItem {
+        localizedGrammarFocusDisplayItem(
+            phenomenon: phenomenon,
+            function: function,
+            whyItMatters: whyItMatters,
+            titleZh: titleZh,
+            explanationZh: explanationZh,
+            whyItMattersZh: whyItMattersZh,
+            exampleEn: exampleEn
+        )
     }
 }
 
@@ -619,11 +669,17 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
     }
 
     var renderedSentenceCore: String {
-        if let skeleton = coreSkeleton {
+        if let skeleton = displayedStableCoreSkeleton {
             let rendered = skeleton.rendered.trimmingCharacters(in: .whitespacesAndNewlines)
             if !rendered.isEmpty { return rendered }
         }
-        return sentenceCore
+
+        let normalized = preferredPedagogicalText(sentenceCore, fallback: "", kind: .sentenceCore)
+        if !normalized.isEmpty && !containsLegacyCoreSkeletonMarkup(sentenceCore) {
+            return normalized
+        }
+
+        return "当前结果里主干拆分不稳定，建议先看语块切分和教学解读。"
     }
 
     var renderedFaithfulTranslation: String {
@@ -648,30 +704,18 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
     }
 
     var displayedCoreSkeleton: ProfessorCoreSkeleton {
-        if let coreSkeleton {
-            return coreSkeleton
-        }
-
-        let segments = sentenceCore.split(separator: "｜").map(String.init)
-        var subject = ""
-        var predicate = ""
-        var complement = ""
-
-        for segment in segments {
-            if segment.contains("主语：") {
-                subject = segment.replacingOccurrences(of: "主语：", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
-            } else if segment.contains("谓语：") {
-                predicate = segment.replacingOccurrences(of: "谓语：", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
-            } else if segment.contains("核心补足：") {
-                complement = segment.replacingOccurrences(of: "核心补足：", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-        }
-
-        return ProfessorCoreSkeleton(
-            subject: subject,
-            predicate: predicate,
-            complementOrObject: complement
+        displayedStableCoreSkeleton ?? ProfessorCoreSkeleton(
+            subject: "",
+            predicate: "",
+            complementOrObject: ""
         )
+    }
+
+    var displayedStableCoreSkeleton: ProfessorCoreSkeleton? {
+        if let normalizedExplicit = normalizeCompatibleCoreSkeleton(from: coreSkeleton) {
+            return normalizedExplicit
+        }
+        return parseCompatibleCoreSkeleton(from: sentenceCore)
     }
 
     var displayedChunkLayers: [ProfessorChunkLayerDisplayItem] {
@@ -715,10 +759,43 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
     }
 
     var renderedGrammarFocus: [String] {
-        if !grammarFocus.isEmpty {
-            return purifiedChineseList(grammarFocus.map(\.rendered), limit: 3)
+        displayedGrammarFocusCards.map {
+            [
+                $0.title,
+                $0.whatItIs.isEmpty ? "" : "这是什么：\($0.whatItIs)",
+                $0.functionInSentence.isEmpty ? "" : "在本句里：\($0.functionInSentence)",
+                $0.whyItMatters.isEmpty ? "" : "为什么重要：\($0.whyItMatters)"
+            ]
+                .filter { !$0.isEmpty }
+                .joined(separator: "｜")
         }
-        return purifiedChineseList(grammarPoints.map { "\($0.name)：\($0.explanation)" }, limit: 3)
+    }
+
+    var displayedGrammarFocusCards: [ProfessorGrammarFocusDisplayItem] {
+        if !grammarFocus.isEmpty {
+            return grammarFocus
+                .map(\.displayItem)
+                .filter { !$0.title.isEmpty || !$0.whatItIs.isEmpty || !$0.functionInSentence.isEmpty || !$0.whyItMatters.isEmpty }
+                .uniqued(on: { "\($0.title)|\($0.whatItIs)|\($0.functionInSentence)|\($0.whyItMatters)" })
+                .prefix(3)
+                .map { $0 }
+        }
+
+        return grammarPoints.compactMap { point in
+            let item = localizedGrammarFocusDisplayItem(
+                phenomenon: point.name,
+                function: point.explanation,
+                whyItMatters: pedagogicalWhyGrammarPointMatters(name: point.name),
+                titleZh: "",
+                explanationZh: "",
+                whyItMattersZh: "",
+                exampleEn: ""
+            )
+            return item.title.isEmpty && item.whatItIs.isEmpty && item.functionInSentence.isEmpty && item.whyItMatters.isEmpty ? nil : item
+        }
+        .uniqued(on: { "\($0.title)|\($0.whatItIs)|\($0.functionInSentence)|\($0.whyItMatters)" })
+        .prefix(3)
+        .map { $0 }
     }
 
     var renderedMisreadingTraps: [String] {
@@ -971,11 +1048,12 @@ private func purifiedChineseSentences(from value: String) -> [String] {
 private func purifiedChineseExplanation(_ value: String) -> String {
     let trimmed = trimmedOrEmpty(value)
     guard !trimmed.isEmpty else { return "" }
-    if isChineseDominant(trimmed) {
-        return trimmed
+    let sanitized = sanitizedPedagogicalChinese(trimmed)
+    if isChineseDominant(sanitized), !containsChinesePedagogicalLeakage(sanitized) {
+        return sanitized
     }
 
-    let recovered = purifiedChineseSentences(from: trimmed)
+    let recovered = purifiedChineseSentences(from: sanitized)
     guard !recovered.isEmpty else { return "" }
     return recovered.joined(separator: "。")
 }
@@ -996,6 +1074,452 @@ private func purifiedChineseList(_ values: [String], limit: Int) -> [String] {
     }
 
     return ordered
+}
+
+private struct LocalizedGrammarTemplate {
+    let title: String
+    let whatItIs: String
+    let functionInSentence: String
+    let whyItMatters: String
+}
+
+private func localizedGrammarTemplate(for raw: String) -> LocalizedGrammarTemplate? {
+    let lower = raw.lowercased()
+    let normalized = trimmedOrEmpty(raw)
+
+    if normalized.contains("时间状语从句") || lower.contains("temporal clause") || lower.contains("adverbial clause") || lower.contains("after") || lower.contains("before") || lower.contains("when ") || lower.contains("once") {
+        return LocalizedGrammarTemplate(
+            title: "时间状语从句",
+            whatItIs: "这是用来交代时间背景的状语从句，说明事情在什么时间条件下发生。",
+            functionInSentence: "它在这句里先搭时间背景，再把真正要成立的判断交给主句。",
+            whyItMatters: "时间框架一旦错挂，学生就会把背景信息错当核心判断。"
+        )
+    }
+    if normalized.contains("压缩定语从句") || normalized.contains("省略关系从句") || lower.contains("reduced relative clause") {
+        return LocalizedGrammarTemplate(
+            title: "压缩定语从句",
+            whatItIs: "这是把完整关系从句压缩成更短修饰块的写法，本质上仍在补前面名词的信息。",
+            functionInSentence: "它在这里负责压缩对前面名词的限定说明，不是在另起一个主句。",
+            whyItMatters: "如果把这层误当成主干谓语，就会把整句结构拆坏。"
+        )
+    }
+    if normalized.contains("宾语从句") || lower.contains("object clause") {
+        return LocalizedGrammarTemplate(
+            title: "宾语从句",
+            whatItIs: "这是跟在谓语后面、充当核心内容的从句，常回答“认为什么”“说明什么”。",
+            functionInSentence: "它在这句里承接前面的谓语，真正承载作者要表达的内容对象。",
+            whyItMatters: "宾语从句一旦挂错，学生会把说法来源和作者判断混在一起。"
+        )
+    }
+    if normalized.contains("情态动词") || lower.contains("modal verb") || lower.contains("might") || lower.contains("may ") || lower.contains("could") || lower.contains("would") || lower.contains("should") {
+        return LocalizedGrammarTemplate(
+            title: "情态动词",
+            whatItIs: "情态动词本身不增加新事实，而是在调节语气强弱，表示可能、推测、限制或建议。",
+            functionInSentence: "它在这句里控制作者判断的把握程度，不让语气走成绝对断言。",
+            whyItMatters: "情态一旦忽略，题目里的态度强弱和作者把握程度就会读偏。"
+        )
+    }
+    if normalized.contains("后置修饰") || lower.contains("postpositive modifier") {
+        return LocalizedGrammarTemplate(
+            title: "后置修饰",
+            whatItIs: "后置修饰是放在中心名词后面补信息的结构，读的时候要先找清楚它修饰谁。",
+            functionInSentence: "它在这里负责给前面的名词补限定范围，不是在推进新的主句判断。",
+            whyItMatters: "后置修饰挂错对象，是长难句里最常见的误读来源。"
+        )
+    }
+    if normalized.contains("定语从句") || lower.contains("relative clause") {
+        return LocalizedGrammarTemplate(
+            title: "定语从句",
+            whatItIs: "定语从句是在给前面的名词补限定信息，告诉你“哪一个”“什么样的”。",
+            functionInSentence: "它在这里继续限定前面的名词，不是作者另起一层新的判断。",
+            whyItMatters: "修饰对象一旦看错，枝叶就会被误当成主干。"
+        )
+    }
+    if normalized.contains("非谓语") || lower.contains("non-finite") || lower.contains("participle") || lower.contains("infinitive") {
+        return LocalizedGrammarTemplate(
+            title: "非谓语结构",
+            whatItIs: "非谓语是把完整动作压缩成信息块的写法，常用来补目的、原因、伴随或修饰关系。",
+            functionInSentence: "它在这句里负责压缩附加信息，不能被当成新的完整谓语。",
+            whyItMatters: "把非谓语误判成主句谓语，会直接拆错主干。"
+        )
+    }
+    if normalized.contains("被动") || lower.contains("passive voice") {
+        return LocalizedGrammarTemplate(
+            title: "被动结构",
+            whatItIs: "被动结构会把动作承受者顶到前面，真正的施动者则可能后移甚至省略。",
+            functionInSentence: "它在这句里改变了信息出场顺序，强调的是谁被作用而不是谁发出动作。",
+            whyItMatters: "如果被动方向没看清，因果和细节关系很容易整体反过来。"
+        )
+    }
+    if normalized.contains("否定") || lower.contains("negation") {
+        return LocalizedGrammarTemplate(
+            title: "否定范围",
+            whatItIs: "否定范围指的是否定词到底压在哪一层信息上，而不是看到 not 就结束。",
+            functionInSentence: "它在这句里限制判断成立的范围，决定作者否定的是动作、比较项还是限定条件。",
+            whyItMatters: "否定范围错一层，题目选项往往会整句反向。"
+        )
+    }
+    if normalized.contains("让步") || lower.contains("concession") {
+        return LocalizedGrammarTemplate(
+            title: "让步框架",
+            whatItIs: "让步框架会先承认一个条件、反方声音或看似成立的情况，再回到自己的真正判断。",
+            functionInSentence: "它在这里先让一步，真正想成立的判断通常落在后面的主句。",
+            whyItMatters: "学生最容易把让步内容错当成作者最终立场。"
+        )
+    }
+    if normalized.contains("前置框架") || lower.contains("framing phrase") {
+        return LocalizedGrammarTemplate(
+            title: "前置框架",
+            whatItIs: "前置框架是先放在句首的背景交代层，用来限定主句判断成立的场景、时间或角度。",
+            functionInSentence: "它在这里先定阅读坐标，再把真正判断交给后面的主句。",
+            whyItMatters: "如果把前置框架误读成主干，整句重点就会跑偏。"
+        )
+    }
+    if normalized.contains("条件") || lower.contains("conditional") {
+        return LocalizedGrammarTemplate(
+            title: "条件框架",
+            whatItIs: "条件框架只是在交代结论成立所需要的前提，并不是作者已经直接成立的判断。",
+            functionInSentence: "它在这里负责限定判断成立的前提，真正结论仍在主句主干里。",
+            whyItMatters: "如果条件和结论混读，细节题和推断题都会失焦。"
+        )
+    }
+    if normalized.contains("同位语从句") || lower.contains("appositive clause") {
+        return LocalizedGrammarTemplate(
+            title: "同位语从句",
+            whatItIs: "同位语从句是在解释前面抽象名词具体内容的从句，常跟在 idea、fact、claim 一类词后面。",
+            functionInSentence: "它在这里补出前面抽象名词的真实内容，不是另起一个平行判断。",
+            whyItMatters: "如果把它误读成主句，就会把作者观点和被解释内容混成一层。"
+        )
+    }
+
+    return nil
+}
+
+private func normalizeMixedGrammarChinese(_ text: String) -> String {
+    var normalized = trimmedOrEmpty(text)
+    guard !normalized.isEmpty else { return "" }
+
+    let replacements: [(String, String)] = [
+        ("temporal clause", "时间状语从句"),
+        ("time clause", "时间状语从句"),
+        ("reduced relative clause", "压缩定语从句"),
+        ("relative clause", "定语从句"),
+        ("object clause", "宾语从句"),
+        ("modal verb", "情态动词"),
+        ("postpositive modifier", "后置修饰"),
+        ("passive voice", "被动结构"),
+        ("concessive frame", "让步框架"),
+        ("framing phrase", "前置框架"),
+        ("conditional frame", "条件框架"),
+        ("participle phrase", "分词短语"),
+        ("infinitive phrase", "不定式短语"),
+        ("non-finite", "非谓语结构"),
+        ("adverbial clause", "状语从句"),
+        ("subject clause", "主语从句"),
+        ("predicative clause", "表语从句"),
+        ("appositive clause", "同位语从句")
+    ]
+
+    for (raw, zh) in replacements {
+        normalized = normalized.replacingOccurrences(of: raw, with: zh, options: [.caseInsensitive, .regularExpression])
+    }
+
+    normalized = normalized.replacingOccurrences(
+        of: #"([A-Za-z]+)\s*引导的"#,
+        with: #"由原句里的“$1 …”引出的"#,
+        options: .regularExpression
+    )
+
+    return normalized
+}
+
+private func sanitizedPedagogicalChinese(_ text: String) -> String {
+    var normalized = normalizeMixedGrammarChinese(text)
+    normalized = normalized.replacingOccurrences(
+        of: #"\[[A-Za-z_\s-]+:\s*[^\]]+\]"#,
+        with: "",
+        options: .regularExpression
+    )
+    normalized = normalized.replacingOccurrences(
+        of: #"\s+"#,
+        with: " ",
+        options: .regularExpression
+    )
+    return trimmedOrEmpty(normalized)
+}
+
+private func containsChinesePedagogicalLeakage(_ text: String) -> Bool {
+    let trimmed = trimmedOrEmpty(text)
+    guard !trimmed.isEmpty else { return false }
+    if containsLegacyCoreSkeletonMarkup(trimmed) { return true }
+    if trimmed.range(of: #"[A-Za-z]{2,}\s*引导"#, options: .regularExpression) != nil { return true }
+    return trimmed.range(of: #"[A-Za-z]{8,}(?:\s+[A-Za-z]{2,})+"#, options: .regularExpression) != nil
+}
+
+private func looksLikeMixedGrammarExplanation(_ text: String) -> Bool {
+    let trimmed = sanitizedPedagogicalChinese(text)
+    guard !trimmed.isEmpty else { return false }
+    let chineseCount = (trimmed.matchingStrings(pattern: #"[\u4e00-\u9fff]"#)).count
+    let latinCount = (trimmed.matchingStrings(pattern: #"[A-Za-z]"#)).count
+    if latinCount == 0 { return false }
+    if trimmed.range(of: #"[A-Za-z]{2,}\s+[A-Za-z]{2,}"#, options: .regularExpression) != nil { return true }
+    if trimmed.range(of: #"[A-Za-z]{2,}\s*引导"#, options: .regularExpression) != nil { return true }
+    return latinCount > 6 && chineseCount < latinCount * 2
+}
+
+private func grammarTerminologyTag(from raw: String, exampleEn: String) -> String? {
+    let explicitExample = trimmedOrEmpty(exampleEn)
+    if !explicitExample.isEmpty {
+        return explicitExample.count > 22 ? String(explicitExample.prefix(22)) + "…" : explicitExample
+    }
+
+    let normalized = trimmedOrEmpty(raw)
+    guard normalized.range(of: #"[A-Za-z]"#, options: .regularExpression) != nil else { return nil }
+
+    let matches = normalized.matchingStrings(pattern: #"[A-Za-z][A-Za-z\s_-]{1,24}"#)
+    let first = matches.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard !first.isEmpty else { return nil }
+    return first.count > 22 ? String(first.prefix(22)) + "…" : first
+}
+
+private func defaultGrammarWhatItIs(title: String) -> String {
+    if let template = localizedGrammarTemplate(for: title) {
+        return template.whatItIs
+    }
+    return "这是本句里最值得先抓的一层结构，读的时候要把它放回主干关系里理解。"
+}
+
+private func defaultGrammarFunctionDescription(title: String) -> String {
+    if let template = localizedGrammarTemplate(for: title) {
+        return template.functionInSentence
+    }
+    return "它在这句里负责限定主干、补充范围或交代背景，不能脱离主句单独理解。"
+}
+
+private func looksLikeGrammarRoleDescription(_ text: String) -> Bool {
+    let trimmed = trimmedOrEmpty(text)
+    guard !trimmed.isEmpty else { return false }
+    return trimmed.contains("本句") || trimmed.contains("在这句") || trimmed.contains("先抓") || trimmed.contains("不要把") || trimmed.contains("阅读时")
+}
+
+private func localizedGrammarFocusDisplayItem(
+    phenomenon: String,
+    function: String,
+    whyItMatters: String,
+    titleZh: String,
+    explanationZh: String,
+    whyItMattersZh: String,
+    exampleEn: String
+) -> ProfessorGrammarFocusDisplayItem {
+    let template = localizedGrammarTemplate(for: phenomenon)
+    let localizedTitle = purifiedChineseDisplayText(titleZh)
+        .nonEmpty
+        ?? template?.title
+        ?? purifiedChineseDisplayText(sanitizedPedagogicalChinese(phenomenon)).nonEmpty
+        ?? "关键语法点"
+
+    let explicitWhatItIs = purifiedChineseExplanation(explanationZh).nonEmpty
+    let preferredWhatItIs = (explicitWhatItIs != nil && !looksLikeGrammarRoleDescription(explicitWhatItIs ?? ""))
+        ? explicitWhatItIs
+        : template?.whatItIs
+        ?? purifiedChineseExplanation(sanitizedPedagogicalChinese(phenomenon)).nonEmpty
+    let localizedWhatItIs = (preferredWhatItIs != nil && !looksLikeMixedGrammarExplanation(preferredWhatItIs ?? ""))
+        ? preferredWhatItIs!
+        : defaultGrammarWhatItIs(title: localizedTitle)
+
+    let preferredFunction = purifiedChineseExplanation(sanitizedPedagogicalChinese(function)).nonEmpty
+        ?? template?.functionInSentence
+    let localizedFunction = (preferredFunction != nil && !looksLikeMixedGrammarExplanation(preferredFunction ?? ""))
+        ? preferredFunction!
+        : defaultGrammarFunctionDescription(title: localizedTitle)
+
+    let preferredWhy = purifiedChineseExplanation(whyItMattersZh).nonEmpty
+        ?? purifiedChineseExplanation(sanitizedPedagogicalChinese(whyItMatters)).nonEmpty
+    let localizedWhy = (preferredWhy != nil && !looksLikeMixedGrammarExplanation(preferredWhy ?? ""))
+        ? preferredWhy!
+        : (template?.whyItMatters ?? "这个结构一旦挂错，主干、修饰范围和命题改写都会跟着读偏。")
+
+    return ProfessorGrammarFocusDisplayItem(
+        title: localizedTitle,
+        whatItIs: localizedWhatItIs,
+        functionInSentence: localizedFunction,
+        whyItMatters: localizedWhy,
+        exampleEN: trimmedOrEmpty(exampleEn).nonEmpty,
+        terminologyTag: grammarTerminologyTag(from: phenomenon, exampleEn: exampleEn)
+    )
+}
+
+private func normalizeCompatibleCoreSkeleton(from skeleton: ProfessorCoreSkeleton?) -> ProfessorCoreSkeleton? {
+    guard let skeleton else { return nil }
+
+    let subject = sanitizedCoreSkeletonField(skeleton.subject)
+    let predicate = sanitizedCoreSkeletonField(skeleton.predicate)
+    let complement = sanitizedCoreSkeletonField(skeleton.complementOrObject)
+
+    if let parsed = parseCompatibleCoreSkeleton(from: [subject, predicate, complement].joined(separator: " ")) {
+        return parsed
+    }
+
+    let normalized = ProfessorCoreSkeleton(
+        subject: subject,
+        predicate: predicate,
+        complementOrObject: complement
+    )
+
+    return normalized.isMeaningful ? normalized : nil
+}
+
+private func parseCompatibleCoreSkeleton(from raw: String) -> ProfessorCoreSkeleton? {
+    let normalized = sanitizedPedagogicalChinese(raw)
+    guard !normalized.isEmpty else { return nil }
+
+    var subject = ""
+    var predicate = ""
+    var complement = ""
+
+    let separators = normalized
+        .replacingOccurrences(of: "\n", with: "｜")
+        .replacingOccurrences(of: "／", with: "｜")
+        .replacingOccurrences(of: "/", with: "｜")
+        .split(separator: "｜")
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    for segment in separators {
+        if segment.contains("主语：") || segment.contains("主语:") {
+            subject = sanitizedCoreSkeletonField(
+                segment
+                    .replacingOccurrences(of: "主语：", with: "")
+                    .replacingOccurrences(of: "主语:", with: "")
+            )
+        } else if segment.contains("谓语：") || segment.contains("谓语:") {
+            predicate = sanitizedCoreSkeletonField(
+                segment
+                    .replacingOccurrences(of: "谓语：", with: "")
+                    .replacingOccurrences(of: "谓语:", with: "")
+            )
+        } else if segment.contains("核心补足：") || segment.contains("核心补足:") || segment.contains("宾语：") || segment.contains("补语：") || segment.contains("表语：") {
+            complement = sanitizedCoreSkeletonField(
+                segment
+                    .replacingOccurrences(of: "核心补足：", with: "")
+                    .replacingOccurrences(of: "核心补足:", with: "")
+                    .replacingOccurrences(of: "宾语：", with: "")
+                    .replacingOccurrences(of: "宾语:", with: "")
+                    .replacingOccurrences(of: "补语：", with: "")
+                    .replacingOccurrences(of: "补语:", with: "")
+                    .replacingOccurrences(of: "表语：", with: "")
+                    .replacingOccurrences(of: "表语:", with: "")
+            )
+        }
+    }
+
+    if !subject.isEmpty || !predicate.isEmpty || !complement.isEmpty {
+        return ProfessorCoreSkeleton(subject: subject, predicate: predicate, complementOrObject: complement)
+    }
+
+    let bracketMatches = normalized.matchingGroups(pattern: #"\[([A-Za-z_\s-]+):\s*([^\]]+)\]"#)
+    guard !bracketMatches.isEmpty else { return nil }
+
+    var subjectParts: [String] = []
+    var predicateParts: [String] = []
+    var complementParts: [String] = []
+
+    for groups in bracketMatches {
+        guard groups.count >= 3 else { continue }
+        let label = groups[1].lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let value = sanitizedCoreSkeletonField(groups[2])
+        guard !value.isEmpty else { continue }
+
+        switch label {
+        case "subject", "subj", "subject phrase":
+            subjectParts.append(value)
+        case "predicate", "verb", "main verb", "verb phrase":
+            predicateParts.append(value)
+        case "object", "object clause", "complement", "predicate complement", "object complement", "complement clause":
+            complementParts.append(value)
+        default:
+            if label.contains("subject") {
+                subjectParts.append(value)
+            } else if label.contains("predicate") || label.contains("verb") {
+                predicateParts.append(value)
+            } else if label.contains("object") || label.contains("complement") || label.contains("clause") {
+                complementParts.append(value)
+            }
+        }
+    }
+
+    let parsed = ProfessorCoreSkeleton(
+        subject: subjectParts.joined(separator: "；"),
+        predicate: predicateParts.joined(separator: "；"),
+        complementOrObject: complementParts.joined(separator: "；")
+    )
+
+    return parsed.isMeaningful ? parsed : nil
+}
+
+private func sanitizedCoreSkeletonField(_ value: String) -> String {
+    let trimmed = trimmedOrEmpty(value)
+    guard !trimmed.isEmpty else { return "" }
+    let stripped = trimmed.replacingOccurrences(
+        of: #"\[[A-Za-z_\s-]+:\s*([^\]]+)\]"#,
+        with: "$1",
+        options: .regularExpression
+    )
+    let cleaned = stripped
+        .replacingOccurrences(of: #"^(主语|谓语|核心补足|宾语|补语|表语)\s*[：:]\s*"#, with: "", options: .regularExpression)
+        .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+    return trimmedOrEmpty(cleaned)
+}
+
+private func containsLegacyCoreSkeletonMarkup(_ value: String) -> Bool {
+    trimmedOrEmpty(value).range(of: #"\[[A-Za-z_\s-]+:\s*[^\]]+\]"#, options: .regularExpression) != nil
+}
+
+private func pedagogicalWhyGrammarPointMatters(name: String) -> String {
+    if let template = localizedGrammarTemplate(for: name) {
+        return template.whyItMatters
+    }
+    return "这个结构决定信息挂接关系，读错会直接影响主干判断和题目定位。"
+}
+
+private func truncatedPedagogicalText(_ value: String, limit: Int) -> String {
+    let trimmed = trimmedOrEmpty(value)
+    guard !trimmed.isEmpty else { return "" }
+    guard trimmed.count > limit else { return trimmed }
+    return String(trimmed.prefix(max(0, limit - 1))) + "…"
+}
+
+private extension Array {
+    func uniqued<Key: Hashable>(on keyPath: (Element) -> Key) -> [Element] {
+        var seen: Set<Key> = []
+        return filter { seen.insert(keyPath($0)).inserted }
+    }
+}
+
+private extension String {
+    var nonEmpty: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    func matchingStrings(pattern: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let range = NSRange(startIndex..<endIndex, in: self)
+        return regex.matches(in: self, range: range).compactMap { match in
+            guard let matchRange = Range(match.range, in: self) else { return nil }
+            return String(self[matchRange])
+        }
+    }
+
+    func matchingGroups(pattern: String) -> [[String]] {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let range = NSRange(startIndex..<endIndex, in: self)
+        return regex.matches(in: self, range: range).map { match in
+            (0..<match.numberOfRanges).compactMap { index in
+                guard let groupRange = Range(match.range(at: index), in: self) else { return nil }
+                return String(self[groupRange])
+            }
+        }
+    }
 }
 
 private func pedagogicalList(_ preferred: [String], fallback: [String], limit: Int = 6) -> [String] {
@@ -1695,19 +2219,18 @@ struct StructuredSourceBundle: Equatable {
         guard let overview else { return "正文教学树" }
         let theme = trimmedOrEmpty(overview.displayedArticleTheme)
         let question = trimmedOrEmpty(overview.displayedAuthorCoreQuestion)
-        let progression = trimmedOrEmpty(overview.displayedProgressionPath)
-        let questionType = trimmedOrEmpty(overview.displayedLikelyQuestionTypes.first ?? "")
-        let logicPitfall = trimmedOrEmpty(overview.displayedLogicPitfalls.first ?? "")
+        let parts = [
+            theme.isEmpty ? "" : "主题：\(truncatedPedagogicalText(theme, limit: 26))",
+            question.isEmpty ? "" : "核心问题：\(truncatedPedagogicalText(question, limit: 22))"
+        ].filter { !$0.isEmpty }
 
-        let parts = [theme, question, progression, questionType.isEmpty ? "" : "高频题型：\(questionType)", logicPitfall.isEmpty ? "" : "逻辑易错：\(logicPitfall)"]
-            .filter { !$0.isEmpty }
-
-        return parts.isEmpty ? "正文教学树" : parts.joined(separator: "｜")
+        let summary = parts.isEmpty ? "正文教学树" : parts.joined(separator: "；")
+        return truncatedPedagogicalText(summary, limit: 60)
     }
 
     private static func pedagogicalParagraphTitle(card: ParagraphTeachingCard) -> String {
         let theme = trimmedOrEmpty(card.displayedTheme)
-        let shortTheme = theme.count > 22 ? String(theme.prefix(22)) + "…" : theme
+        let shortTheme = truncatedPedagogicalText(theme, limit: 18)
         if !shortTheme.isEmpty {
             return "第\(card.paragraphIndex + 1)段｜\(card.argumentRole.displayName)｜\(shortTheme)"
         }
@@ -1718,43 +2241,29 @@ struct StructuredSourceBundle: Equatable {
         card: ParagraphTeachingCard,
         linkedQuestions: [QuestionEvidenceLink]
     ) -> String {
-        var parts: [String] = []
+        let theme = truncatedPedagogicalText(card.displayedTheme, limit: 22)
+        let role = truncatedPedagogicalText(card.argumentRole.displayName, limit: 10)
 
-        let theme = trimmedOrEmpty(card.displayedTheme)
-        if !theme.isEmpty {
-            parts.append(theme)
-        }
+        var parts = [
+            theme.isEmpty ? "" : "主旨：\(theme)",
+            role.isEmpty ? "" : "角色：\(role)"
+        ].filter { !$0.isEmpty }
 
-        let relation = trimmedOrEmpty(card.displayedRelationToPrevious)
-        if !relation.isEmpty {
-            parts.append("和上一段：\(relation)")
-        }
-
-        let examValue = trimmedOrEmpty(card.displayedExamValue)
-        if !examValue.isEmpty {
-            parts.append("题型价值：\(examValue)")
-        }
-
-        if let blindSpot = card.displayedStudentBlindSpot, !blindSpot.isEmpty {
-            parts.append("学生易偏：\(blindSpot)")
-        }
-
-        if let linkedQuestion = linkedQuestions.first {
-            let trap = trimmedOrEmpty(linkedQuestion.trapType)
-            let evidence = trimmedOrEmpty(linkedQuestion.paraphraseEvidence.first ?? "")
-            let hint = [trap, evidence].filter { !$0.isEmpty }.joined(separator: "｜")
+        if parts.isEmpty, let linkedQuestion = linkedQuestions.first {
+            let hint = truncatedPedagogicalText(trimmedOrEmpty(linkedQuestion.trapType), limit: 18)
             if !hint.isEmpty {
                 parts.append("对应考点：\(hint)")
             }
         }
 
-        return pedagogicalList(parts, fallback: [theme, examValue], limit: 4).joined(separator: "；")
+        let summary = parts.isEmpty ? "段落教学节点" : parts.joined(separator: "；")
+        return truncatedPedagogicalText(summary, limit: 50)
     }
 
     private static func pedagogicalFocusTitle(card: ParagraphTeachingCard) -> String {
         if let first = card.displayedTeachingFocuses.first, !trimmedOrEmpty(first).isEmpty {
             let focus = trimmedOrEmpty(first)
-            let shortFocus = focus.count > 24 ? String(focus.prefix(24)) + "…" : focus
+            let shortFocus = truncatedPedagogicalText(focus, limit: 18)
             return "教学重点｜\(shortFocus)"
         }
         return "教学重点"
@@ -1764,31 +2273,15 @@ struct StructuredSourceBundle: Equatable {
         card: ParagraphTeachingCard,
         linkedQuestions: [QuestionEvidenceLink]
     ) -> String {
-        var parts = [
-            trimmedOrEmpty(card.examValue),
-            trimmedOrEmpty(card.studentBlindSpot ?? "")
-        ].filter { !$0.isEmpty }
+        let primaryFocus = truncatedPedagogicalText(card.displayedTeachingFocuses.first ?? "", limit: 26)
+        let examValue = truncatedPedagogicalText(card.displayedExamValue, limit: 22)
+        let fallback = !primaryFocus.isEmpty ? "优先学：\(primaryFocus)" : (examValue.isEmpty ? "" : "命题点：\(examValue)")
+        let questionHint = truncatedPedagogicalText(trimmedOrEmpty(linkedQuestions.first?.trapType ?? ""), limit: 16)
 
-        parts.append(contentsOf: pedagogicalList(card.displayedTeachingFocuses, fallback: [], limit: 3))
-
-        if let blindSpot = card.studentBlindSpot?.trimmingCharacters(in: .whitespacesAndNewlines), !blindSpot.isEmpty {
-            parts.append("易偏点：\(blindSpot)")
-        }
-
-        if let firstQuestion = linkedQuestions.first {
-            let evidence = trimmedOrEmpty(firstQuestion.paraphraseEvidence.first ?? "")
-            let trap = trimmedOrEmpty(firstQuestion.trapType)
-            let questionHint = [trap, evidence].filter { !$0.isEmpty }.joined(separator: "｜")
-            if !questionHint.isEmpty {
-                parts.append("对应考点：\(questionHint)")
-            }
-        }
-
-        if parts.isEmpty {
-            parts.append(card.examValue)
-        }
-
-        return pedagogicalList(parts, fallback: [card.examValue], limit: 4).joined(separator: "；")
+        let summary = fallback.isEmpty
+            ? (questionHint.isEmpty ? "本段最值得先学的一点" : "命题点：\(questionHint)")
+            : fallback
+        return truncatedPedagogicalText(summary, limit: 40)
     }
 
     private static func pedagogicalSentenceNodeTitle(
@@ -1796,7 +2289,7 @@ struct StructuredSourceBundle: Equatable {
         analysis: ProfessorSentenceAnalysis?
     ) -> String {
         if let analysis {
-            let core = trimmedOrEmpty(analysis.renderedSentenceCore)
+            let core = truncatedPedagogicalText(trimmedOrEmpty(analysis.renderedSentenceCore), limit: 18)
             if !core.isEmpty {
                 let function = trimmedOrEmpty(analysis.renderedSentenceFunction)
                 if !function.isEmpty {
@@ -1806,30 +2299,33 @@ struct StructuredSourceBundle: Equatable {
                         .map(String.init)?
                         .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                     if !functionHead.isEmpty {
-                        return "\(functionHead)｜\(core)"
+                        return "\(truncatedPedagogicalText(functionHead, limit: 10))｜\(core)"
                     }
                 }
                 return core
             }
         }
-        return String(sentence.text.prefix(60))
+        return truncatedPedagogicalText(sentence.text, limit: 20)
     }
 
     private static func pedagogicalSentenceNodeSummary(
         sentence: Sentence,
         analysis: ProfessorSentenceAnalysis?
     ) -> String {
-        guard let analysis else { return sentence.text }
+        guard let analysis else { return truncatedPedagogicalText(sentence.text, limit: 36) }
 
-        let parts = [
-            trimmedOrEmpty(analysis.renderedSentenceFunction),
-            trimmedOrEmpty(analysis.renderedSentenceCore),
-            trimmedOrEmpty(analysis.renderedMisreadingTraps.first ?? ""),
-            trimmedOrEmpty(analysis.renderedExamParaphraseRoutes.first ?? ""),
-            trimmedOrEmpty(analysis.renderedChunkLayers.first ?? "")
-        ].compactMap { $0 }.filter { !$0.isEmpty }
-
-        return parts.isEmpty ? sentence.text : parts.joined(separator: "｜")
+        let functionHead = trimmedOrEmpty(analysis.renderedSentenceFunction)
+            .components(separatedBy: CharacterSet(charactersIn: "。！？\n"))
+            .first
+            .map(trimmedOrEmpty) ?? ""
+        let trap = truncatedPedagogicalText(trimmedOrEmpty(analysis.renderedMisreadingTraps.first ?? ""), limit: 22)
+        let paraphrase = truncatedPedagogicalText(trimmedOrEmpty(analysis.renderedExamParaphraseRoutes.first ?? ""), limit: 22)
+        let summary = [
+            functionHead.isEmpty ? "" : "关键在：\(truncatedPedagogicalText(functionHead, limit: 18))",
+            trap.isEmpty ? "" : "易错：\(trap)",
+            paraphrase.isEmpty ? "" : "改写点：\(paraphrase)"
+        ].first(where: { !$0.isEmpty }) ?? truncatedPedagogicalText(sentence.text, limit: 36)
+        return truncatedPedagogicalText(summary, limit: 36)
     }
 
     private static func pedagogicalQuestionNodeTitle(link: QuestionEvidenceLink) -> String {
@@ -1847,22 +2343,17 @@ struct StructuredSourceBundle: Equatable {
     }
 
     private static func pedagogicalQuestionNodeSummary(link: QuestionEvidenceLink) -> String {
-        var parts: [String] = []
-        let question = trimmedOrEmpty(link.questionText)
-        let evidence = trimmedOrEmpty(link.paraphraseEvidence.first ?? "")
-        let answerKey = trimmedOrEmpty(link.answerKeySnippet ?? "")
+        let evidence = truncatedPedagogicalText(trimmedOrEmpty(link.paraphraseEvidence.first ?? ""), limit: 24)
+        let answerKey = truncatedPedagogicalText(trimmedOrEmpty(link.answerKeySnippet ?? ""), limit: 20)
+        let question = truncatedPedagogicalText(trimmedOrEmpty(link.questionText), limit: 22)
 
-        if !question.isEmpty {
-            parts.append("题干：\(question)")
-        }
-        if !evidence.isEmpty {
-            parts.append("证据：\(evidence)")
-        }
-        if !answerKey.isEmpty {
-            parts.append("答案线索：\(answerKey)")
-        }
+        let parts = [
+            evidence.isEmpty ? "" : "证据：\(evidence)",
+            answerKey.isEmpty ? "" : "答案线索：\(answerKey)",
+            question.isEmpty ? "" : "题干：\(question)"
+        ].filter { !$0.isEmpty }
 
-        return parts.joined(separator: "｜")
+        return truncatedPedagogicalText(parts.first ?? "题目联动线索", limit: 32)
     }
 
     /// 带深度限制的安全展平，防止循环引用导致无限递归

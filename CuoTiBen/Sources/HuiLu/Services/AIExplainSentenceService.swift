@@ -495,34 +495,25 @@ struct AIExplainSentenceResult: Equatable {
 
     private static func coreSkeleton(in dictionary: [String: Any], fallbackSentenceCore: String) -> CoreSkeleton? {
         if let payload = dictionary["core_skeleton"] as? [String: Any] {
-            let subject = firstString(in: payload, keys: ["subject"]) ?? ""
-            let predicate = firstString(in: payload, keys: ["predicate"]) ?? ""
-            let complement = firstString(in: payload, keys: ["complement_or_object", "complementOrObject", "object"]) ?? ""
+            let subject = sanitizeCoreSkeletonField(firstString(in: payload, keys: ["subject"]) ?? "")
+            let predicate = sanitizeCoreSkeletonField(firstString(in: payload, keys: ["predicate"]) ?? "")
+            let complement = sanitizeCoreSkeletonField(firstString(in: payload, keys: ["complement_or_object", "complementOrObject", "object"]) ?? "")
+            let combined = [subject, predicate, complement].joined(separator: " ")
+
+            if let compatible = parseCompatibleCoreSkeleton(from: combined) {
+                return compatible
+            }
+
             if !subject.isEmpty || !predicate.isEmpty || !complement.isEmpty {
                 return CoreSkeleton(subject: subject, predicate: predicate, complementOrObject: complement)
             }
         }
 
-        let core = fallbackSentenceCore.trimmingCharacters(in: .whitespacesAndNewlines)
+        let core = sanitizeCoreSkeletonField(fallbackSentenceCore)
         guard !core.isEmpty else { return nil }
 
-        let segments = core.split(separator: "｜").map(String.init)
-        var subject = ""
-        var predicate = ""
-        var complement = ""
-
-        for segment in segments {
-            if segment.contains("主语：") {
-                subject = segment.replacingOccurrences(of: "主语：", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
-            } else if segment.contains("谓语：") {
-                predicate = segment.replacingOccurrences(of: "谓语：", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
-            } else if segment.contains("核心补足：") {
-                complement = segment.replacingOccurrences(of: "核心补足：", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-        }
-
-        if !subject.isEmpty || !predicate.isEmpty || !complement.isEmpty {
-            return CoreSkeleton(subject: subject, predicate: predicate, complementOrObject: complement)
+        if let compatible = parseCompatibleCoreSkeleton(from: core) {
+            return compatible
         }
         return nil
     }
@@ -564,8 +555,22 @@ struct AIExplainSentenceResult: Equatable {
                 let phenomenon = firstString(in: payload, keys: ["phenomenon"]) ?? ""
                 let function = firstString(in: payload, keys: ["function"]) ?? ""
                 let why = firstString(in: payload, keys: ["why_it_matters", "whyItMatters"]) ?? ""
-                guard !phenomenon.isEmpty || !function.isEmpty || !why.isEmpty else { return nil }
-                return GrammarFocus(phenomenon: phenomenon, function: function, whyItMatters: why)
+                let titleZh = firstString(in: payload, keys: ["title_zh", "titleZh"]) ?? ""
+                let explanationZh = firstString(in: payload, keys: ["explanation_zh", "explanationZh"]) ?? ""
+                let whyZh = firstString(in: payload, keys: ["why_it_matters_zh", "whyItMattersZh"]) ?? ""
+                let exampleEn = firstString(in: payload, keys: ["example_en", "exampleEn"]) ?? ""
+                guard !phenomenon.isEmpty || !function.isEmpty || !why.isEmpty || !titleZh.isEmpty || !explanationZh.isEmpty || !whyZh.isEmpty else {
+                    return nil
+                }
+                return localizedGrammarFocus(
+                    phenomenon: phenomenon,
+                    function: function,
+                    whyItMatters: why,
+                    titleZh: titleZh,
+                    explanationZh: explanationZh,
+                    whyItMattersZh: whyZh,
+                    exampleEn: exampleEn
+                )
             }
             if !items.isEmpty {
                 return items
@@ -573,12 +578,308 @@ struct AIExplainSentenceResult: Equatable {
         }
 
         return fallbackGrammarPoints.map {
-            GrammarFocus(
+            localizedGrammarFocus(
                 phenomenon: $0.name,
                 function: $0.explanation,
-                whyItMatters: "这个结构如果挂错范围或读错修饰对象，整句主干就会被带偏。"
+                whyItMatters: "这个结构如果挂错范围或读错修饰对象，整句主干就会被带偏。",
+                titleZh: "",
+                explanationZh: "",
+                whyItMattersZh: "",
+                exampleEn: ""
             )
         }
+    }
+
+    private static func parseBracketCoreSkeleton(from text: String) -> CoreSkeleton? {
+        let normalized = sanitizeCoreSkeletonField(text)
+        guard !normalized.isEmpty else { return nil }
+
+        guard let regex = try? NSRegularExpression(pattern: #"\[([A-Za-z_\s-]+):\s*([^\]]+)\]"#) else {
+            return nil
+        }
+        let range = NSRange(normalized.startIndex..<normalized.endIndex, in: normalized)
+        let matches = regex.matches(in: normalized, range: range)
+        guard !matches.isEmpty else { return nil }
+
+        var subjectParts: [String] = []
+        var predicateParts: [String] = []
+        var complementParts: [String] = []
+
+        for match in matches {
+            guard
+                let labelRange = Range(match.range(at: 1), in: normalized),
+                let valueRange = Range(match.range(at: 2), in: normalized)
+            else {
+                continue
+            }
+
+            let label = normalized[labelRange].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let value = sanitizeCoreSkeletonField(String(normalized[valueRange]))
+            guard !value.isEmpty else { continue }
+
+            switch label {
+            case "subject", "subj", "subject phrase":
+                subjectParts.append(value)
+            case "predicate", "verb", "main verb", "verb phrase":
+                predicateParts.append(value)
+            case "object", "object clause", "complement", "predicate complement", "object complement", "complement clause":
+                complementParts.append(value)
+            default:
+                if label.contains("subject") {
+                    subjectParts.append(value)
+                } else if label.contains("predicate") || label.contains("verb") {
+                    predicateParts.append(value)
+                } else if label.contains("object") || label.contains("complement") || label.contains("clause") {
+                    complementParts.append(value)
+                }
+            }
+        }
+
+        guard !subjectParts.isEmpty || !predicateParts.isEmpty || !complementParts.isEmpty else {
+            return nil
+        }
+
+        return CoreSkeleton(
+            subject: subjectParts.joined(separator: "；"),
+            predicate: predicateParts.joined(separator: "；"),
+            complementOrObject: complementParts.joined(separator: "；")
+        )
+    }
+
+    private static func parseCompatibleCoreSkeleton(from text: String) -> CoreSkeleton? {
+        let normalized = sanitizeCoreSkeletonField(text)
+        guard !normalized.isEmpty else { return nil }
+
+        if let bracketSkeleton = parseBracketCoreSkeleton(from: normalized) {
+            return bracketSkeleton
+        }
+
+        let segments = normalized
+            .replacingOccurrences(of: "\n", with: "｜")
+            .replacingOccurrences(of: "／", with: "｜")
+            .replacingOccurrences(of: "/", with: "｜")
+            .split(separator: "｜")
+            .map(String.init)
+
+        var subject = ""
+        var predicate = ""
+        var complement = ""
+
+        for segment in segments {
+            let trimmed = sanitizeCoreSkeletonField(segment)
+            if segment.contains("主语：") || segment.contains("主语:") {
+                subject = sanitizeCoreSkeletonField(trimmed.replacingOccurrences(of: "主语：", with: "").replacingOccurrences(of: "主语:", with: ""))
+            } else if segment.contains("谓语：") || segment.contains("谓语:") {
+                predicate = sanitizeCoreSkeletonField(trimmed.replacingOccurrences(of: "谓语：", with: "").replacingOccurrences(of: "谓语:", with: ""))
+            } else if segment.contains("核心补足：") || segment.contains("核心补足:") || segment.contains("宾语：") || segment.contains("补语：") || segment.contains("表语：") {
+                complement = sanitizeCoreSkeletonField(
+                    trimmed
+                        .replacingOccurrences(of: "核心补足：", with: "")
+                        .replacingOccurrences(of: "核心补足:", with: "")
+                        .replacingOccurrences(of: "宾语：", with: "")
+                        .replacingOccurrences(of: "宾语:", with: "")
+                        .replacingOccurrences(of: "补语：", with: "")
+                        .replacingOccurrences(of: "补语:", with: "")
+                        .replacingOccurrences(of: "表语：", with: "")
+                        .replacingOccurrences(of: "表语:", with: "")
+                )
+            }
+        }
+
+        guard !subject.isEmpty || !predicate.isEmpty || !complement.isEmpty else {
+            return nil
+        }
+
+        return CoreSkeleton(subject: subject, predicate: predicate, complementOrObject: complement)
+    }
+
+    private static func sanitizeCoreSkeletonField(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        let stripped = trimmed.replacingOccurrences(
+            of: #"\[[A-Za-z_\s-]+:\s*([^\]]+)\]"#,
+            with: "$1",
+            options: .regularExpression
+        )
+        let cleaned = stripped
+            .replacingOccurrences(of: #"^(主语|谓语|核心补足|宾语|补语|表语)\s*[：:]\s*"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func normalizeMixedGrammarChinese(_ text: String) -> String {
+        let replacements: [(String, String)] = [
+            ("temporal clause", "时间状语从句"),
+            ("time clause", "时间状语从句"),
+            ("reduced relative clause", "压缩定语从句"),
+            ("relative clause", "定语从句"),
+            ("object clause", "宾语从句"),
+            ("modal verb", "情态动词"),
+            ("postpositive modifier", "后置修饰"),
+            ("passive voice", "被动结构"),
+            ("concessive frame", "让步框架"),
+            ("framing phrase", "前置框架")
+        ]
+
+        var normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        for (raw, zh) in replacements {
+            normalized = normalized.replacingOccurrences(of: raw, with: zh, options: [.caseInsensitive, .regularExpression])
+        }
+        normalized = normalized.replacingOccurrences(
+            of: #"([A-Za-z]+)\s*引导的"#,
+            with: #"由原句里的“$1 …”引出的"#,
+            options: .regularExpression
+        )
+        return normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func grammarTemplate(for raw: String) -> (title: String, explanation: String, function: String, why: String)? {
+        let normalized = normalizeMixedGrammarChinese(raw)
+        let lower = normalized.lowercased()
+
+        if normalized.contains("时间状语从句") || lower.contains("after") || lower.contains("before") || lower.contains("when ") || lower.contains("once") {
+            return (
+                title: "时间状语从句",
+                explanation: "这是用来交代时间背景的状语从句，说明事情在什么时间条件下发生。",
+                function: "它在这句里先搭时间背景，再把真正要成立的判断交给主句。",
+                why: "时间框架一旦错挂，背景信息就会被错读成核心判断。"
+            )
+        }
+        if normalized.contains("压缩定语从句") {
+            return (
+                title: "压缩定语从句",
+                explanation: "这是把完整关系从句压缩成更短修饰块的写法，本质上仍在补前面名词的信息。",
+                function: "它在这里负责压缩对前面名词的限定说明，不是在另起一个主句。",
+                why: "如果把这层误当成主干谓语，整句结构就会被拆坏。"
+            )
+        }
+        if normalized.contains("宾语从句") {
+            return (
+                title: "宾语从句",
+                explanation: "这是跟在谓语后面、充当核心内容的从句，常回答“认为什么”“说明什么”。",
+                function: "它在这句里承接前面的谓语，真正承载作者要表达的内容对象。",
+                why: "宾语从句一旦挂错，学生会把说法来源和作者判断混在一起。"
+            )
+        }
+        if normalized.contains("情态动词") || lower.contains("might") || lower.contains("could") || lower.contains("would") || lower.contains("should") {
+            return (
+                title: "情态动词",
+                explanation: "情态动词本身不增加新事实，而是在调节语气强弱，表示可能、推测、限制或建议。",
+                function: "它在这句里控制作者判断的把握程度，不让语气走成绝对断言。",
+                why: "情态一旦忽略，题目里的态度强弱和作者把握程度就会读偏。"
+            )
+        }
+        if normalized.contains("后置修饰") || normalized.contains("定语从句") {
+            return (
+                title: normalized.contains("后置修饰") ? "后置修饰" : "定语从句",
+                explanation: "这是补在中心名词后面的限定信息，读的时候要先找清楚它修饰谁。",
+                function: "它在这里负责给前面的名词补限定范围，不是在推进新的主句判断。",
+                why: "修饰对象一旦挂错，枝叶就会被误当成主干。"
+            )
+        }
+        if normalized.contains("让步框架") {
+            return (
+                title: "让步框架",
+                explanation: "让步框架会先承认一个条件、反方声音或看似成立的情况，再回到自己的真正判断。",
+                function: "它在这里先让一步，真正想成立的判断通常落在后面的主句。",
+                why: "学生最容易把让步内容错当成作者最终立场。"
+            )
+        }
+
+        return nil
+    }
+
+    private static func localizedGrammarFocus(
+        phenomenon: String,
+        function: String,
+        whyItMatters: String,
+        titleZh: String,
+        explanationZh: String,
+        whyItMattersZh: String,
+        exampleEn: String
+    ) -> GrammarFocus {
+        let template = grammarTemplate(for: phenomenon)
+        let normalizedFunction = localizeChineseExplanation(normalizeMixedGrammarChinese(function))
+        let normalizedWhy = localizeChineseExplanation(normalizeMixedGrammarChinese(whyItMatters))
+        let explicitTitle = localizeChineseDisplayText(titleZh)
+        let fallbackTitle = template?.title ?? localizeChineseDisplayText(normalizeMixedGrammarChinese(phenomenon))
+        let localizedTitle = explicitTitle.isEmpty ? (fallbackTitle.isEmpty ? "关键语法点" : fallbackTitle) : explicitTitle
+        let explicitExplanation = localizeChineseExplanation(explanationZh)
+        let localizedExplanation = (!explicitExplanation.isEmpty && !looksLikeGrammarRoleDescription(explicitExplanation))
+            ? explicitExplanation
+            : (template?.explanation ?? "这是本句里最值得先抓的一层结构。")
+        let localizedFunction = normalizedFunction.isEmpty
+            ? (template?.function ?? "它在这句里负责限定主干、补充范围或交代背景。")
+            : normalizedFunction
+        let explicitWhy = localizeChineseExplanation(whyItMattersZh)
+        let localizedWhy = explicitWhy.isEmpty
+            ? (normalizedWhy.isEmpty ? (template?.why ?? "这个结构一旦挂错，主干和命题改写都会跟着读偏。") : normalizedWhy)
+            : explicitWhy
+
+        return GrammarFocus(
+            phenomenon: phenomenon.isEmpty ? localizedTitle : phenomenon,
+            function: localizedFunction,
+            whyItMatters: localizedWhy,
+            titleZh: localizedTitle,
+            explanationZh: localizedExplanation,
+            whyItMattersZh: localizedWhy,
+            exampleEn: exampleEn
+        )
+    }
+
+    private static func looksLikeGrammarRoleDescription(_ text: String) -> Bool {
+        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return false }
+        return normalized.contains("本句")
+            || normalized.contains("在这句")
+            || normalized.contains("先抓")
+            || normalized.contains("不要把")
+            || normalized.contains("阅读时")
+    }
+
+    private static func localizeChineseDisplayText(_ text: String) -> String {
+        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return "" }
+
+        if let range = normalized.range(of: "：") ?? normalized.range(of: ":") {
+            let head = normalized[..<range.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+            let body = localizeChineseExplanation(String(normalized[range.upperBound...]))
+            if !body.isEmpty {
+                return head.isEmpty ? body : "\(head)：\(body)"
+            }
+        }
+
+        return localizeChineseExplanation(normalized)
+    }
+
+    private static func localizeChineseExplanation(_ text: String) -> String {
+        let normalized = normalizeMixedGrammarChinese(text).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return "" }
+
+        let chineseCount = normalized.unicodeScalars.filter { $0.value >= 0x4E00 && $0.value <= 0x9FFF }.count
+        let latinCount = normalized.unicodeScalars.filter {
+            ($0.value >= 0x41 && $0.value <= 0x5A) || ($0.value >= 0x61 && $0.value <= 0x7A)
+        }.count
+
+        if chineseCount >= max(8, latinCount * 2) {
+            return normalized
+        }
+
+        let recovered = normalized
+            .components(separatedBy: CharacterSet(charactersIn: "\n"))
+            .flatMap { line in
+                line.split(whereSeparator: { "。！？；".contains($0) }).map(String.init)
+            }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { clause in
+                let clauseChinese = clause.unicodeScalars.filter { $0.value >= 0x4E00 && $0.value <= 0x9FFF }.count
+                let clauseLatin = clause.unicodeScalars.filter {
+                    ($0.value >= 0x41 && $0.value <= 0x5A) || ($0.value >= 0x61 && $0.value <= 0x7A)
+                }.count
+                return clauseChinese >= 8 && clauseChinese > clauseLatin
+            }
+
+        return recovered.joined(separator: "。")
     }
 
     private static func normalizedString(from value: Any) -> String? {

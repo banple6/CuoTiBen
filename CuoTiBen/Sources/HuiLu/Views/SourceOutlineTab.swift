@@ -8,8 +8,8 @@ private enum OutlineCanvasDensityMode: String, CaseIterable, Identifiable {
 
     var rowSpacing: CGFloat {
         switch self {
-        case .detailed: return 18
-        case .compact: return 10
+        case .detailed: return 14
+        case .compact: return 8
         }
     }
 
@@ -22,28 +22,28 @@ private enum OutlineCanvasDensityMode: String, CaseIterable, Identifiable {
 
     var indent: CGFloat {
         switch self {
-        case .detailed: return 72
-        case .compact: return 54
+        case .detailed: return 60
+        case .compact: return 44
         }
     }
 
     var baseWidth: CGFloat {
         switch self {
-        case .detailed: return 344
-        case .compact: return 292
+        case .detailed: return 302
+        case .compact: return 256
         }
     }
 
     var minWidth: CGFloat {
         switch self {
-        case .detailed: return 232
-        case .compact: return 214
+        case .detailed: return 216
+        case .compact: return 190
         }
     }
 
     var titleLineLimit: Int {
         switch self {
-        case .detailed: return 3
+        case .detailed: return 2
         case .compact: return 2
         }
     }
@@ -58,9 +58,9 @@ private enum OutlineCanvasDensityMode: String, CaseIterable, Identifiable {
     var canvasInset: CGSize {
         switch self {
         case .detailed:
-            return CGSize(width: 28, height: 24)
+            return CGSize(width: 18, height: 18)
         case .compact:
-            return CGSize(width: 20, height: 18)
+            return CGSize(width: 14, height: 14)
         }
     }
 }
@@ -111,27 +111,28 @@ struct TeachingTreeCanvasView: View {
         }
         .onChange(of: ancestorNodeIDs) { _ in
             expandAncestors()
+            ensureHighlightedNodeVisibleDeferred(animated: false)
         }
         .onChange(of: nodes) { _ in
             applyInitialExpansionIfNeeded(force: true)
-            fitToContent(in: viewportSize, layout: layout, force: true)
+            fitToLatestLayout(force: true)
         }
         .onChange(of: densityMode) { _ in
-            fitToContent(in: viewportSize, layout: layout, force: true)
+            fitToLatestLayout(force: true)
         }
         .onChange(of: expandedNodeIDs) { _ in
-            clampCanvasState(layout: layout, animated: true)
-            ensureHighlightedNodeVisible(layout: layout, animated: false)
+            clampCanvasStateDeferred(animated: true)
+            ensureHighlightedNodeVisibleDeferred(animated: false)
         }
         .onChange(of: jumpTargetNodeID) { target in
             guard target != nil else { return }
             expandAncestors()
-            focusCurrentNode(layout: layout, viewportSize: viewportSize, animated: true, ensureReadableScale: true)
+            focusCurrentNodeDeferred(animated: true, ensureReadableScale: true)
             deferJumpHandled()
         }
         .onChange(of: highlightedNodeID) { _ in
             guard jumpTargetNodeID == nil else { return }
-            ensureHighlightedNodeVisible(layout: layout, animated: true)
+            ensureHighlightedNodeVisibleDeferred(animated: true)
         }
     }
 
@@ -160,16 +161,16 @@ struct TeachingTreeCanvasView: View {
                 .simultaneousGesture(dragGesture(layout: layout, viewportSize: canvasViewportSize))
                 .simultaneousGesture(magnificationGesture(layout: layout, viewportSize: canvasViewportSize))
                 .onTapGesture(count: 2) {
-                    focusCurrentNode(layout: layout, viewportSize: canvasViewportSize, animated: true, ensureReadableScale: true)
+                    focusCurrentNodeDeferred(animated: true, ensureReadableScale: true)
                 }
                 .onAppear {
                     viewportSize = canvasViewportSize
-                    fitToContent(in: canvasViewportSize, layout: layout, force: false)
+                    fitToLatestLayout(force: false, sizeOverride: canvasViewportSize)
                 }
                 .onChange(of: canvasViewportSize) { newSize in
                     viewportSize = newSize
-                    fitToContent(in: newSize, layout: layout, force: false)
-                    clampCanvasState(layout: layout, animated: false)
+                    fitToLatestLayout(force: false, sizeOverride: newSize)
+                    clampCanvasStateDeferred(animated: false)
                 }
             }
             .frame(minHeight: 320)
@@ -234,8 +235,8 @@ struct TeachingTreeCanvasView: View {
         applyInitialExpansionIfNeeded()
         expandAncestors()
         DispatchQueue.main.async {
-            fitToContent(in: viewportSize, layout: layout, force: false)
-            ensureHighlightedNodeVisible(layout: layout, animated: false)
+            fitToLatestLayout(force: false)
+            ensureHighlightedNodeVisibleDeferred(animated: false)
             if jumpTargetNodeID != nil {
                 deferJumpHandled()
             }
@@ -244,6 +245,44 @@ struct TeachingTreeCanvasView: View {
 
     private var visibleNodes: [OutlineNode] {
         flattenVisible(nodes)
+    }
+
+    private func latestLayoutSnapshot() -> TeachingTreeCanvasLayout {
+        TeachingTreeCanvasLayout(
+            nodes: visibleNodes,
+            densityMode: densityMode,
+            highlightedNodeID: jumpTargetNodeID ?? highlightedNodeID
+        )
+    }
+
+    private func fitToLatestLayout(force: Bool, sizeOverride: CGSize? = nil) {
+        let targetSize = sizeOverride ?? viewportSize
+        DispatchQueue.main.async {
+            fitToContent(in: targetSize, layout: latestLayoutSnapshot(), force: force)
+        }
+    }
+
+    private func clampCanvasStateDeferred(animated: Bool) {
+        DispatchQueue.main.async {
+            clampCanvasState(layout: latestLayoutSnapshot(), animated: animated)
+        }
+    }
+
+    private func focusCurrentNodeDeferred(animated: Bool, ensureReadableScale: Bool) {
+        DispatchQueue.main.async {
+            focusCurrentNode(
+                layout: latestLayoutSnapshot(),
+                viewportSize: viewportSize,
+                animated: animated,
+                ensureReadableScale: ensureReadableScale
+            )
+        }
+    }
+
+    private func ensureHighlightedNodeVisibleDeferred(animated: Bool) {
+        DispatchQueue.main.async {
+            ensureHighlightedNodeVisible(layout: latestLayoutSnapshot(), animated: animated)
+        }
     }
 
     private var canvasBackground: some View {
@@ -428,7 +467,7 @@ struct TeachingTreeCanvasView: View {
         for layout: TeachingTreeCanvasLayout,
         viewportRect: CGRect
     ) -> [TeachingTreeCanvasLayout.Entry] {
-        let preloadPadding = max(120, 220 / max(canvasScale, 0.1))
+        let preloadPadding = max(84, 180 / max(canvasScale, 0.1))
         let expandedRect = viewportRect.insetBy(dx: -preloadPadding, dy: -preloadPadding)
         let emphasizedIDs = Set(ancestorNodeIDs + [highlightedNodeID, jumpTargetNodeID].compactMap { $0 })
 
@@ -500,8 +539,8 @@ struct TeachingTreeCanvasView: View {
 
         let contentWidth = layout.contentBoundingRect.width * scale
         let contentHeight = layout.contentBoundingRect.height * scale
-        let horizontalPadding = min(max(18, viewportSize.width * 0.08), 48)
-        let verticalPadding = min(max(18, viewportSize.height * 0.06), 44)
+        let horizontalPadding = min(max(14, viewportSize.width * 0.06), 34)
+        let verticalPadding = min(max(14, viewportSize.height * 0.05), 32)
 
         let clampedX: CGFloat
         if contentWidth <= viewportSize.width - horizontalPadding * 2 {
@@ -530,8 +569,8 @@ struct TeachingTreeCanvasView: View {
         }
         guard force || !hasPerformedInitialFit || !userAdjustedZoom else { return }
 
-        let availableWidth = max(size.width - 48, 280)
-        let availableHeight = max(size.height - 48, 240)
+        let availableWidth = max(size.width - 36, 260)
+        let availableHeight = max(size.height - 36, 220)
         let scale = min(
             maxScale,
             max(
@@ -586,7 +625,7 @@ struct TeachingTreeCanvasView: View {
         guard let entry = layout.entry(id: nodeID) else { return }
 
         let targetScale = ensureReadableScale
-            ? max(canvasScale, densityMode == .detailed ? 0.94 : 0.82)
+            ? max(canvasScale, densityMode == .detailed ? 0.92 : 0.8)
             : canvasScale
         let proposedOffset = CGSize(
             width: viewportSize.width / 2 - entry.frame.midX * targetScale,
@@ -618,7 +657,7 @@ struct TeachingTreeCanvasView: View {
         guard let entry = layout.entry(id: targetID) else { return }
 
         let viewportRect = currentViewportRect(layout: layout, viewportSize: viewportSize)
-        let extraInset = max(28, 64 / max(canvasScale, 0.1))
+        let extraInset = max(18, 52 / max(canvasScale, 0.1))
         let visibleRect = viewportRect.insetBy(dx: -extraInset, dy: -extraInset)
 
         guard !visibleRect.contains(entry.frame) else { return }
@@ -729,11 +768,11 @@ private struct OutlineTreeNodeRow: View {
     }
 
     private var shouldShowSummary: Bool {
-        densityMode == .detailed || isHighlighted || normalizedDepth <= 1
+        isHighlighted || normalizedDepth <= (densityMode == .detailed ? 2 : 1)
     }
 
     private var shouldShowAnchorBadge: Bool {
-        densityMode == .detailed || isHighlighted || normalizedDepth == 0
+        isHighlighted || normalizedDepth <= 1
     }
 
     var body: some View {
@@ -1002,7 +1041,6 @@ private struct TeachingTreeCanvasLayout {
     ) {
         let inset = densityMode.canvasInset
         var currentY: CGFloat = inset.height
-        var maxX: CGFloat = 0
         var built: [Entry] = []
 
         for node in nodes {
@@ -1014,16 +1052,23 @@ private struct TeachingTreeCanvasLayout {
             )
             built.append(Entry(node: node, frame: frame))
             currentY = frame.maxY + densityMode.rowSpacing
-            maxX = max(maxX, frame.maxX)
         }
 
         self.entries = built
-        self.contentBoundingRect = CGRect(
-            x: 0,
-            y: 0,
-            width: max(maxX + inset.width, 320),
-            height: max(currentY + inset.height, 240)
-        )
+        if let first = built.first {
+            let union = built.dropFirst().reduce(first.frame) { partial, entry in
+                partial.union(entry.frame)
+            }
+            let padded = union.insetBy(dx: -inset.width, dy: -inset.height)
+            self.contentBoundingRect = CGRect(
+                x: max(0, padded.minX),
+                y: max(0, padded.minY),
+                width: max(padded.width, 300),
+                height: max(padded.height, 220)
+            )
+        } else {
+            self.contentBoundingRect = CGRect(x: 0, y: 0, width: 300, height: 220)
+        }
     }
 
     private static func frame(
@@ -1034,19 +1079,19 @@ private struct TeachingTreeCanvasLayout {
     ) -> CGRect {
         let depth = max(node.depth, 0)
         let inset = densityMode.canvasInset
-        let width = max(densityMode.minWidth, densityMode.baseWidth - CGFloat(min(depth, 4)) * 26)
+        let width = max(densityMode.minWidth, densityMode.baseWidth - CGFloat(min(depth, 4)) * 18)
         let x = inset.width + CGFloat(depth) * densityMode.indent
-        let titleCount = max(min(node.title.count, densityMode.titleLineLimit * 22), 12)
-        let titleLines = min(CGFloat(densityMode.titleLineLimit), ceil(CGFloat(titleCount) / (densityMode == .detailed ? 18 : 21)))
-        let shouldShowSummary = densityMode == .detailed || highlightedNodeID == node.id || depth <= 1
-        let summaryCount = max(min(node.summary.count, densityMode.summaryLineLimit * 34), 12)
+        let titleCount = max(min(node.title.count, densityMode.titleLineLimit * 18), 10)
+        let titleLines = min(CGFloat(densityMode.titleLineLimit), ceil(CGFloat(titleCount) / (densityMode == .detailed ? 16 : 18)))
+        let shouldShowSummary = highlightedNodeID == node.id || depth <= (densityMode == .detailed ? 2 : 1)
+        let summaryCount = max(min(node.summary.count, densityMode.summaryLineLimit * 28), 10)
         let summaryLines = shouldShowSummary
-            ? min(CGFloat(densityMode.summaryLineLimit), ceil(CGFloat(summaryCount) / (densityMode == .detailed ? 28 : 32)))
+            ? min(CGFloat(densityMode.summaryLineLimit), ceil(CGFloat(summaryCount) / (densityMode == .detailed ? 24 : 28)))
             : 0
-        let shouldShowAnchor = densityMode == .detailed || highlightedNodeID == node.id || depth == 0
-        let height = (densityMode == .detailed ? 60 : 48)
-            + titleLines * (densityMode == .detailed ? 20 : 18)
-            + summaryLines * (densityMode == .detailed ? 18 : 16)
+        let shouldShowAnchor = highlightedNodeID == node.id || depth <= 1
+        let height = (densityMode == .detailed ? 54 : 44)
+            + titleLines * (densityMode == .detailed ? 18 : 16)
+            + summaryLines * (densityMode == .detailed ? 16 : 14)
             + (shouldShowAnchor ? 28 : 0)
 
         return CGRect(x: x, y: originY, width: width, height: height)
@@ -1054,6 +1099,35 @@ private struct TeachingTreeCanvasLayout {
 
     func entry(id: String) -> Entry? {
         entries.first(where: { $0.node.id == id })
+    }
+}
+
+private struct TeachingTreeMiniMapProjection {
+    let scale: CGFloat
+    let xOffset: CGFloat
+    let yOffset: CGFloat
+
+    init(layout: TeachingTreeCanvasLayout, containerSize: CGSize) {
+        let contentWidth = max(layout.contentBoundingRect.width, 1)
+        let contentHeight = max(layout.contentBoundingRect.height, 1)
+        let usableWidth = max(containerSize.width - 12, 1)
+        let usableHeight = max(containerSize.height - 12, 1)
+        let fittedScale = min(usableWidth / contentWidth, usableHeight / contentHeight)
+        self.scale = max(fittedScale, 0.12)
+
+        let fittedWidth = contentWidth * scale
+        let fittedHeight = contentHeight * scale
+        xOffset = (containerSize.width - fittedWidth) / 2 - layout.contentBoundingRect.minX * scale
+        yOffset = (containerSize.height - fittedHeight) / 2 - layout.contentBoundingRect.minY * scale
+    }
+
+    func rect(for rect: CGRect) -> CGRect {
+        CGRect(
+            x: rect.minX * scale + xOffset,
+            y: rect.minY * scale + yOffset,
+            width: rect.width * scale,
+            height: rect.height * scale
+        )
     }
 }
 
@@ -1077,17 +1151,14 @@ private struct TeachingTreeMiniMap: View {
             }
 
             GeometryReader { proxy in
-                let contentWidth = max(layout.contentBoundingRect.width, 1)
-                let contentHeight = max(layout.contentBoundingRect.height, 1)
-                let scale = min((proxy.size.width - 12) / contentWidth, (proxy.size.height - 12) / contentHeight)
-                let adjustedScale = max(scale, 0.12)
+                let projection = TeachingTreeMiniMapProjection(layout: layout, containerSize: proxy.size)
 
                 ZStack(alignment: .topLeading) {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .fill(Color.white.opacity(0.52))
 
                     ForEach(layout.entries) { entry in
-                        let frame = entry.frame
+                        let frame = projection.rect(for: entry.frame).ensuringMinimumSize(width: 18, height: 8)
 
                         Button {
                             onNodeTap(entry.node)
@@ -1098,41 +1169,30 @@ private struct TeachingTreeMiniMap: View {
                                     RoundedRectangle(cornerRadius: 4, style: .continuous)
                                         .stroke(entry.node.id == highlightedNodeID ? Color.black.opacity(0.18) : .clear, lineWidth: 1)
                                 )
-                                .frame(
-                                    width: max(frame.width * adjustedScale, 18),
-                                    height: max(frame.height * adjustedScale, 8)
-                                )
+                                .frame(width: frame.width, height: frame.height)
                         }
                         .buttonStyle(.plain)
-                        .position(
-                            x: frame.minX * adjustedScale + max(frame.width * adjustedScale, 18) / 2 + 6,
-                            y: frame.minY * adjustedScale + max(frame.height * adjustedScale, 8) / 2 + 6
-                        )
+                        .position(x: frame.midX, y: frame.midY)
                     }
 
                     if !viewportRect.isNull {
+                        let projectedViewport = projection.rect(for: viewportRect).ensuringMinimumSize(width: 26, height: 16)
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
                             .stroke(Color.black.opacity(0.32), lineWidth: 1.2)
                             .background(
                                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                                     .fill(Color.white.opacity(0.12))
                             )
-                            .frame(
-                                width: max(viewportRect.width * adjustedScale, 26),
-                                height: max(viewportRect.height * adjustedScale, 16)
-                            )
-                            .position(
-                                x: viewportRect.minX * adjustedScale + max(viewportRect.width * adjustedScale, 26) / 2 + 6,
-                                y: viewportRect.minY * adjustedScale + max(viewportRect.height * adjustedScale, 16) / 2 + 6
-                            )
+                            .frame(width: projectedViewport.width, height: projectedViewport.height)
+                            .position(x: projectedViewport.midX, y: projectedViewport.midY)
                             .allowsHitTesting(false)
                     }
                 }
             }
-            .frame(height: 152)
+            .frame(height: 136)
         }
         .padding(12)
-        .frame(width: 196)
+        .frame(width: 184)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .shadow(color: Color.black.opacity(0.08), radius: 16, x: 0, y: 8)
     }
@@ -1156,5 +1216,18 @@ private struct TeachingTreeMiniMap: View {
         case .answerKey:
             return .yellow
         }
+    }
+}
+
+private extension CGRect {
+    func ensuringMinimumSize(width minWidth: CGFloat, height minHeight: CGFloat) -> CGRect {
+        let targetWidth = max(width, minWidth)
+        let targetHeight = max(height, minHeight)
+        return CGRect(
+            x: midX - targetWidth / 2,
+            y: midY - targetHeight / 2,
+            width: targetWidth,
+            height: targetHeight
+        )
     }
 }
