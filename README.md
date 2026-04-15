@@ -30,7 +30,8 @@
 │   ├── README_zh.md                  # 详细中文开发记录
 │   └── *.md                          # 设计与迁移文档
 ├── CuoTiBen.xcodeproj/               # Xcode 工程
-└── backend/                          # 最小 Express 后端
+├── backend/                          # 最小 Express 后端
+└── server/                           # PP-StructureV3 FastAPI 网关
 ```
 
 ## 本地运行
@@ -50,6 +51,18 @@ npm run dev
 ```
 
 当前后端提供最小可用接口，主要用于 AI 解析与句子讲解。
+
+### Server
+
+```bash
+cd server
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python -m app.main
+```
+
+`server/` 提供 PP-StructureV3 文档解析网关，本地调试时默认监听 `.env` 或配置文件中的地址与端口。
 
 ## 文档
 

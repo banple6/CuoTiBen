@@ -47,7 +47,7 @@ router.post("/parse-source", async (req, res) => {
 // ─── 教授级全文教学分析 ───
 
 router.post("/analyze-passage", async (req, res) => {
-  const body = req.body;
+  const body = req.body ?? {};
 
   const title = typeof body.title === "string" ? body.title.trim() : "";
   const paragraphs = Array.isArray(body.paragraphs) ? body.paragraphs : [];
