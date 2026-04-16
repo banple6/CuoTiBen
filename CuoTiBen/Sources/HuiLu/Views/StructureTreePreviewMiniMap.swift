@@ -84,10 +84,10 @@ struct StructureTreePreviewMiniMap: View {
             return overviewContentRect
         }
 
-        let normalizedMinX = (viewportRect.minX - displayContentRect.minX) / max(displayContentRect.width, 1)
-        let normalizedMinY = (viewportRect.minY - displayContentRect.minY) / max(displayContentRect.height, 1)
-        let normalizedWidth = viewportRect.width / max(displayContentRect.width, 1)
-        let normalizedHeight = viewportRect.height / max(displayContentRect.height, 1)
+        let normalizedMinX = clampedUnit((viewportRect.minX - displayContentRect.minX) / max(displayContentRect.width, 1))
+        let normalizedMinY = clampedUnit((viewportRect.minY - displayContentRect.minY) / max(displayContentRect.height, 1))
+        let normalizedWidth = clampedUnit(viewportRect.width / max(displayContentRect.width, 1))
+        let normalizedHeight = clampedUnit(viewportRect.height / max(displayContentRect.height, 1))
 
         return CGRect(
             x: overviewContentRect.minX + normalizedMinX * overviewContentRect.width,
@@ -96,6 +96,10 @@ struct StructureTreePreviewMiniMap: View {
             height: overviewContentRect.height * normalizedHeight
         )
         .intersection(overviewContentRect)
+    }
+
+    private func clampedUnit(_ value: CGFloat) -> CGFloat {
+        min(max(value, 0), 1)
     }
 }
 

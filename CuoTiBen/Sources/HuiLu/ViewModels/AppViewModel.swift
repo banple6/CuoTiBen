@@ -14,7 +14,7 @@ enum StructuredLoadingStage: String, Equatable {
     case classifying    = "classifying"     // 块类型分类（本地路径）
     case buildingPreview = "buildingPreview" // 远程解析（旧路径）
     case buildingTree   = "buildingTree"    // 本地树构建
-    case partialReady   = "partialReady"    // 基础预览可用，结构树仍在加载
+    case partialReady   = "partialReady"    // 基础结构已可用，教授级 AI 分析尚未补齐
     case aiEnriching    = "aiEnriching"     // AI 教授级分析升级中
     case ready          = "ready"           // 完成
     case failed         = "failed"          // 失败
@@ -33,7 +33,7 @@ enum StructuredLoadingStage: String, Equatable {
         case .classifying:      return "正在分类内容…"
         case .buildingPreview:  return "正在生成结构预览…"
         case .buildingTree:     return "正在构建结构树…"
-        case .partialReady:     return "基础预览已就绪，结构树加载中…"
+        case .partialReady:     return "基础结构已就绪"
         case .aiEnriching:      return "AI 教授级分析升级中…"
         case .ready:            return "加载完成"
         case .failed:           return "加载失败"
@@ -49,7 +49,7 @@ enum StructuredLoadingStage: String, Equatable {
 
     /// 是否为终态
     var isTerminal: Bool {
-        self == .ready || self == .failed || self == .timedOut || self == .fallbackLegacy
+        self == .partialReady || self == .ready || self == .failed || self == .timedOut || self == .fallbackLegacy
     }
 
     /// 是否已有可展示内容
@@ -149,7 +149,10 @@ enum MaterialImportKind {
 @MainActor
 final class AppViewModel: ObservableObject {
     private static let sourceReaderModeDefaultsKey = "CuoTiBen.sourceReaderMode"
-    private static let automaticProfessorAIEnabled = false
+    private static let professorAnalysisSingleFlight = AIRequestSingleFlight<ProfessorAnalysisDelta>()
+    private static let professorAnalysisCacheStore = ProfessorAnalysisCacheStore()
+
+    private let aiRequestPolicy = AIRequestPolicy.default
 
     @Published var dailyProgress: DailyProgress
     @Published var sourceDocuments: [SourceDocument] {
@@ -537,33 +540,12 @@ final class AppViewModel: ObservableObject {
                 mergeStructuredSourcePayload(ppPayload, into: document)
                 seedWorkbenchProgressIfNeeded(for: document, with: ppPayload.bundle)
                 structuredSourceErrors[document.id] = nil
-
-                if Self.automaticProfessorAIEnabled {
-                    // ── 阶段3: AI 教授级分析升级（非阻塞：先展示基础结果，后台升级） ──
-                    structuredSourceStages[document.id] = .aiEnriching
-                    Task { [weak self] in
-                        guard let self else { return }
-                        do {
-                            let enriched = try await ProfessorAnalysisService.enrichBundle(
-                                ppPayload.bundle,
-                                title: document.title
-                            )
-                            await MainActor.run {
-                                self.structuredSources[document.id] = enriched
-                                self.structuredSourceStages[document.id] = .ready
-                                TextPipelineDiagnostics.log("PP", "[PP] AI enrichment complete doc=\(document.id) sentenceCards=\(enriched.professorSentenceCards.count)", severity: .info)
-                            }
-                        } catch {
-                            await MainActor.run {
-                                self.structuredSourceStages[document.id] = .ready
-                                TextPipelineDiagnostics.log("PP", "[PP] AI enrichment failed (non-fatal) doc=\(document.id): \(error.localizedDescription)", severity: .warning)
-                            }
-                        }
-                    }
-                } else {
-                    structuredSourceStages[document.id] = .ready
-                    TextPipelineDiagnostics.log("PP", "[PP] 自动 AI 教授级升级已关闭，直接使用本地教学卡 doc=\(document.id)", severity: .info)
-                }
+                structuredSourceStages[document.id] = baseStructuredStage(for: document, bundle: ppPayload.bundle)
+                TextPipelineDiagnostics.log(
+                    "AI",
+                    "[AI][Policy] import skip professor enrich doc=\(document.id)",
+                    severity: .info
+                )
                 return
             }
 
@@ -596,27 +578,12 @@ final class AppViewModel: ObservableObject {
             structuredSources[document.id] = legacyPayload.bundle
             mergeStructuredSourcePayload(legacyPayload, into: document)
             seedWorkbenchProgressIfNeeded(for: document, with: legacyPayload.bundle)
-            structuredSourceStages[document.id] = .fallbackLegacy
-
-            if Self.automaticProfessorAIEnabled {
-                Task { [weak self] in
-                    guard let self else { return }
-                    do {
-                        let enriched = try await ProfessorAnalysisService.enrichBundle(
-                            legacyPayload.bundle,
-                            title: document.title
-                        )
-                        await MainActor.run {
-                            self.structuredSources[document.id] = enriched
-                            TextPipelineDiagnostics.log("PP", "[PP] AI enrichment (legacy) complete doc=\(document.id)", severity: .info)
-                        }
-                    } catch {
-                        TextPipelineDiagnostics.log("PP", "[PP] AI enrichment (legacy) failed (non-fatal) doc=\(document.id): \(error.localizedDescription)", severity: .warning)
-                    }
-                }
-            } else {
-                TextPipelineDiagnostics.log("PP", "[PP] 自动 AI 教授级升级已关闭（legacy）doc=\(document.id)", severity: .info)
-            }
+            structuredSourceStages[document.id] = baseStructuredStage(for: document, bundle: legacyPayload.bundle)
+            TextPipelineDiagnostics.log(
+                "AI",
+                "[AI][Policy] import skip professor enrich doc=\(document.id)",
+                severity: .info
+            )
         } catch {
             let errorMessage: String
             if error is TimeoutError {
@@ -637,6 +604,130 @@ final class AppViewModel: ObservableObject {
                 parseDurationMs: nil, timestamp: Date()
             )
             TextPipelineDiagnostics.log("PP", "[PP] loadStructuredSource failed doc=\(document.id): \(errorMessage)", severity: .error)
+        }
+    }
+
+    func ensureProfessorAnalysis(
+        for document: SourceDocument,
+        trigger: AIAnalysisTrigger,
+        force: Bool = false
+    ) async {
+        let mode = aiRequestPolicy.professorEnrichmentMode(for: trigger, force: force)
+        guard mode != .disabledOnImport else {
+            if trigger == .`import` {
+                TextPipelineDiagnostics.log(
+                    "AI",
+                    "[AI][Policy] import skip professor enrich doc=\(document.id)",
+                    severity: .info
+                )
+            }
+            return
+        }
+
+        guard let initialBundle = structuredSource(for: document) else { return }
+        if !force && initialBundle.hasProfessorAnalysis {
+            return
+        }
+
+        let requestKey = ProfessorAnalysisCacheStore.cacheKey(
+            documentID: document.id,
+            title: document.title,
+            bundle: initialBundle
+        )
+        let allowDiskCache = aiRequestPolicy.enableProfessorAnalysisDiskCache
+        let fallbackStage = baseStructuredStage(for: document, bundle: initialBundle)
+
+        if !force,
+           let cacheHit = await Self.professorAnalysisCacheStore.lookup(
+               forKey: requestKey,
+               allowDisk: allowDiskCache
+           ) {
+            TextPipelineDiagnostics.log(
+                "AI",
+                "[AI][ProfessorAnalysis] cache hit",
+                severity: .info
+            )
+            let latestBundle = structuredSource(for: document) ?? initialBundle
+            structuredSources[document.id] = latestBundle.applyingProfessorAnalysis(cacheHit.delta)
+            structuredSourceStages[document.id] = .ready
+            return
+        }
+
+        structuredSourceStages[document.id] = .aiEnriching
+
+        do {
+            let documentTitle = document.title
+            let documentID = document.id
+
+            let delta = try await Self.professorAnalysisSingleFlight.run(
+                key: requestKey,
+                onJoin: {
+                    TextPipelineDiagnostics.log(
+                        "AI",
+                        "[AI][ProfessorAnalysis] single-flight join",
+                        severity: .info
+                    )
+                }
+            ) {
+                if !force,
+                   let cacheHit = await Self.professorAnalysisCacheStore.lookup(
+                       forKey: requestKey,
+                       allowDisk: allowDiskCache
+                   ) {
+                    TextPipelineDiagnostics.log(
+                        "AI",
+                        "[AI][ProfessorAnalysis] cache hit",
+                        severity: .info
+                    )
+                    return cacheHit.delta
+                }
+
+                let enriched = try await ProfessorAnalysisService.enrichBundle(
+                    initialBundle,
+                    title: documentTitle
+                )
+                let delta = ProfessorAnalysisCacheStore.makeDelta(from: enriched)
+                await Self.professorAnalysisCacheStore.store(
+                    delta,
+                    forKey: requestKey,
+                    persistToDisk: allowDiskCache
+                )
+                TextPipelineDiagnostics.log(
+                    "AI",
+                    "[AI][ProfessorAnalysis] fetched doc=\(documentID)",
+                    severity: .info
+                )
+                return delta
+            }
+
+            let latestBundle = structuredSource(for: document) ?? initialBundle
+            structuredSources[document.id] = latestBundle.applyingProfessorAnalysis(delta)
+            structuredSourceStages[document.id] = .ready
+        } catch is CancellationError {
+            structuredSourceStages[document.id] = fallbackStage
+        } catch {
+            structuredSourceStages[document.id] = fallbackStage
+            TextPipelineDiagnostics.log(
+                "AI",
+                "[AI][ProfessorAnalysis] failed doc=\(document.id): \(error.localizedDescription)",
+                severity: .warning
+            )
+        }
+    }
+
+    private func baseStructuredStage(
+        for document: SourceDocument,
+        bundle: StructuredSourceBundle
+    ) -> StructuredLoadingStage {
+        guard let info = parseSessionInfos[document.id] else {
+            return bundle.hasProfessorAnalysis ? .ready : .partialReady
+        }
+
+        switch info.source {
+        case .ppStructureV3:
+            return bundle.hasProfessorAnalysis ? .ready : .partialReady
+        case .legacyLocal, .legacyRemote:
+            return bundle.hasProfessorAnalysis ? .ready : .fallbackLegacy
         }
     }
 
@@ -741,26 +832,54 @@ final class AppViewModel: ObservableObject {
     }
 
     /// 旧管线回退路径（本地 ChunkingService + AISourceParsingService）
-    private func fallbackToLegacyPipeline(for document: SourceDocument, draft: SourceTextDraft) async -> StructuredSourceParsePayload {
+    private func fallbackToLegacyPipeline(
+        for document: SourceDocument,
+        draft: SourceTextDraft,
+        forceRemote: Bool = false
+    ) async -> StructuredSourceParsePayload {
         TextPipelineDiagnostics.log("PP", "[PP] fallback → legacy pipeline START doc=\(document.id)", severity: .warning)
         structuredSourceStages[document.id] = .classifying
+
+        let localPayload = AISourceParsingService.buildLocalFallbackPayload(
+            documentID: document.id,
+            title: document.title,
+            documentType: document.documentType,
+            pageCount: document.pageCount,
+            draft: draft
+        )
+
+        let qualityReport = StructuredSourceQualityEvaluator.evaluate(localPayload)
 
         if AISourceParsingService.shouldPreferLocalFallback(for: draft) {
             TextPipelineDiagnostics.log("PP", "[PP] fallback → legacy LOCAL (mixed-language) doc=\(document.id)", severity: .warning)
             structuredSourceStages[document.id] = .buildingTree
-            let payload = AISourceParsingService.buildLocalFallbackPayload(
-                documentID: document.id,
-                title: document.title,
-                documentType: document.documentType,
-                pageCount: document.pageCount,
-                draft: draft
+            TextPipelineDiagnostics.log(
+                "AI",
+                "[AI][LegacyParse] local fallback accepted, skip remote parse-source",
+                severity: .info
             )
-            TextPipelineDiagnostics.log("PP", "[PP] fallback → legacy LOCAL DONE sentences=\(payload.bundle.sentences.count) doc=\(document.id)", severity: .warning)
-            return payload
+            TextPipelineDiagnostics.log("PP", "[PP] fallback → legacy LOCAL DONE sentences=\(localPayload.bundle.sentences.count) doc=\(document.id)", severity: .warning)
+            return localPayload
+        }
+
+        if !aiRequestPolicy.shouldAllowLegacyRemoteParse(for: qualityReport, forceRemote: forceRemote) {
+            structuredSourceStages[document.id] = .buildingTree
+            TextPipelineDiagnostics.log(
+                "AI",
+                "[AI][LegacyParse] local fallback accepted, skip remote parse-source quality=\(qualityReport.debugSummary)",
+                severity: .info
+            )
+            TextPipelineDiagnostics.log("PP", "[PP] fallback → legacy LOCAL DONE sentences=\(localPayload.bundle.sentences.count) doc=\(document.id)", severity: .warning)
+            return localPayload
         }
 
         do {
             structuredSourceStages[document.id] = .buildingPreview
+            TextPipelineDiagnostics.log(
+                "AI",
+                "[AI][LegacyParse] local fallback too weak, calling remote parse-source quality=\(qualityReport.debugSummary)",
+                severity: .warning
+            )
             TextPipelineDiagnostics.log("PP", "[PP] fallback → legacy REMOTE doc=\(document.id)", severity: .warning)
             let payload = try await withTimeoutOrThrow(seconds: 60) { [document, draft] in
                 try await AISourceParsingService.parseSource(
@@ -768,7 +887,8 @@ final class AppViewModel: ObservableObject {
                     title: document.title,
                     documentType: document.documentType,
                     pageCount: document.pageCount,
-                    draft: draft
+                    draft: draft,
+                    localFallback: localPayload
                 )
             }
             TextPipelineDiagnostics.log("PP", "[PP] fallback → legacy REMOTE DONE sentences=\(payload.bundle.sentences.count) doc=\(document.id)", severity: .warning)
@@ -776,15 +896,8 @@ final class AppViewModel: ObservableObject {
         } catch {
             TextPipelineDiagnostics.log("PP", "[PP] fallback legacy remote also failed: \(error.localizedDescription), using local fallback doc=\(document.id)", severity: .error)
             structuredSourceStages[document.id] = .buildingTree
-            let payload = AISourceParsingService.buildLocalFallbackPayload(
-                documentID: document.id,
-                title: document.title,
-                documentType: document.documentType,
-                pageCount: document.pageCount,
-                draft: draft
-            )
-            TextPipelineDiagnostics.log("PP", "[PP] fallback → legacy LOCAL (after remote fail) DONE sentences=\(payload.bundle.sentences.count) doc=\(document.id)", severity: .warning)
-            return payload
+            TextPipelineDiagnostics.log("PP", "[PP] fallback → legacy LOCAL (after remote fail) DONE sentences=\(localPayload.bundle.sentences.count) doc=\(document.id)", severity: .warning)
+            return localPayload
         }
     }
 

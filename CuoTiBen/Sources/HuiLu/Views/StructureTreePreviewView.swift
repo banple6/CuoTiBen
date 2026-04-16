@@ -9,8 +9,9 @@ struct StructureTreePreviewView: View {
     let onJumpHandled: () -> Void
     let onClose: (() -> Void)?
     let fillsAvailableHeight: Bool
+    let showsToolbar: Bool
 
-    @State private var densityMode: StructureTreePreviewDensityMode = .detailed
+    @State private var densityMode: StructureTreePreviewDensityMode
     @State private var pendingCanvasCommand: StructureTreePreviewCanvasCommand?
     @State private var reportedScale: CGFloat = 1.0
 
@@ -26,7 +27,9 @@ struct StructureTreePreviewView: View {
         onNodeTap: @escaping (OutlineNode) -> Void,
         onJumpHandled: @escaping () -> Void,
         onClose: (() -> Void)? = nil,
-        fillsAvailableHeight: Bool = false
+        fillsAvailableHeight: Bool = false,
+        showsToolbar: Bool = true,
+        initialDensityMode: StructureTreePreviewDensityMode = .detailed
     ) {
         self.nodes = nodes
         self.highlightedNodeID = highlightedNodeID
@@ -36,19 +39,24 @@ struct StructureTreePreviewView: View {
         self.onJumpHandled = onJumpHandled
         self.onClose = onClose
         self.fillsAvailableHeight = fillsAvailableHeight
+        self.showsToolbar = showsToolbar
+        _densityMode = State(initialValue: initialDensityMode)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            StructureTreePreviewToolbar(
-                densityMode: densityMode,
-                scalePercentage: Int((reportedScale * 100).rounded()),
-                onDensityChange: { densityMode = $0 },
-                onZoomIn: { issueCanvasCommand(.zoomIn) },
-                onZoomOut: { issueCanvasCommand(.zoomOut) },
-                onFocus: { issueCanvasCommand(.focus) },
-                onClose: onClose
-            )
+            if showsToolbar {
+                StructureTreePreviewToolbar(
+                    densityMode: densityMode,
+                    scalePercentage: Int((reportedScale * 100).rounded()),
+                    onDensityChange: { densityMode = $0 },
+                    onZoomIn: { issueCanvasCommand(.zoomIn) },
+                    onZoomOut: { issueCanvasCommand(.zoomOut) },
+                    onFocus: { issueCanvasCommand(.focus) },
+                    onFit: { issueCanvasCommand(.fit) },
+                    onClose: onClose
+                )
+            }
 
             StructureTreePreviewCanvas(
                 nodes: nodes,
@@ -111,7 +119,7 @@ struct StructureTreeWorkspaceOverlay: View {
 
             VStack(alignment: .leading, spacing: 16) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("教学树工作区")
+                    Text("思维导图工作区")
                         .font(.system(size: 28, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.black.opacity(0.84))
 

@@ -7,6 +7,7 @@ struct StructureTreePreviewToolbar: View {
     let onZoomIn: () -> Void
     let onZoomOut: () -> Void
     let onFocus: () -> Void
+    let onFit: () -> Void
     let onClose: (() -> Void)?
 
     var body: some View {
@@ -49,6 +50,23 @@ struct StructureTreePreviewToolbar: View {
                     .background(
                         Capsule(style: .continuous)
                             .fill(StructureTreePreviewPalette.focusAction)
+                    )
+            }
+            .buttonStyle(.plain)
+
+            Button(action: onFit) {
+                Text("适配全图")
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(StructureTreePreviewPalette.focusAction)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 11)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(Color.white.opacity(0.92))
+                            .overlay(
+                                Capsule(style: .continuous)
+                                    .stroke(StructureTreePreviewPalette.toolbarStroke, lineWidth: 1)
+                            )
                     )
             }
             .buttonStyle(.plain)

@@ -143,7 +143,7 @@ private struct ArchivistWorkspaceLayout {
 
     var outerPadding: CGFloat { width > 1360 ? 28 : 22 }
     var sideRailWidth: CGFloat { 196 }
-    var navigatorWidth: CGFloat { min(232, width * 0.18) }
+    var navigatorWidth: CGFloat { min(320, width * 0.24) }
     var contentGap: CGFloat { width > 1400 ? 26 : 18 }
 }
 
@@ -254,8 +254,8 @@ private struct ToolbarCircleButton: View {
 
 private struct ArchivistSideRail: View {
     private let items: [(String, String)] = [
-        ("Structure", "square.grid.2x2"),
         ("Mind Map", "point.3.connected.trianglepath.dotted"),
+        ("Structure", "square.grid.2x2"),
         ("Archive", "archivebox"),
         ("Tags", "tag")
     ]
@@ -289,12 +289,12 @@ private struct ArchivistSideRail: View {
                         Text(item.0)
                             .font(ArchivistTypography.annotation)
                     }
-                    .foregroundStyle(item.0 == "Structure" ? ArchivistColors.primaryInk : ArchivistColors.mutedInk.opacity(0.74))
+                    .foregroundStyle(item.0 == "Mind Map" ? ArchivistColors.primaryInk : ArchivistColors.mutedInk.opacity(0.74))
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
                     .background(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(item.0 == "Structure" ? ArchivistColors.blueWash.opacity(0.45) : Color.clear)
+                            .fill(item.0 == "Mind Map" ? ArchivistColors.blueWash.opacity(0.45) : Color.clear)
                     )
                 }
             }
@@ -330,7 +330,7 @@ private struct ArchivistFloatingNavigator: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Text("Navigator")
+                Text("Mind Map")
                     .font(ArchivistTypography.label)
                     .foregroundStyle(ArchivistColors.softInk)
                 Spacer()
@@ -342,68 +342,32 @@ private struct ArchivistFloatingNavigator: View {
                 .font(ArchivistTypography.annotationSmall)
                 .foregroundStyle(ArchivistColors.softInk)
 
-            ScrollView(showsIndicators: false) {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(nodes) { node in
-                        NavigatorNodeRow(
-                            node: node,
-                            selectedNodeID: selectedNodeID,
-                            onNodeTap: onNodeTap
-                        )
-                    }
-                }
+            if nodes.isEmpty {
+                Text("当前还没有可展示的导图节点。")
+                    .font(ArchivistTypography.annotation)
+                    .foregroundStyle(ArchivistColors.softInk)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            } else {
+                StructureTreePreviewView(
+                    nodes: nodes,
+                    highlightedNodeID: selectedNodeID,
+                    jumpTargetNodeID: selectedNodeID,
+                    ancestorNodeIDs: [],
+                    onNodeTap: onNodeTap,
+                    onJumpHandled: {},
+                    onClose: nil,
+                    fillsAvailableHeight: true,
+                    showsToolbar: false,
+                    initialDensityMode: .compact
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(18)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .archivistFloatingShadow()
-    }
-}
-
-private struct NavigatorNodeRow: View {
-    let node: OutlineNode
-    let selectedNodeID: String?
-    let onNodeTap: (OutlineNode) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Button {
-                onNodeTap(node)
-            } label: {
-                HStack(alignment: .top, spacing: 10) {
-                    Circle()
-                        .fill(selectedNodeID == node.id ? ArchivistColors.primaryInk : ArchivistColors.navigatorDot.opacity(0.6))
-                        .frame(width: 8, height: 8)
-                        .padding(.top, 6)
-
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(node.title)
-                            .font(.system(size: 13, weight: selectedNodeID == node.id ? .bold : .semibold, design: .serif))
-                            .foregroundStyle(ArchivistColors.mutedInk)
-                            .lineLimit(2)
-
-                        Text(node.anchor.label)
-                            .font(ArchivistTypography.annotationSmall)
-                            .foregroundStyle(ArchivistColors.softInk)
-                    }
-                }
-                .padding(.vertical, 4)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(.plain)
-
-            if !node.children.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(node.children) { child in
-                        NavigatorNodeRow(node: child, selectedNodeID: selectedNodeID, onNodeTap: onNodeTap)
-                    }
-                }
-                .padding(.leading, 14)
-            }
-        }
     }
 }
 

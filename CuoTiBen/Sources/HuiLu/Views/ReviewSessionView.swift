@@ -1041,6 +1041,7 @@ struct ReviewDetailOverlay: View {
     let onClose: () -> Void
     @State private var isExpanded = false
     @State private var dragOffset: CGFloat = 0
+    @State private var showsRewriteMeaning = false
     @State private var explanation: AIExplainSentenceResult?
     @State private var isLoading = false
     @State private var errorMessage: String?
@@ -1272,6 +1273,20 @@ struct ReviewDetailOverlay: View {
 
             explanationSection(title: "句子主干", body: explanation.renderedSentenceCore, tint: AppPalette.paperTapeBlue.opacity(0.8), rotation: 0.3)
 
+            explanationSection(
+                title: "忠实翻译",
+                body: explanation.renderedFaithfulTranslation.isEmpty ? "暂无忠实翻译" : explanation.renderedFaithfulTranslation,
+                tint: AppPalette.paperHighlightMint,
+                rotation: -0.2
+            )
+
+            explanationSection(
+                title: "教学解读",
+                body: explanation.renderedTeachingInterpretation.isEmpty ? "暂无教学解读" : explanation.renderedTeachingInterpretation,
+                tint: AppPalette.paperHighlight.opacity(0.78),
+                rotation: 0.12
+            )
+
             if !explanation.renderedChunkLayers.isEmpty {
                 ReviewSectionPaper(title: "语块切分", tint: AppPalette.paperHighlightMint, rotation: -0.2) {
                     ForEach(Array(explanation.renderedChunkLayers.enumerated()), id: \.offset) { _, chunk in
@@ -1306,24 +1321,28 @@ struct ReviewDetailOverlay: View {
 
             explanationSection(title: "简化英文改写", body: explanation.renderedSimplerRewrite, tint: AppPalette.paperTapeBlue.opacity(0.72), rotation: 0.14)
 
+            ReviewSectionPaper(title: "改写译意", tint: AppPalette.paperHighlightMint.opacity(0.82), rotation: 0.08) {
+                Button(showsRewriteMeaning ? "隐藏译意" : "显示译意") {
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
+                        showsRewriteMeaning.toggle()
+                    }
+                }
+                .font(.system(size: 14, weight: .semibold, design: .serif))
+                .buttonStyle(.plain)
+                .foregroundStyle(AppPalette.fabricNavy)
+
+                if showsRewriteMeaning {
+                    Text(explanation.renderedSimplerRewriteTranslation.isEmpty ? "暂无改写译意" : explanation.renderedSimplerRewriteTranslation)
+                        .font(.system(size: 16, weight: .medium, design: .serif))
+                        .foregroundStyle(AppPalette.paperInk.opacity(0.68))
+                        .lineSpacing(4)
+                }
+            }
+
             if let miniExercise = explanation.renderedMiniCheck?.trimmingCharacters(in: .whitespacesAndNewlines),
                !miniExercise.isEmpty {
                 explanationSection(title: "微练习", body: miniExercise, tint: AppPalette.amber.opacity(0.72), rotation: -0.08)
             }
-
-            explanationSection(
-                title: "忠实翻译",
-                body: explanation.renderedFaithfulTranslation.isEmpty ? "暂无忠实翻译" : explanation.renderedFaithfulTranslation,
-                tint: AppPalette.paperHighlightMint,
-                rotation: -0.2
-            )
-
-            explanationSection(
-                title: "教学解读",
-                body: explanation.renderedTeachingInterpretation.isEmpty ? "暂无教学解读" : explanation.renderedTeachingInterpretation,
-                tint: AppPalette.paperHighlight.opacity(0.78),
-                rotation: 0.12
-            )
 
             if !explanation.keyTerms.isEmpty {
                 ReviewSectionPaper(title: "词汇在句中义", tint: AppPalette.paperTapeBlue, rotation: 0.35) {
@@ -1400,11 +1419,11 @@ struct ReviewDetailOverlay: View {
     private func reloadExplanation() async {
         explanation = nil
         errorMessage = nil
-        await fetchExplanationIfPossible()
+        await fetchExplanationIfPossible(forceRefresh: true)
     }
 
     @MainActor
-    private func fetchExplanationIfPossible() async {
+    private func fetchExplanationIfPossible(forceRefresh: Bool = false) async {
         guard let explainContext else { return }
         guard !isLoading else { return }
 
@@ -1412,7 +1431,10 @@ struct ReviewDetailOverlay: View {
         defer { isLoading = false }
 
         do {
-            let result = try await AIExplainSentenceService.fetchExplanation(for: explainContext)
+            let result = try await AIExplainSentenceService.fetchExplanationWithCache(
+                for: explainContext,
+                forceRefresh: forceRefresh
+            )
             explanation = result
             errorMessage = nil
         } catch {

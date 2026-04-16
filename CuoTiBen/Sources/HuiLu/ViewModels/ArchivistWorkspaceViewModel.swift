@@ -183,7 +183,7 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
                 // 新模型响应更慢，给工作台留足等待窗口，避免未完成就被本地超时打断。
                 let result = try await withThrowingTaskGroup(of: AIExplainSentenceResult.self) { group in
                     group.addTask {
-                        try await AIExplainSentenceService.fetchExplanation(for: context)
+                        try await AIExplainSentenceService.fetchExplanationWithCache(for: context)
                     }
                     group.addTask {
                         try await Task.sleep(nanoseconds: 80_000_000_000)

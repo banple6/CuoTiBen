@@ -18,6 +18,7 @@ struct StructureTreePreviewCanvasCommand: Equatable {
         case zoomIn
         case zoomOut
         case focus
+        case fit
     }
 
     let action: Action
@@ -100,13 +101,10 @@ struct StructureTreePreviewMetrics {
     var maximumScale: CGFloat { 1.68 }
 
     var focusXRatio: CGFloat {
-        switch densityMode {
-        case .detailed: return 0.42
-        case .compact: return 0.47
-        }
+        0.5
     }
 
-    var focusYRatio: CGFloat { 0.42 }
+    var focusYRatio: CGFloat { 0.5 }
 
     var leadingViewportPadding: CGFloat {
         switch densityMode {
@@ -150,26 +148,41 @@ struct StructureTreePreviewMetrics {
     var renderPadding: CGSize {
         switch densityMode {
         case .detailed:
-            return CGSize(width: 190, height: 150)
+            return CGSize(width: 220, height: 180)
         case .compact:
-            return CGSize(width: 150, height: 116)
+            return CGSize(width: 180, height: 136)
         }
+    }
+
+    func paragraphRingRadius(for count: Int) -> CGFloat {
+        let base: CGFloat = densityMode == .detailed ? 260 : 220
+        let incremental: CGFloat = densityMode == .detailed ? 22 : 18
+        return base + CGFloat(max(count - 4, 0)) * incremental
+    }
+
+    var childRingGap: CGFloat {
+        densityMode == .detailed ? 176 : 144
+    }
+
+    func paragraphSectorAngle(for count: Int) -> CGFloat {
+        guard count > 0 else { return .pi / 2 }
+        return min((2 * .pi / CGFloat(count)) * 0.72, densityMode == .detailed ? 0.92 : 0.76)
     }
 
     func cardSize(for role: StructureTreePreviewNodeRole) -> CGSize {
         switch (densityMode, role) {
         case (.detailed, .focus):
-            return CGSize(width: 320, height: 170)
+            return CGSize(width: 304, height: 150)
         case (.detailed, .mainPath):
-            return CGSize(width: 258, height: 128)
+            return CGSize(width: 228, height: 112)
         case (.detailed, .branch):
-            return CGSize(width: 212, height: 104)
+            return CGSize(width: 194, height: 96)
         case (.compact, .focus):
-            return CGSize(width: 274, height: 88)
+            return CGSize(width: 248, height: 82)
         case (.compact, .mainPath):
-            return CGSize(width: 220, height: 74)
+            return CGSize(width: 194, height: 68)
         case (.compact, .branch):
-            return CGSize(width: 188, height: 66)
+            return CGSize(width: 168, height: 62)
         }
     }
 

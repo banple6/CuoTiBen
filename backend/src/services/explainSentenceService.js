@@ -381,22 +381,32 @@ function buildRewriteTranslationExplanation({ simplerRewrite, faithfulTranslatio
   const parts = [];
   const faithful = typeof faithfulTranslation === "string" ? faithfulTranslation.trim() : "";
   if (faithful) {
-    parts.push(`译意：${faithful}`);
-  }
-
-  const simplificationNotes = [];
-  if (coreSkeleton?.subject || coreSkeleton?.predicate) {
-    simplificationNotes.push("简化改写保留了原句主干判断");
+    parts.push(`这条改写仍在说：${faithful}`);
   }
 
   const layeredRoles = Array.isArray(chunkLayers) ? chunkLayers.map((item) => String(item?.role || "").trim()) : [];
   if (layeredRoles.some((role) => /前置框架|条件|让步|后置修饰/.test(role))) {
-    simplificationNotes.push("把原句里外围框架和修饰层压缩成更直接的主句表达");
+    parts.push("它保留了原句主干判断，把外围框架和修饰层压缩成更直接的主句表达。");
   } else {
-    simplificationNotes.push("把原句改成更直接的主谓表达");
+    parts.push("它保留原意，只把句法改成更直接的主谓表达。");
   }
 
-  parts.push(`简化方式：${simplificationNotes.join("，")}。`);
+  if (coreSkeleton?.subject || coreSkeleton?.predicate) {
+    const subject = typeof coreSkeleton.subject === "string" ? coreSkeleton.subject.trim() : "";
+    const predicate = typeof coreSkeleton.predicate === "string" ? coreSkeleton.predicate.trim() : "";
+    const complement = typeof coreSkeleton.complement_or_object === "string"
+      ? coreSkeleton.complement_or_object.trim()
+      : (typeof coreSkeleton.complementOrObject === "string" ? coreSkeleton.complementOrObject.trim() : "");
+    const stableCore = [
+      subject ? `主语：${subject}` : "",
+      predicate ? `谓语：${predicate}` : "",
+      complement ? `核心补足：${complement}` : ""
+    ].filter(Boolean).join("｜");
+    if (stableCore) {
+      parts.push(`主干没有变，抓住“${stableCore}”就能看出改写没有换义。`);
+    }
+  }
+
   return parts.join(" ");
 }
 
@@ -584,10 +594,14 @@ function normalizeMixedGrammarChinese(text) {
     [/passive voice/gi, "被动结构"],
     [/concessive frame/gi, "让步框架"],
     [/framing phrase/gi, "前置框架"],
+    [/conditional frame/gi, "条件框架"],
     [/participle phrase/gi, "分词短语"],
     [/infinitive phrase/gi, "不定式短语"],
     [/non-finite/gi, "非谓语结构"],
-    [/adverbial clause/gi, "状语从句"]
+    [/adverbial clause/gi, "状语从句"],
+    [/subject clause/gi, "主语从句"],
+    [/predicative clause/gi, "表语从句"],
+    [/appositive clause/gi, "同位语从句"]
   ];
 
   for (const [pattern, replacement] of replacements) {
@@ -858,7 +872,7 @@ function sanitizeCoreSkeletonField(value) {
   if (!normalized) return "";
   return normalized
     .replace(/\[[A-Za-z_\s-]+:\s*([^\]]+)\]/g, "$1")
-    .replace(/^(主语|谓语|核心补足|宾语|补语|表语)\s*[：:]\s*/g, "")
+    .replace(/^(主语|谓语|核心补足|宾语|补语|表语|subject|predicate|object|complement)\s*[：:]\s*/gi, "")
     .replace(/\s+/g, " ")
     .trim();
 }

@@ -125,6 +125,12 @@
 		B00000000000000000000074 /* StructureTreePreviewToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000074 /* StructureTreePreviewToolbar.swift */; };
 		B00000000000000000000075 /* StructureTreePreviewCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000075 /* StructureTreePreviewCanvas.swift */; };
 		B00000000000000000000076 /* StructureTreePreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000076 /* StructureTreePreviewView.swift */; };
+		B00000000000000000000077 /* AIRequestPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000077 /* AIRequestPolicy.swift */; };
+		B00000000000000000000078 /* AIRequestSingleFlight.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000078 /* AIRequestSingleFlight.swift */; };
+		B00000000000000000000079 /* SentenceAnalysisCacheStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000079 /* SentenceAnalysisCacheStore.swift */; };
+		B0000000000000000000007A /* ProfessorAnalysisCacheStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000007A /* ProfessorAnalysisCacheStore.swift */; };
+		B0000000000000000000007B /* StructuredSourceQualityEvaluator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000007B /* StructuredSourceQualityEvaluator.swift */; };
+		B0000000000000000000007C /* AnchorConsistencyValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000007C /* AnchorConsistencyValidator.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -247,6 +253,12 @@
 		C00000000000000000000074 /* StructureTreePreviewToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StructureTreePreviewToolbar.swift; sourceTree = "<group>"; };
 		C00000000000000000000075 /* StructureTreePreviewCanvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StructureTreePreviewCanvas.swift; sourceTree = "<group>"; };
 		C00000000000000000000076 /* StructureTreePreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StructureTreePreviewView.swift; sourceTree = "<group>"; };
+		C00000000000000000000077 /* AIRequestPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIRequestPolicy.swift; sourceTree = "<group>"; };
+		C00000000000000000000078 /* AIRequestSingleFlight.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIRequestSingleFlight.swift; sourceTree = "<group>"; };
+		C00000000000000000000079 /* SentenceAnalysisCacheStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SentenceAnalysisCacheStore.swift; sourceTree = "<group>"; };
+		C0000000000000000000007A /* ProfessorAnalysisCacheStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfessorAnalysisCacheStore.swift; sourceTree = "<group>"; };
+		C0000000000000000000007B /* StructuredSourceQualityEvaluator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StructuredSourceQualityEvaluator.swift; sourceTree = "<group>"; };
+		C0000000000000000000007C /* AnchorConsistencyValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnchorConsistencyValidator.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -344,7 +356,9 @@
 		D00000000000000000000005 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				C00000000000000000000077 /* AIRequestPolicy.swift */,
 				C00000000000000000000019 /* AIExplainSentenceService.swift */,
+				C00000000000000000000078 /* AIRequestSingleFlight.swift */,
 				C0000000000000000000001B /* AISourceParsingService.swift */,
 				C0000000000000000000000C /* CardGenerationService.swift */,
 				C0000000000000000000000D /* ChunkingService.swift */,
@@ -363,6 +377,10 @@
 				C0000000000000000000006D /* DocumentParseService.swift */,
 				C0000000000000000000006E /* NormalizedDocumentConverter.swift */,
 				C0000000000000000000006F /* ProfessorAnalysisService.swift */,
+				C0000000000000000000007A /* ProfessorAnalysisCacheStore.swift */,
+				C00000000000000000000079 /* SentenceAnalysisCacheStore.swift */,
+				C0000000000000000000007B /* StructuredSourceQualityEvaluator.swift */,
+				C0000000000000000000007C /* AnchorConsistencyValidator.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -679,6 +697,8 @@
 				B00000000000000000000011 /* ImportMaterialView.swift in Sources */,
 				B00000000000000000000018 /* LibraryView.swift in Sources */,
 				B00000000000000000000019 /* AIExplainSentenceService.swift in Sources */,
+				B00000000000000000000077 /* AIRequestPolicy.swift in Sources */,
+				B00000000000000000000078 /* AIRequestSingleFlight.swift in Sources */,
 				B0000000000000000000001B /* AISourceParsingService.swift in Sources */,
 				B00000000000000000000017 /* ReviewListView.swift in Sources */,
 				B00000000000000000000012 /* ReviewSessionView.swift in Sources */,
@@ -751,6 +771,10 @@
 				B0000000000000000000006D /* DocumentParseService.swift in Sources */,
 				B0000000000000000000006E /* NormalizedDocumentConverter.swift in Sources */,
 				B0000000000000000000006F /* ProfessorAnalysisService.swift in Sources */,
+				B0000000000000000000007A /* ProfessorAnalysisCacheStore.swift in Sources */,
+				B00000000000000000000079 /* SentenceAnalysisCacheStore.swift in Sources */,
+				B0000000000000000000007B /* StructuredSourceQualityEvaluator.swift in Sources */,
+				B0000000000000000000007C /* AnchorConsistencyValidator.swift in Sources */,
 				B00000000000000000000069 /* TextPipelineDiagnosticsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

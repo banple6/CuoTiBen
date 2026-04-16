@@ -11,7 +11,7 @@ struct ExplainSentenceContext: Equatable {
     let questionPrompt: String
 }
 
-struct SentenceAnalysisIdentity: Equatable, Hashable {
+struct SentenceAnalysisIdentity: Codable, Equatable, Hashable {
     let sourceSentenceID: String
     let sourceSentenceTextHash: String
     let sourceAnchorLabel: String
@@ -104,7 +104,7 @@ enum AnalysisConsistencyGuard {
     ]
 }
 
-struct AIExplainSentenceResult: Equatable {
+struct AIExplainSentenceResult: Codable, Equatable {
     typealias GrammarPoint = ProfessorGrammarPoint
     typealias KeyTerm = ProfessorVocabularyItem
     typealias CoreSkeleton = ProfessorCoreSkeleton
@@ -700,7 +700,11 @@ struct AIExplainSentenceResult: Equatable {
             options: .regularExpression
         )
         let cleaned = stripped
-            .replacingOccurrences(of: #"^(主语|谓语|核心补足|宾语|补语|表语)\s*[：:]\s*"#, with: "", options: .regularExpression)
+            .replacingOccurrences(
+                of: #"^(主语|谓语|核心补足|宾语|补语|表语|subject|predicate|object|complement)\s*[：:]\s*"#,
+                with: "",
+                options: [.regularExpression, .caseInsensitive]
+            )
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
         return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -716,7 +720,15 @@ struct AIExplainSentenceResult: Equatable {
             ("postpositive modifier", "后置修饰"),
             ("passive voice", "被动结构"),
             ("concessive frame", "让步框架"),
-            ("framing phrase", "前置框架")
+            ("framing phrase", "前置框架"),
+            ("conditional frame", "条件框架"),
+            ("participle phrase", "分词短语"),
+            ("infinitive phrase", "不定式短语"),
+            ("non-finite", "非谓语结构"),
+            ("adverbial clause", "状语从句"),
+            ("subject clause", "主语从句"),
+            ("predicative clause", "表语从句"),
+            ("appositive clause", "同位语从句")
         ]
 
         var normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -773,6 +785,30 @@ struct AIExplainSentenceResult: Equatable {
                 explanation: "这是补在中心名词后面的限定信息，读的时候要先找清楚它修饰谁。",
                 function: "它在这里负责给前面的名词补限定范围，不是在推进新的主句判断。",
                 why: "修饰对象一旦挂错，枝叶就会被误当成主干。"
+            )
+        }
+        if normalized.contains("非谓语") || lower.contains("participle") || lower.contains("infinitive") {
+            return (
+                title: "非谓语结构",
+                explanation: "这是把完整动作压缩成信息块的写法，常用来补目的、原因、伴随或修饰关系。",
+                function: "它在这句里负责压缩附加信息，不能被当成新的完整谓语。",
+                why: "如果把非谓语误判成主句谓语，整句主干会被直接拆坏。"
+            )
+        }
+        if normalized.contains("被动结构") {
+            return (
+                title: "被动结构",
+                explanation: "被动结构会把动作承受者顶到前面，真正的施动者可能后移甚至省略。",
+                function: "它在这句里改变了信息出场顺序，强调的是谁被作用，而不是谁主动发出动作。",
+                why: "如果被动方向没看清，细节关系和因果关系就很容易整体读反。"
+            )
+        }
+        if normalized.contains("否定") {
+            return (
+                title: "否定范围",
+                explanation: "这里要看清否定词到底压在哪一层信息上，而不是看到 not 就结束。",
+                function: "它在本句里限制判断成立的范围，决定作者否定的是动作、比较项还是条件层。",
+                why: "否定范围一旦看错，题目选项的态度和细节判断会整体反向。"
             )
         }
         if normalized.contains("让步框架") {
@@ -937,67 +973,14 @@ enum AIExplainSentenceServiceError: LocalizedError {
     }
 }
 
-private struct ExplainSentenceCacheEntry {
-    let result: AIExplainSentenceResult
-    let storedAt: Date
-}
-
-private actor ExplainSentenceRequestStore {
-    private var inFlight: [String: Task<AIExplainSentenceResult, Error>] = [:]
-    private var cache: [String: ExplainSentenceCacheEntry] = [:]
-    private let maxCachedResults = 64
-
-    func cachedResult(for key: String, now: Date, ttl: TimeInterval) -> AIExplainSentenceResult? {
-        guard let entry = cache[key] else { return nil }
-        guard now.timeIntervalSince(entry.storedAt) < ttl else {
-            cache.removeValue(forKey: key)
-            return nil
-        }
-        return entry.result
-    }
-
-    func inFlightTask(for key: String) -> Task<AIExplainSentenceResult, Error>? {
-        inFlight[key]
-    }
-
-    func setInFlightTask(_ task: Task<AIExplainSentenceResult, Error>, for key: String) {
-        inFlight[key] = task
-    }
-
-    func storeResult(_ result: AIExplainSentenceResult, for key: String, now: Date) {
-        inFlight.removeValue(forKey: key)
-        cache[key] = ExplainSentenceCacheEntry(result: result, storedAt: now)
-        trimCacheIfNeeded()
-    }
-
-    func removeInFlightTask(for key: String) {
-        inFlight.removeValue(forKey: key)
-    }
-
-    private func trimCacheIfNeeded() {
-        guard cache.count > maxCachedResults else { return }
-
-        let overflow = cache.count - maxCachedResults
-        let keysToRemove = cache
-            .sorted { lhs, rhs in
-                lhs.value.storedAt < rhs.value.storedAt
-            }
-            .prefix(overflow)
-            .map(\.key)
-
-        for key in keysToRemove {
-            cache.removeValue(forKey: key)
-        }
-    }
-}
-
 enum AIExplainSentenceService {
     private static let baseURLStorageKey = "huiLu.aiBackendBaseURL"
     private static let defaultBaseURL = "http://47.94.227.58"
     private static let preferredAIPort = 3000
     private static let explainSentenceTimeout: TimeInterval = 75
-    private static let explainSentenceCacheTTL: TimeInterval = 10 * 60
-    private static let requestStore = ExplainSentenceRequestStore()
+    private static let aiRequestPolicy = AIRequestPolicy.default
+    private static let sentenceAnalysisCacheStore = SentenceAnalysisCacheStore()
+    private static let requestSingleFlight = AIRequestSingleFlight<AIExplainSentenceResult>()
 
     static var storedBaseURL: String {
         let stored = UserDefaults.standard.string(forKey: baseURLStorageKey) ?? ""
@@ -1118,41 +1101,40 @@ enum AIExplainSentenceService {
         return UInt64(350_000_000 * (clamped + 1))
     }
 
-    private static func normalizedRequestField(_ value: String?) -> String {
-        (value ?? "")
-            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
+    private static func validatedContext(for context: ExplainSentenceContext) -> ExplainSentenceContext {
+        let (validatedSentence, sentenceRepaired) = TextPipelineValidator.validateAndRepairIfReversed(context.sentence)
+        let (validatedContext, _) = TextPipelineValidator.validateAndRepairIfReversed(context.context)
 
-    private static func stableFingerprint(for text: String) -> String {
-        var hash: UInt64 = 0xcbf29ce484222325
-        let prime: UInt64 = 0x100000001b3
-
-        for byte in text.utf8 {
-            hash ^= UInt64(byte)
-            hash = hash &* prime
+        if sentenceRepaired {
+            TextPipelineDiagnostics.log(
+                "句子分析",
+                "发送前检测到反转句子，已修复: \"\(String(context.sentence.prefix(40)))…\"",
+                severity: .repaired
+            )
         }
 
-        return String(hash, radix: 16)
+        return ExplainSentenceContext(
+            title: context.title,
+            sentenceID: context.sentenceID,
+            anchorLabel: context.anchorLabel,
+            sentence: validatedSentence,
+            context: validatedContext,
+            paragraphTheme: context.paragraphTheme,
+            paragraphRole: context.paragraphRole,
+            questionPrompt: context.questionPrompt
+        )
     }
 
-    private static func requestCacheKey(
-        for context: ExplainSentenceContext,
-        overrideBaseURL: String?
-    ) -> String {
-        let parts = [
-            normalizeBaseURL(overrideBaseURL ?? storedBaseURL),
-            normalizedRequestField(context.title),
-            normalizedRequestField(context.sentenceID),
-            normalizedRequestField(context.anchorLabel),
-            normalizedRequestField(context.sentence),
-            normalizedRequestField(context.context),
-            normalizedRequestField(context.paragraphTheme),
-            normalizedRequestField(context.paragraphRole),
-            normalizedRequestField(context.questionPrompt)
-        ]
+    private static func logSentenceExplainCacheHit(_ source: SentenceAnalysisCacheStore.CacheSource) {
+        let message: String
+        switch source {
+        case .memory:
+            message = "[AI][SentenceExplain] memory cache hit"
+        case .disk:
+            message = "[AI][SentenceExplain] disk cache hit"
+        }
 
-        return stableFingerprint(for: parts.joined(separator: "\u{1F}"))
+        TextPipelineDiagnostics.log("AI", message, severity: .info)
     }
 
     private static func decodeResponseEnvelope(
@@ -1199,29 +1181,70 @@ enum AIExplainSentenceService {
         for context: ExplainSentenceContext,
         baseURL overrideBaseURL: String? = nil
     ) async throws -> AIExplainSentenceResult {
-        // 发送前检测句子文本是否反转，如有则自动修复
-        let (validatedSentence, sentenceRepaired) = TextPipelineValidator.validateAndRepairIfReversed(context.sentence)
-        let (validatedContext, _) = TextPipelineValidator.validateAndRepairIfReversed(context.context)
+        let validatedExplainContext = validatedContext(for: context)
+        return try await performFetchExplanationRequest(
+            for: validatedExplainContext,
+            baseURL: overrideBaseURL
+        )
+    }
 
-        if sentenceRepaired {
-            TextPipelineDiagnostics.log(
-                "句子分析",
-                "发送前检测到反转句子，已修复: \"\(String(context.sentence.prefix(40)))…\"",
-                severity: .repaired
-            )
+    static func fetchExplanationWithCache(
+        for context: ExplainSentenceContext,
+        baseURL overrideBaseURL: String? = nil,
+        forceRefresh: Bool = false
+    ) async throws -> AIExplainSentenceResult {
+        let validatedExplainContext = validatedContext(for: context)
+        let requestKey = SentenceAnalysisCacheStore.cacheKey(
+            for: validatedExplainContext,
+            baseURL: overrideBaseURL ?? storedBaseURL
+        )
+        let allowDiskCache = aiRequestPolicy.enableSentenceExplainDiskCache
+
+        if !forceRefresh,
+           let cacheHit = await sentenceAnalysisCacheStore.lookup(
+               forKey: requestKey,
+               allowDisk: allowDiskCache
+           ) {
+            logSentenceExplainCacheHit(cacheHit.source)
+            return cacheHit.result
         }
 
-        let validatedExplainContext = ExplainSentenceContext(
-            title: context.title,
-            sentenceID: context.sentenceID,
-            anchorLabel: context.anchorLabel,
-            sentence: validatedSentence,
-            context: validatedContext,
-            paragraphTheme: context.paragraphTheme,
-            paragraphRole: context.paragraphRole,
-            questionPrompt: context.questionPrompt
-        )
+        return try await requestSingleFlight.run(
+            key: requestKey,
+            onJoin: {
+                TextPipelineDiagnostics.log(
+                    "AI",
+                    "[AI][SentenceExplain] single-flight join",
+                    severity: .info
+                )
+            }
+        ) {
+            if !forceRefresh,
+               let cacheHit = await sentenceAnalysisCacheStore.lookup(
+                   forKey: requestKey,
+                   allowDisk: allowDiskCache
+               ) {
+                logSentenceExplainCacheHit(cacheHit.source)
+                return cacheHit.result
+            }
 
+            let result = try await performFetchExplanationRequest(
+                for: validatedExplainContext,
+                baseURL: overrideBaseURL
+            )
+            await sentenceAnalysisCacheStore.store(
+                result,
+                forKey: requestKey,
+                persistToDisk: allowDiskCache
+            )
+            return result
+        }
+    }
+
+    private static func performFetchExplanationRequest(
+        for context: ExplainSentenceContext,
+        baseURL overrideBaseURL: String?
+    ) async throws -> AIExplainSentenceResult {
         let endpointURLs = endpointCandidates(
             path: "ai/explain-sentence",
             overrideBaseURL: overrideBaseURL
@@ -1230,52 +1253,22 @@ enum AIExplainSentenceService {
             throw AIExplainSentenceServiceError.missingBaseURL
         }
 
-        let requestKey = requestCacheKey(
-            for: validatedExplainContext,
-            overrideBaseURL: overrideBaseURL
-        )
-
-        if let cached = await requestStore.cachedResult(
-            for: requestKey,
-            now: Date(),
-            ttl: explainSentenceCacheTTL
-        ) {
-            return cached
-        }
-
-        if let existingTask = await requestStore.inFlightTask(for: requestKey) {
-            return try await existingTask.value
-        }
-
         let requestData = try JSONEncoder().encode(
             ExplainSentenceRequest(
-                title: validatedExplainContext.title,
-                sentence: validatedExplainContext.sentence,
-                context: validatedExplainContext.context,
-                paragraphTheme: validatedExplainContext.paragraphTheme,
-                paragraphRole: validatedExplainContext.paragraphRole,
-                questionPrompt: validatedExplainContext.questionPrompt
+                title: context.title,
+                sentence: context.sentence,
+                context: context.context,
+                paragraphTheme: context.paragraphTheme,
+                paragraphRole: context.paragraphRole,
+                questionPrompt: context.questionPrompt
             )
         )
 
-        let task = Task<AIExplainSentenceResult, Error> {
-            try await performFetchExplanation(
-                for: validatedExplainContext,
-                requestData: requestData,
-                endpointURLs: endpointURLs
-            )
-        }
-
-        await requestStore.setInFlightTask(task, for: requestKey)
-
-        do {
-            let result = try await task.value
-            await requestStore.storeResult(result, for: requestKey, now: Date())
-            return result
-        } catch {
-            await requestStore.removeInFlightTask(for: requestKey)
-            throw error
-        }
+        return try await performFetchExplanation(
+            for: context,
+            requestData: requestData,
+            endpointURLs: endpointURLs
+        )
     }
 
     private static func performFetchExplanation(

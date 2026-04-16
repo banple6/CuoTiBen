@@ -35,7 +35,10 @@ struct TeachingTreeCanvasView: View {
             ancestorNodeIDs: ancestorNodeIDs,
             onNodeTap: onNodeTap,
             onJumpHandled: onJumpHandled,
-            onClose: onClose
+            onClose: onClose,
+            fillsAvailableHeight: false,
+            showsToolbar: true,
+            initialDensityMode: .detailed
         )
     }
 }

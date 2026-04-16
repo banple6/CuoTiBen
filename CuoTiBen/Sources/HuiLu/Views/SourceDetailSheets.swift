@@ -442,11 +442,14 @@ struct SentenceExplainDetailSheet: View {
 
         explanationTask?.cancel()
         explanationTask = Task {
-            await loadExplanation(for: sentence)
+            await loadExplanation(for: sentence, forceRefresh: force)
         }
     }
 
-    private func loadExplanation(for sentence: Sentence) async {
+    private func loadExplanation(
+        for sentence: Sentence,
+        forceRefresh: Bool
+    ) async {
         await MainActor.run {
             guard activeSentence.id == sentence.id else { return }
             isLoading = true
@@ -456,7 +459,10 @@ struct SentenceExplainDetailSheet: View {
 
         do {
             let context = viewModel.explainSentenceContext(for: sentence, in: document)
-            let fetched = try await AIExplainSentenceService.fetchExplanation(for: context)
+            let fetched = try await AIExplainSentenceService.fetchExplanationWithCache(
+                for: context,
+                forceRefresh: forceRefresh
+            )
             try Task.checkCancellation()
 
             await MainActor.run {
@@ -1593,13 +1599,8 @@ struct ProfessorAnalysisPanel: View {
             if analysis.renderedSimplerRewrite.nonEmpty != nil {
                 RewriteCardSection(
                     rewrite: analysis.renderedSimplerRewrite,
+                    rewriteExplanation: analysis.renderedSimplerRewriteTranslation.nonEmpty ?? "暂无改写译意。",
                     highlightTokens: analysis.vocabularyInContext.map(\.term)
-                )
-
-                SentenceExplainBlock(
-                    title: "改写译意",
-                    content: analysis.renderedSimplerRewriteTranslation.nonEmpty ?? "暂无改写译意。",
-                    tone: .translation
                 )
             }
 
@@ -1887,7 +1888,10 @@ private struct StructuredChunkLayerCard: View {
 
 private struct RewriteCardSection: View {
     let rewrite: String
+    let rewriteExplanation: String
     let highlightTokens: [String]
+
+    @State private var showsExplanation = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1906,6 +1910,51 @@ private struct RewriteCardSection: View {
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(Color.black.opacity(0.68))
                     .lineSpacing(4)
+
+                Button {
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
+                        showsExplanation.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: showsExplanation ? "eye.slash" : "eye")
+                            .font(.system(size: 12, weight: .bold))
+                        Text(showsExplanation ? "隐藏译意" : "显示译意")
+                            .font(.system(size: 13, weight: .bold, design: .rounded))
+                    }
+                    .foregroundStyle(ExplainHighlightTone.rewrite.accent.opacity(0.92))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(Color.white.opacity(0.88))
+                    )
+                }
+                .buttonStyle(.plain)
+
+                if showsExplanation {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("改写译意")
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .foregroundStyle(Color.black.opacity(0.46))
+
+                        Text(rewriteExplanation)
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(Color.black.opacity(0.7))
+                            .lineSpacing(4)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(Color.white.opacity(0.84))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .stroke(ExplainHighlightTone.translation.stroke, lineWidth: 1)
+                            )
+                    )
+                }
             }
             .padding(18)
             .frame(maxWidth: .infinity, alignment: .leading)

@@ -832,14 +832,21 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
 
         var parts: [String] = []
         if !faithful.isEmpty {
-            parts.append("译意：\(faithful)")
+            parts.append("这条改写仍在说：\(faithful)")
         }
 
         let roles = displayedChunkLayers.map(\.role)
         if roles.contains(where: { $0.contains("前置") || $0.contains("条件") || $0.contains("让步") || $0.contains("后置") }) {
-            parts.append("简化时把外围框架和修饰层压缩掉，保留了原句主干判断。")
+            parts.append("它保留了原句主干判断，把外围框架和修饰层压缩成更直接的主句表达。")
         } else {
-            parts.append("简化时保留原意，把句子改成更直接的主谓表达。")
+            parts.append("它保留原意，只把句法改成更直接的主谓表达。")
+        }
+
+        if let skeleton = displayedStableCoreSkeleton, skeleton.isMeaningful {
+            let stableCore = truncatedPedagogicalText(skeleton.rendered, limit: 22)
+            if !stableCore.isEmpty {
+                parts.append("主干没有变，抓住“\(stableCore)”就能看出改写没有换义。")
+            }
         }
 
         return parts.joined(separator: " ")
@@ -851,7 +858,7 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
     }
 }
 
-struct ProfessorSentenceCard: Identifiable, Equatable, Hashable {
+struct ProfessorSentenceCard: Identifiable, Codable, Equatable, Hashable {
     let id: String
     let sentenceID: String
     let segmentID: String
@@ -859,7 +866,7 @@ struct ProfessorSentenceCard: Identifiable, Equatable, Hashable {
     let analysis: ProfessorSentenceAnalysis
 }
 
-struct ParagraphTeachingCard: Identifiable, Equatable, Hashable {
+struct ParagraphTeachingCard: Identifiable, Codable, Equatable, Hashable {
     let id: String
     let segmentID: String
     let paragraphIndex: Int
@@ -905,7 +912,7 @@ struct ParagraphTeachingCard: Identifiable, Equatable, Hashable {
     }
 }
 
-struct QuestionEvidenceLink: Identifiable, Equatable, Hashable {
+struct QuestionEvidenceLink: Identifiable, Codable, Equatable, Hashable {
     let id: String
     let questionText: String
     let supportParagraphIDs: [String]
@@ -915,7 +922,7 @@ struct QuestionEvidenceLink: Identifiable, Equatable, Hashable {
     let answerKeySnippet: String?
 }
 
-struct PassageOverview: Equatable, Hashable {
+struct PassageOverview: Codable, Equatable, Hashable {
     let articleTheme: String
     let authorCoreQuestion: String
     let progressionPath: String
@@ -1752,7 +1759,7 @@ extension PassageOverview {
     }
 }
 
-struct DocumentZoningSummary: Equatable, Hashable {
+struct DocumentZoningSummary: Codable, Equatable, Hashable {
     let passageParagraphCount: Int
     let questionParagraphCount: Int
     let answerKeyParagraphCount: Int
@@ -2022,6 +2029,11 @@ struct StructuredSourceBundle: Equatable {
         _cachedFlatNodes
     }
 
+    var hasProfessorAnalysis: Bool {
+        paragraphTeachingCards.contains(where: \.isAIGenerated) ||
+        professorSentenceCards.contains(where: { $0.analysis.isAIGenerated })
+    }
+
     /// 用 AI 生成的教授级分析内容替换启发式占位内容
     func enrichedWithAIAnalysis(
         overview: PassageOverview?,
@@ -2117,11 +2129,19 @@ struct StructuredSourceBundle: Equatable {
         let paragraphNodes: [OutlineNode] = paragraphCards.map { card in
             let sentences = sentencesBySegment[card.segmentID] ?? []
             let linkedQuestions = (questionHintsBySegment[card.segmentID] ?? []).map(\.1)
+            let proposedParagraphTitle = pedagogicalParagraphTitle(card: card)
+            let proposedParagraphSummary = pedagogicalParagraphSummary(card: card, linkedQuestions: linkedQuestions)
+            let validatedParagraph = AnchorConsistencyValidator.validatedParagraphNodeContent(
+                card: card,
+                sentences: sentences,
+                proposedTitle: proposedParagraphTitle,
+                proposedSummary: proposedParagraphSummary
+            )
             let questionNodes = linkedQuestions.enumerated().map { offset, link in
                 let localSentenceIDs = link.supportingSentenceIDs.filter {
                     sentenceSegmentIndex[$0] == card.segmentID
                 }
-                let anchorSentenceID = localSentenceIDs.first ?? card.coreSentenceID
+                let anchorSentenceID = localSentenceIDs.first ?? validatedParagraph.anchorSentenceID
                 return OutlineNode(
                     id: "question_\(card.segmentID)_\(link.id)",
                     sourceID: sourceID,
@@ -2144,11 +2164,17 @@ struct StructuredSourceBundle: Equatable {
             }
             let supportingSentenceNodes = sentences
                 .filter { sentence in
-                    sentence.id == card.coreSentenceID || sentenceCardIndex[sentence.id]?.isKeySentence == true
+                    sentence.id == validatedParagraph.anchorSentenceID || sentenceCardIndex[sentence.id]?.isKeySentence == true
                 }
                 .prefix(2)
                 .map { sentence in
                     let analysis = sentenceCardIndex[sentence.id]?.analysis
+                    let validatedSentence = AnchorConsistencyValidator.validatedSentenceNodeContent(
+                        sentence: sentence,
+                        analysis: analysis,
+                        proposedTitle: pedagogicalSentenceNodeTitle(sentence: sentence, analysis: analysis),
+                        proposedSummary: pedagogicalSentenceNodeSummary(sentence: sentence, analysis: analysis)
+                    )
                     return OutlineNode(
                         id: "support_\(sentence.id)",
                         sourceID: sourceID,
@@ -2156,8 +2182,8 @@ struct StructuredSourceBundle: Equatable {
                         depth: 2,
                         order: sentence.index,
                         nodeType: .supportingSentence,
-                        title: pedagogicalSentenceNodeTitle(sentence: sentence, analysis: analysis),
-                        summary: pedagogicalSentenceNodeSummary(sentence: sentence, analysis: analysis),
+                        title: validatedSentence.title,
+                        summary: validatedSentence.summary,
                         anchor: OutlineAnchor(
                             segmentID: sentence.segmentID,
                             sentenceID: sentence.id,
@@ -2170,7 +2196,12 @@ struct StructuredSourceBundle: Equatable {
                     )
                 }
 
-            let focusSummary = pedagogicalFocusSummary(card: card, linkedQuestions: linkedQuestions)
+            let validatedFocus = AnchorConsistencyValidator.validatedFocusNodeContent(
+                card: card,
+                sentences: sentences,
+                proposedTitle: pedagogicalFocusTitle(card: card),
+                proposedSummary: pedagogicalFocusSummary(card: card, linkedQuestions: linkedQuestions)
+            )
             let focusNode = OutlineNode(
                 id: "focus_\(card.segmentID)",
                 sourceID: sourceID,
@@ -2178,16 +2209,16 @@ struct StructuredSourceBundle: Equatable {
                 depth: 2,
                 order: card.paragraphIndex * 10,
                 nodeType: .teachingFocus,
-                title: pedagogicalFocusTitle(card: card),
-                summary: focusSummary,
+                title: validatedFocus.title,
+                summary: validatedFocus.summary,
                 anchor: OutlineAnchor(
                     segmentID: card.segmentID,
-                    sentenceID: card.coreSentenceID,
+                    sentenceID: validatedFocus.anchorSentenceID,
                     page: sentences.first?.page,
                     label: card.anchorLabel
                 ),
                 sourceSegmentIDs: [card.segmentID],
-                sourceSentenceIDs: card.coreSentenceID.map { [$0] } ?? [],
+                sourceSentenceIDs: validatedFocus.anchorSentenceID.map { [$0] } ?? [],
                 children: []
             )
 
@@ -2198,11 +2229,11 @@ struct StructuredSourceBundle: Equatable {
                 depth: 1,
                 order: card.paragraphIndex,
                 nodeType: .paragraphTheme,
-                title: pedagogicalParagraphTitle(card: card),
-                summary: pedagogicalParagraphSummary(card: card, linkedQuestions: linkedQuestions),
+                title: validatedParagraph.title,
+                summary: validatedParagraph.summary,
                 anchor: OutlineAnchor(
                     segmentID: card.segmentID,
-                    sentenceID: card.coreSentenceID,
+                    sentenceID: validatedParagraph.anchorSentenceID,
                     page: sentences.first?.page,
                     label: card.anchorLabel
                 ),
@@ -2219,7 +2250,7 @@ struct StructuredSourceBundle: Equatable {
             depth: 0,
             order: 0,
             nodeType: .passageRoot,
-            title: "文章主题与问题意识",
+            title: pedagogicalRootTitle(overview: overview),
             summary: pedagogicalRootSummary(overview: overview),
             anchor: OutlineAnchor(
                 segmentID: segments.first?.id,
@@ -2235,48 +2266,45 @@ struct StructuredSourceBundle: Equatable {
         return [rootNode]
     }
 
-    private static func pedagogicalRootSummary(overview: PassageOverview?) -> String {
-        guard let overview else { return "正文教学树" }
-        let theme = trimmedOrEmpty(overview.displayedArticleTheme)
-        let question = trimmedOrEmpty(overview.displayedAuthorCoreQuestion)
-        let parts = [
-            theme.isEmpty ? "" : "主题：\(truncatedPedagogicalText(theme, limit: 26))",
-            question.isEmpty ? "" : "核心问题：\(truncatedPedagogicalText(question, limit: 22))"
-        ].filter { !$0.isEmpty }
+    private static func pedagogicalRootTitle(overview: PassageOverview?) -> String {
+        let theme = truncatedPedagogicalText(overview?.displayedArticleTheme ?? "", limit: 22)
+        return theme.isEmpty ? "文章主题与问题意识" : theme
+    }
 
-        let summary = parts.isEmpty ? "正文教学树" : parts.joined(separator: "；")
+    private static func pedagogicalRootSummary(overview: PassageOverview?) -> String {
+        guard let overview else { return "正文思维导图" }
+        let question = trimmedOrEmpty(overview.displayedAuthorCoreQuestion)
+        let progression = trimmedOrEmpty(overview.displayedProgressionPath)
+        let summary = question.isEmpty
+            ? (progression.isEmpty ? "先看主题，再顺着段落分支定位关键句。" : truncatedPedagogicalText(progression, limit: 52))
+            : "核心问题：\(truncatedPedagogicalText(question, limit: 28))"
         return truncatedPedagogicalText(summary, limit: 60)
     }
 
     private static func pedagogicalParagraphTitle(card: ParagraphTeachingCard) -> String {
         let theme = trimmedOrEmpty(card.displayedTheme)
-        let shortTheme = truncatedPedagogicalText(theme, limit: 18)
+        let shortTheme = truncatedPedagogicalText(theme, limit: 16)
         if !shortTheme.isEmpty {
-            return "第\(card.paragraphIndex + 1)段｜\(card.argumentRole.displayName)｜\(shortTheme)"
+            return "第\(card.paragraphIndex + 1)段｜\(shortTheme)"
         }
         return "第\(card.paragraphIndex + 1)段｜\(card.argumentRole.displayName)"
     }
 
     private static func pedagogicalParagraphSummary(
         card: ParagraphTeachingCard,
-        linkedQuestions: [QuestionEvidenceLink]
+        linkedQuestions _: [QuestionEvidenceLink]
     ) -> String {
-        let theme = truncatedPedagogicalText(card.displayedTheme, limit: 22)
         let role = truncatedPedagogicalText(card.argumentRole.displayName, limit: 10)
+        let primaryFocus = truncatedPedagogicalText(card.displayedTeachingFocuses.first ?? "", limit: 20)
+        let blindSpot = truncatedPedagogicalText(card.displayedStudentBlindSpot ?? "", limit: 20)
+        let examValue = truncatedPedagogicalText(card.displayedExamValue, limit: 18)
 
-        var parts = [
-            theme.isEmpty ? "" : "主旨：\(theme)",
-            role.isEmpty ? "" : "角色：\(role)"
-        ].filter { !$0.isEmpty }
-
-        if parts.isEmpty, let linkedQuestion = linkedQuestions.first {
-            let hint = truncatedPedagogicalText(trimmedOrEmpty(linkedQuestion.trapType), limit: 18)
-            if !hint.isEmpty {
-                parts.append("对应考点：\(hint)")
-            }
-        }
-
-        let summary = parts.isEmpty ? "段落教学节点" : parts.joined(separator: "；")
+        let summary = [
+            role.isEmpty ? "" : "段落角色：\(role)",
+            !primaryFocus.isEmpty ? "先抓：\(primaryFocus)" : "",
+            primaryFocus.isEmpty && !blindSpot.isEmpty ? "别读偏：\(blindSpot)" : "",
+            primaryFocus.isEmpty && blindSpot.isEmpty && !examValue.isEmpty ? "命题点：\(examValue)" : ""
+        ].first(where: { !$0.isEmpty }) ?? "段落教学节点"
         return truncatedPedagogicalText(summary, limit: 50)
     }
 
@@ -2291,16 +2319,14 @@ struct StructuredSourceBundle: Equatable {
 
     private static func pedagogicalFocusSummary(
         card: ParagraphTeachingCard,
-        linkedQuestions: [QuestionEvidenceLink]
+        linkedQuestions _: [QuestionEvidenceLink]
     ) -> String {
-        let primaryFocus = truncatedPedagogicalText(card.displayedTeachingFocuses.first ?? "", limit: 26)
-        let examValue = truncatedPedagogicalText(card.displayedExamValue, limit: 22)
-        let fallback = !primaryFocus.isEmpty ? "优先学：\(primaryFocus)" : (examValue.isEmpty ? "" : "命题点：\(examValue)")
-        let questionHint = truncatedPedagogicalText(trimmedOrEmpty(linkedQuestions.first?.trapType ?? ""), limit: 16)
-
-        let summary = fallback.isEmpty
-            ? (questionHint.isEmpty ? "本段最值得先学的一点" : "命题点：\(questionHint)")
-            : fallback
+        let primaryFocus = truncatedPedagogicalText(card.displayedTeachingFocuses.first ?? "", limit: 24)
+        let blindSpot = truncatedPedagogicalText(card.displayedStudentBlindSpot ?? "", limit: 18)
+        let examValue = truncatedPedagogicalText(card.displayedExamValue, limit: 18)
+        let summary = !primaryFocus.isEmpty
+            ? "先抓：\(primaryFocus)"
+            : (!blindSpot.isEmpty ? "别读偏：\(blindSpot)" : (examValue.isEmpty ? "本段最值得先学的一点" : "命题点：\(examValue)"))
         return truncatedPedagogicalText(summary, limit: 40)
     }
 
@@ -2309,23 +2335,21 @@ struct StructuredSourceBundle: Equatable {
         analysis: ProfessorSentenceAnalysis?
     ) -> String {
         if let analysis {
-            let core = truncatedPedagogicalText(trimmedOrEmpty(analysis.renderedSentenceCore), limit: 18)
-            if !core.isEmpty {
-                let function = trimmedOrEmpty(analysis.renderedSentenceFunction)
-                if !function.isEmpty {
-                    let functionHead = function
-                        .split(separator: "：", maxSplits: 1)
-                        .first
-                        .map(String.init)?
-                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    if !functionHead.isEmpty {
-                        return "\(truncatedPedagogicalText(functionHead, limit: 10))｜\(core)"
-                    }
-                }
-                return core
+            if let role = professorSentenceRolePresentation(for: analysis.evidenceType)?.label,
+               !trimmedOrEmpty(role).isEmpty {
+                return "第\(sentence.localIndex + 1)句｜\(truncatedPedagogicalText(role, limit: 8))"
+            }
+
+            let functionHead = analysis.renderedSentenceFunction
+                .split(separator: "：", maxSplits: 1)
+                .first
+                .map(String.init)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !functionHead.isEmpty {
+                return "第\(sentence.localIndex + 1)句｜\(truncatedPedagogicalText(functionHead, limit: 8))"
             }
         }
-        return truncatedPedagogicalText(sentence.text, limit: 20)
+        return "第\(sentence.localIndex + 1)句关键句"
     }
 
     private static func pedagogicalSentenceNodeSummary(
@@ -2334,16 +2358,13 @@ struct StructuredSourceBundle: Equatable {
     ) -> String {
         guard let analysis else { return truncatedPedagogicalText(sentence.text, limit: 36) }
 
-        let functionHead = trimmedOrEmpty(analysis.renderedSentenceFunction)
-            .components(separatedBy: CharacterSet(charactersIn: "。！？\n"))
-            .first
-            .map(trimmedOrEmpty) ?? ""
-        let trap = truncatedPedagogicalText(trimmedOrEmpty(analysis.renderedMisreadingTraps.first ?? ""), limit: 22)
-        let paraphrase = truncatedPedagogicalText(trimmedOrEmpty(analysis.renderedExamParaphraseRoutes.first ?? ""), limit: 22)
+        let faithful = truncatedPedagogicalText(trimmedOrEmpty(analysis.renderedFaithfulTranslation), limit: 28)
+        let teaching = truncatedPedagogicalText(trimmedOrEmpty(analysis.renderedTeachingInterpretation), limit: 28)
+        let trap = truncatedPedagogicalText(trimmedOrEmpty(analysis.renderedMisreadingTraps.first ?? ""), limit: 20)
         let summary = [
-            functionHead.isEmpty ? "" : "关键在：\(truncatedPedagogicalText(functionHead, limit: 18))",
-            trap.isEmpty ? "" : "易错：\(trap)",
-            paraphrase.isEmpty ? "" : "改写点：\(paraphrase)"
+            !faithful.isEmpty ? faithful : "",
+            faithful.isEmpty && !teaching.isEmpty ? teaching : "",
+            faithful.isEmpty && teaching.isEmpty && !trap.isEmpty ? "易错：\(trap)" : ""
         ].first(where: { !$0.isEmpty }) ?? truncatedPedagogicalText(sentence.text, limit: 36)
         return truncatedPedagogicalText(summary, limit: 36)
     }

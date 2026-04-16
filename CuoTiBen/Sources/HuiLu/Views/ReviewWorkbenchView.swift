@@ -191,6 +191,13 @@ struct ReviewWorkbenchView: View {
         }
         .onChange(of: structuredSource?.source.id) { _ in
             restoreInitialStateIfNeeded()
+            guard structuredSource != nil else { return }
+            Task {
+                await viewModel.ensureProfessorAnalysis(
+                    for: liveDocument,
+                    trigger: .openReviewWorkbench
+                )
+            }
         }
         .sheet(isPresented: $showsPhoneAnalysisDrawer) {
             ReviewWorkbenchPhoneAnalysisDrawer(
@@ -398,6 +405,12 @@ struct ReviewWorkbenchView: View {
         }
 
         restoreInitialStateIfNeeded()
+
+        guard viewModel.structuredSource(for: liveDocument) != nil else { return }
+        await viewModel.ensureProfessorAnalysis(
+            for: liveDocument,
+            trigger: .openReviewWorkbench
+        )
     }
 
     private func restoreInitialStateIfNeeded() {
@@ -1031,7 +1044,7 @@ private struct ReviewWorkbenchAnalysisPane: View {
 
     private var outlineTreeCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("结构树")
+            Text("思维导图")
                 .font(.system(size: 14, weight: .bold))
                 .foregroundStyle(Color.black.opacity(0.7))
 
@@ -1535,11 +1548,14 @@ private struct ReviewWorkbenchSentencePanel: View {
         let currentSentence = sentence
         explanationTask?.cancel()
         explanationTask = Task {
-            await loadExplanation(for: currentSentence)
+            await loadExplanation(for: currentSentence, forceRefresh: force)
         }
     }
 
-    private func loadExplanation(for currentSentence: Sentence) async {
+    private func loadExplanation(
+        for currentSentence: Sentence,
+        forceRefresh: Bool
+    ) async {
         await MainActor.run {
             guard sentence.id == currentSentence.id else { return }
             isLoading = true
@@ -1549,7 +1565,10 @@ private struct ReviewWorkbenchSentencePanel: View {
 
         do {
             let context = viewModel.explainSentenceContext(for: currentSentence, in: document)
-            let fetched = try await AIExplainSentenceService.fetchExplanation(for: context)
+            let fetched = try await AIExplainSentenceService.fetchExplanationWithCache(
+                for: context,
+                forceRefresh: forceRefresh
+            )
             try Task.checkCancellation()
 
             await MainActor.run {

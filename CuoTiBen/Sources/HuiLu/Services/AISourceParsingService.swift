@@ -127,7 +127,8 @@ enum AISourceParsingService {
         title: String,
         documentType: SourceDocumentType,
         pageCount: Int,
-        draft: SourceTextDraft
+        draft: SourceTextDraft,
+        localFallback: StructuredSourceParsePayload? = nil
     ) async throws -> StructuredSourceParsePayload {
         TextPipelineDiagnostics.log(
             "解析入口",
@@ -144,7 +145,7 @@ enum AISourceParsingService {
             )
         }
 
-        let localFallback = buildLocalFallbackPayload(
+        let localFallback = localFallback ?? buildLocalFallbackPayload(
             documentID: documentID,
             title: title,
             documentType: documentType,

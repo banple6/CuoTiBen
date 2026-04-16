@@ -41,11 +41,7 @@ struct StructureTreePreviewCanvas: View {
     }
 
     private var overviewScene: StructureTreePreviewOverviewScene {
-        StructureTreePreviewLayout.overviewScene(
-            nodes: nodes,
-            highlightedNodeID: effectiveHighlightedNodeID,
-            densityMode: densityMode
-        )
+        StructureTreePreviewLayout.overviewScene(from: displayScene)
     }
 
     var body: some View {
@@ -396,6 +392,8 @@ struct StructureTreePreviewCanvas: View {
             }
         case .focus:
             positionCurrentNode(scene: scene, viewportSize: viewportSize, animated: true, ensureReadableScale: true)
+        case .fit:
+            fitSceneToViewport(scene: scene, viewportSize: viewportSize, animated: true)
         }
     }
 
@@ -734,22 +732,22 @@ struct StructureTreePreviewCanvas: View {
         let topPadding = metrics.topViewportPadding
         let bottomPadding = metrics.bottomViewportPadding
 
+        let minXBound = viewportSize.width - scene.contentRect.maxX * scale - trailingPadding
+        let maxXBound = leadingPadding - scene.contentRect.minX * scale
         let clampedX: CGFloat
         if contentWidth <= viewportSize.width - leadingPadding - trailingPadding {
-            clampedX = leadingPadding
+            clampedX = (viewportSize.width - contentWidth) / 2 - scene.contentRect.minX * scale
         } else {
-            let minX = viewportSize.width - contentWidth - trailingPadding
-            let maxX = leadingPadding
-            clampedX = min(max(proposed.width, minX), maxX)
+            clampedX = min(max(proposed.width, minXBound), maxXBound)
         }
 
+        let minYBound = viewportSize.height - scene.contentRect.maxY * scale - bottomPadding
+        let maxYBound = topPadding - scene.contentRect.minY * scale
         let clampedY: CGFloat
         if contentHeight <= viewportSize.height - topPadding - bottomPadding {
-            clampedY = topPadding
+            clampedY = (viewportSize.height - contentHeight) / 2 - scene.contentRect.minY * scale
         } else {
-            let minY = viewportSize.height - contentHeight - bottomPadding
-            let maxY = topPadding
-            clampedY = min(max(proposed.height, minY), maxY)
+            clampedY = min(max(proposed.height, minYBound), maxYBound)
         }
 
         return CGSize(width: clampedX, height: clampedY)

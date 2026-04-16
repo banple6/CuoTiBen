@@ -2,7 +2,7 @@ import SwiftUI
 
 private enum SourceDetailTab: String, CaseIterable {
     case original = "原文"
-    case outline = "教学树"
+    case outline = "思维导图"
     case professor = "教授式解析"
 }
 
@@ -114,7 +114,7 @@ struct SourceDetailView: View {
         case .original:
             return "原文"
         case .outline:
-            return "教学树"
+            return "思维导图"
         case .professor:
             return "句子讲解"
         }
@@ -279,8 +279,24 @@ struct SourceDetailView: View {
         .interactiveDismissDisabled(selectedTab == .outline)
         .presentationDragIndicator(selectedTab == .outline ? .hidden : .visible)
         .task(id: liveDocument.id) {
-            guard structuredSource == nil else { return }
-            await viewModel.loadStructuredSource(for: liveDocument)
+            if structuredSource == nil {
+                await viewModel.loadStructuredSource(for: liveDocument)
+            }
+
+            guard selectedTab == .professor, viewModel.structuredSource(for: liveDocument) != nil else { return }
+            await viewModel.ensureProfessorAnalysis(
+                for: liveDocument,
+                trigger: .openProfessorView
+            )
+        }
+        .onChange(of: structuredSource?.source.id) { _ in
+            guard selectedTab == .professor, structuredSource != nil else { return }
+            Task {
+                await viewModel.ensureProfessorAnalysis(
+                    for: liveDocument,
+                    trigger: .openProfessorView
+                )
+            }
         }
         .sheet(item: $selectedSentence) { sentence in
             SentenceExplainDetailSheet(
@@ -325,6 +341,14 @@ struct SourceDetailView: View {
         .onChange(of: selectedTab) { newValue in
             if newValue != .outline {
                 lastNonOutlineTab = newValue
+            }
+
+            guard newValue == .professor, structuredSource != nil else { return }
+            Task {
+                await viewModel.ensureProfessorAnalysis(
+                    for: liveDocument,
+                    trigger: .openProfessorView
+                )
             }
         }
     }
@@ -434,7 +458,7 @@ struct SourceDetailView: View {
             showsTape: true
         ) {
             VStack(alignment: .leading, spacing: 14) {
-                MarkerTitle(text: "结构化理解", tint: AppPalette.paperHighlightMint)
+                MarkerTitle(text: "导图化理解", tint: AppPalette.paperHighlightMint)
 
                 SegmentedGlassControl(
                     items: SourceDetailTab.allCases,
@@ -463,8 +487,8 @@ struct SourceDetailView: View {
             )
         } else if selectedTab == .outline {
             SentenceExplainBlock(
-                title: "教学树工作区",
-                content: "结构树已切换到固定工作区。请在上层面板中平移、缩放并聚焦当前节点；关闭只通过右上角显式按钮完成。",
+                title: "思维导图工作区",
+                content: "当前主导航已经切成思维导图。请在上层面板里缩放、平移、聚焦当前节点，按段落分支查看教学重点、支撑句和题目证据。",
                 tone: .structure
             )
         } else {
@@ -544,7 +568,7 @@ struct SourceDetailView: View {
                         }
 
                         VStack(alignment: .leading, spacing: 8) {
-                            MarkerTitle(text: "大纲", tint: Color.pink.opacity(0.28))
+                            MarkerTitle(text: "导图分支", tint: Color.pink.opacity(0.28))
 
                             ForEach(Array(structuredSource.outline.prefix(3).enumerated()), id: \.offset) { _, node in
                                 HStack(spacing: 8) {
@@ -574,7 +598,7 @@ struct SourceDetailView: View {
             showsTape: false
         ) {
             VStack(alignment: .leading, spacing: 12) {
-                MarkerTitle(text: "结构化理解", tint: AppPalette.paperHighlightMint)
+                MarkerTitle(text: "导图化理解", tint: AppPalette.paperHighlightMint)
 
                 if viewModel.isLoadingStructuredSource(for: liveDocument) {
                     ProgressView()
@@ -582,7 +606,7 @@ struct SourceDetailView: View {
                         .font(.system(size: 17, weight: .semibold, design: .serif))
                         .foregroundStyle(AppPalette.paperInk.opacity(0.82))
                 } else if let error = viewModel.structuredSourceError(for: liveDocument) {
-                    Text("结构化理解暂不可用")
+                    Text("思维导图暂不可用")
                         .font(.system(size: 17, weight: .bold, design: .serif))
                         .foregroundStyle(AppPalette.paperInk)
 
@@ -599,7 +623,7 @@ struct SourceDetailView: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(Color.blue.opacity(0.8))
                 } else {
-                    Text("资料导入后会在这里展示原文与大纲。")
+                    Text("资料导入后会在这里展示原文、思维导图和教授式讲解。")
                         .font(.system(size: 15, weight: .medium, design: .serif))
                         .foregroundStyle(AppPalette.paperMuted)
                 }

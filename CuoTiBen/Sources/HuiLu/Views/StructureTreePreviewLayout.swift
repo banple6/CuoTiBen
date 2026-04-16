@@ -63,123 +63,135 @@ enum StructureTreePreviewLayout {
     ) -> StructureTreePreviewScene {
         let metrics = StructureTreePreviewMetrics(densityMode: densityMode)
         let index = StructureTreePreviewIndex(nodes: nodes)
-        guard let focusNode = index.focusNode(id: highlightedNodeID) else {
+        guard let rootNode = index.roots.first else {
             return StructureTreePreviewScene(entries: [], connectors: [], contentRect: CGRect(x: 0, y: 0, width: 480, height: 320))
         }
-
-        let focusPath = index.path(to: focusNode.id)
-        guard !focusPath.isEmpty else {
-            return StructureTreePreviewScene(entries: [], connectors: [], contentRect: CGRect(x: 0, y: 0, width: 480, height: 320))
-        }
+        let focusNode = index.focusNode(id: highlightedNodeID) ?? rootNode
+        let focusPathIDs = Set(index.path(to: focusNode.id).map(\.id))
 
         var entries: [StructureTreePreviewScene.Entry] = []
         var connectors: [StructureTreePreviewScene.Connector] = []
-        var currentY = metrics.contentInset.height
-        var previousMainFrame: CGRect?
-        var previousMainNodeID: String?
+        let rootRole: StructureTreePreviewNodeRole = .focus
+        let rootFrame = centeredFrame(
+            center: .zero,
+            size: metrics.cardSize(for: rootRole)
+        )
+        entries.append(
+            StructureTreePreviewScene.Entry(
+                node: rootNode,
+                frame: rootFrame,
+                role: rootRole,
+                title: clippedText(rootNode.title, limit: metrics.titleCharacterLimit(for: rootRole)),
+                summary: clippedText(rootNode.summary, limit: metrics.summaryCharacterLimit(for: rootRole)),
+                pageBadge: pageBadge(for: rootNode),
+                anchorBadge: anchorBadge(for: rootNode),
+                isHighlighted: rootNode.id == highlightedNodeID,
+                isOnFocusPath: focusPathIDs.contains(rootNode.id),
+                hasChildren: !rootNode.children.isEmpty,
+                showsSummary: metrics.summaryLineLimit(for: rootRole) > 0,
+                showsAnchorBadge: false
+            )
+        )
 
-        for (rowIndex, node) in focusPath.enumerated() {
-            let role: StructureTreePreviewNodeRole = node.id == focusNode.id ? .focus : .mainPath
-            let mainSize = metrics.cardSize(for: role)
-            let mainFrame = CGRect(
-                x: metrics.mainColumnX,
-                y: currentY,
-                width: mainSize.width,
-                height: mainSize.height
+        let primaryNodes = index.children(of: rootNode.id)
+        let paragraphCount = max(primaryNodes.count, 1)
+        let primaryRadius = metrics.paragraphRingRadius(for: primaryNodes.count)
+        let startAngle = -CGFloat.pi / 2
+        let stepAngle = (2 * CGFloat.pi) / CGFloat(paragraphCount)
+
+        for (rowIndex, node) in primaryNodes.enumerated() {
+            let angle = startAngle + stepAngle * CGFloat(rowIndex)
+            let role: StructureTreePreviewNodeRole = .mainPath
+            let frame = centeredFrame(
+                center: CGPoint(
+                    x: cos(angle) * primaryRadius,
+                    y: sin(angle) * primaryRadius
+                ),
+                size: metrics.cardSize(for: role)
             )
 
             entries.append(
                 StructureTreePreviewScene.Entry(
                     node: node,
-                    frame: mainFrame,
+                    frame: frame,
                     role: role,
                     title: clippedText(node.title, limit: metrics.titleCharacterLimit(for: role)),
                     summary: clippedText(node.summary, limit: metrics.summaryCharacterLimit(for: role)),
                     pageBadge: pageBadge(for: node),
                     anchorBadge: anchorBadge(for: node),
                     isHighlighted: node.id == highlightedNodeID,
-                    isOnFocusPath: true,
+                    isOnFocusPath: focusPathIDs.contains(node.id),
                     hasChildren: !node.children.isEmpty,
                     showsSummary: metrics.summaryLineLimit(for: role) > 0,
                     showsAnchorBadge: true
                 )
             )
-
-            if let previousMainFrame, let previousMainNodeID {
-                connectors.append(
-                    StructureTreePreviewScene.Connector(
-                        id: "trunk-\(previousMainNodeID)-\(node.id)",
-                        fromNodeID: previousMainNodeID,
-                        toNodeID: node.id,
-                        start: CGPoint(x: previousMainFrame.minX + 26, y: previousMainFrame.maxY),
-                        end: CGPoint(x: mainFrame.minX + 26, y: mainFrame.minY),
-                        kind: .trunk
-                    )
+            connectors.append(
+                StructureTreePreviewScene.Connector(
+                    id: "trunk-\(rootNode.id)-\(node.id)",
+                    fromNodeID: rootNode.id,
+                    toNodeID: node.id,
+                    start: edgePoint(from: rootFrame, toward: frame),
+                    end: edgePoint(from: frame, toward: rootFrame),
+                    kind: .trunk
                 )
-            }
+            )
 
-            let nextPathID = rowIndex + 1 < focusPath.count ? focusPath[rowIndex + 1].id : nil
             let branchNodes = visibleBranchNodes(
                 for: node,
                 index: index,
-                excluding: nextPathID,
-                isFocusRow: node.id == focusNode.id,
+                highlightedNodeID: highlightedNodeID,
                 expandedNodeIDs: expandedNodeIDs,
-                metrics: metrics,
-                isRootRow: rowIndex == 0
+                metrics: metrics
             )
+            guard !branchNodes.isEmpty else { continue }
 
-            var rowBottom = mainFrame.maxY
-            if !branchNodes.isEmpty {
-                var branchY = currentY + (role == .focus ? 4 : 2)
-                let branchX = mainFrame.maxX + metrics.branchColumnSpacing
+            let secondaryRadius = primaryRadius + metrics.childRingGap
+            let sectorAngle = metrics.paragraphSectorAngle(for: primaryNodes.count)
+            let spreadAngle = branchNodes.count == 1 ? 0 : sectorAngle
+            let childStep = branchNodes.count <= 1 ? 0 : spreadAngle / CGFloat(max(branchNodes.count - 1, 1))
+            let childStartAngle = angle - spreadAngle / 2
 
-                for branchNode in branchNodes {
-                    let branchRole: StructureTreePreviewNodeRole = .branch
-                    let branchSize = metrics.cardSize(for: branchRole)
-                    let branchFrame = CGRect(
-                        x: branchX,
-                        y: branchY,
-                        width: branchSize.width,
-                        height: branchSize.height
+            for (childIndex, branchNode) in branchNodes.enumerated() {
+                let childAngle = branchNodes.count == 1
+                    ? angle
+                    : childStartAngle + childStep * CGFloat(childIndex)
+                let branchRole: StructureTreePreviewNodeRole = .branch
+                let childFrame = centeredFrame(
+                    center: CGPoint(
+                        x: cos(childAngle) * secondaryRadius,
+                        y: sin(childAngle) * secondaryRadius
+                    ),
+                    size: metrics.cardSize(for: branchRole)
+                )
+
+                entries.append(
+                    StructureTreePreviewScene.Entry(
+                        node: branchNode,
+                        frame: childFrame,
+                        role: branchRole,
+                        title: clippedText(branchNode.title, limit: metrics.titleCharacterLimit(for: branchRole)),
+                        summary: clippedText(branchNode.summary, limit: metrics.summaryCharacterLimit(for: branchRole)),
+                        pageBadge: pageBadge(for: branchNode),
+                        anchorBadge: anchorBadge(for: branchNode),
+                        isHighlighted: branchNode.id == highlightedNodeID,
+                        isOnFocusPath: focusPathIDs.contains(branchNode.id),
+                        hasChildren: !branchNode.children.isEmpty,
+                        showsSummary: metrics.summaryLineLimit(for: branchRole) > 0,
+                        showsAnchorBadge: true
                     )
-
-                    entries.append(
-                        StructureTreePreviewScene.Entry(
-                            node: branchNode,
-                            frame: branchFrame,
-                            role: branchRole,
-                            title: clippedText(branchNode.title, limit: metrics.titleCharacterLimit(for: branchRole)),
-                            summary: clippedText(branchNode.summary, limit: metrics.summaryCharacterLimit(for: branchRole)),
-                            pageBadge: pageBadge(for: branchNode),
-                            anchorBadge: anchorBadge(for: branchNode),
-                            isHighlighted: branchNode.id == highlightedNodeID,
-                            isOnFocusPath: false,
-                            hasChildren: !branchNode.children.isEmpty,
-                            showsSummary: metrics.summaryLineLimit(for: branchRole) > 0,
-                            showsAnchorBadge: true
-                        )
+                )
+                connectors.append(
+                    StructureTreePreviewScene.Connector(
+                        id: "branch-\(node.id)-\(branchNode.id)",
+                        fromNodeID: node.id,
+                        toNodeID: branchNode.id,
+                        start: edgePoint(from: frame, toward: childFrame),
+                        end: edgePoint(from: childFrame, toward: frame),
+                        kind: .branch
                     )
-
-                    connectors.append(
-                        StructureTreePreviewScene.Connector(
-                            id: "branch-\(node.id)-\(branchNode.id)",
-                            fromNodeID: node.id,
-                            toNodeID: branchNode.id,
-                            start: CGPoint(x: mainFrame.maxX, y: mainFrame.midY),
-                            end: CGPoint(x: branchFrame.minX, y: branchFrame.midY),
-                            kind: .branch
-                        )
-                    )
-
-                    branchY = branchFrame.maxY + metrics.branchNodeSpacing
-                    rowBottom = max(rowBottom, branchFrame.maxY)
-                }
+                )
             }
-
-            previousMainFrame = mainFrame
-            previousMainNodeID = node.id
-            currentY = rowBottom + metrics.rowSpacing
         }
 
         let contentRect = sceneRect(
@@ -191,50 +203,17 @@ enum StructureTreePreviewLayout {
         return StructureTreePreviewScene(entries: entries, connectors: connectors, contentRect: contentRect)
     }
 
-    static func overviewScene(
-        nodes: [OutlineNode],
-        highlightedNodeID: String?,
-        densityMode: StructureTreePreviewDensityMode
-    ) -> StructureTreePreviewOverviewScene {
-        let index = StructureTreePreviewIndex(nodes: nodes)
-        let heightStep: CGFloat = densityMode == .detailed ? 7 : 6
-        let depthStep: CGFloat = densityMode == .detailed ? 12 : 10
-        var built: [StructureTreePreviewOverviewScene.Entry] = []
-        var cursorY: CGFloat = 10
-
-        func append(_ node: OutlineNode) {
-            let width = max(18, 56 - CGFloat(min(node.depth, 4)) * 6)
-            let height: CGFloat = node.id == highlightedNodeID ? 12 : 8
-            let frame = CGRect(
-                x: 10 + CGFloat(max(node.depth, 0)) * depthStep,
-                y: cursorY,
-                width: width,
-                height: height
-            )
-            built.append(
+    static func overviewScene(from scene: StructureTreePreviewScene) -> StructureTreePreviewOverviewScene {
+        StructureTreePreviewOverviewScene(
+            entries: scene.entries.map {
                 StructureTreePreviewOverviewScene.Entry(
-                    node: node,
-                    frame: frame,
-                    isHighlighted: node.id == highlightedNodeID
+                    node: $0.node,
+                    frame: $0.frame,
+                    isHighlighted: $0.isHighlighted
                 )
-            )
-            cursorY = frame.maxY + heightStep
-            for child in node.children.sorted(by: { $0.order < $1.order }) {
-                append(child)
-            }
-        }
-
-        for node in index.roots {
-            append(node)
-        }
-
-        let contentRect = sceneRect(
-            for: built.map(\.frame),
-            metrics: StructureTreePreviewMetrics(densityMode: densityMode),
-            fallback: CGRect(x: 0, y: 0, width: 120, height: 160)
+            },
+            contentRect: scene.contentRect
         )
-
-        return StructureTreePreviewOverviewScene(entries: built, contentRect: contentRect)
     }
 
     static func ancestorPathIDs(in nodes: [OutlineNode], to highlightedNodeID: String?) -> [String] {
@@ -249,15 +228,12 @@ enum StructureTreePreviewLayout {
     private static func visibleBranchNodes(
         for node: OutlineNode,
         index: StructureTreePreviewIndex,
-        excluding nextPathID: String?,
-        isFocusRow: Bool,
+        highlightedNodeID: String?,
         expandedNodeIDs: Set<String>,
-        metrics: StructureTreePreviewMetrics,
-        isRootRow: Bool
+        metrics: StructureTreePreviewMetrics
     ) -> [OutlineNode] {
-        var candidates: [OutlineNode] = []
-
-        candidates.append(contentsOf: index.children(of: node.id).filter { $0.id != nextPathID })
+        let highlightedChildID = index.path(to: highlightedNodeID).dropFirst().first { $0.parentID == node.id }?.id
+        let candidates = index.children(of: node.id)
 
         var deduplicated: [OutlineNode] = []
         var seen: Set<String> = []
@@ -269,15 +245,24 @@ enum StructureTreePreviewLayout {
         let limit: Int
         if expandedNodeIDs.contains(node.id) {
             limit = metrics.expandedBranchLimit
-        } else if isFocusRow {
+        } else if highlightedChildID != nil {
             limit = metrics.focusedCollapsedBranchLimit
-        } else if isRootRow {
-            limit = max(metrics.collapsedBranchLimit, 1)
         } else {
             limit = metrics.collapsedBranchLimit
         }
 
-        return Array(deduplicated.prefix(limit))
+        var visible = Array(deduplicated.prefix(limit))
+        if let highlightedChildID,
+           let highlightedChild = deduplicated.first(where: { $0.id == highlightedChildID }),
+           !visible.contains(where: { $0.id == highlightedChildID }) {
+            if visible.isEmpty {
+                visible.append(highlightedChild)
+            } else {
+                visible[visible.count - 1] = highlightedChild
+            }
+        }
+
+        return visible
     }
 
     private static func pageBadge(for node: OutlineNode) -> String? {
@@ -301,10 +286,40 @@ enum StructureTreePreviewLayout {
             partial.union(frame)
         }
         return CGRect(
-            x: 0,
-            y: 0,
-            width: max(union.maxX + metrics.trailingInset, fallback.width),
-            height: max(union.maxY + metrics.bottomInset, fallback.height)
+            x: min(union.minX - metrics.contentInset.width, fallback.minX),
+            y: min(union.minY - metrics.contentInset.height, fallback.minY),
+            width: max(union.width + metrics.contentInset.width + metrics.trailingInset, fallback.width),
+            height: max(union.height + metrics.contentInset.height + metrics.bottomInset, fallback.height)
+        )
+    }
+
+    private static func centeredFrame(center: CGPoint, size: CGSize) -> CGRect {
+        CGRect(
+            x: center.x - size.width / 2,
+            y: center.y - size.height / 2,
+            width: size.width,
+            height: size.height
+        )
+    }
+
+    private static func edgePoint(from sourceFrame: CGRect, toward targetFrame: CGRect) -> CGPoint {
+        let sourceCenter = CGPoint(x: sourceFrame.midX, y: sourceFrame.midY)
+        let targetCenter = CGPoint(x: targetFrame.midX, y: targetFrame.midY)
+        let deltaX = targetCenter.x - sourceCenter.x
+        let deltaY = targetCenter.y - sourceCenter.y
+
+        guard deltaX != 0 || deltaY != 0 else { return sourceCenter }
+
+        let halfWidth = sourceFrame.width / 2
+        let halfHeight = sourceFrame.height / 2
+        let scale = min(
+            halfWidth / max(abs(deltaX), 0.001),
+            halfHeight / max(abs(deltaY), 0.001)
+        )
+
+        return CGPoint(
+            x: sourceCenter.x + deltaX * scale,
+            y: sourceCenter.y + deltaY * scale
         )
     }
 
