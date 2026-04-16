@@ -597,7 +597,7 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
         let normalizedLegacyMeaning = trimmedOrEmpty(naturalChineseMeaning)
         self.faithfulTranslation = !normalizedFaithfulTranslation.isEmpty
             ? normalizedFaithfulTranslation
-            : ""
+            : (!normalizedLegacyMeaning.isEmpty ? normalizedLegacyMeaning : normalizedTeachingInterpretation)
         self.teachingInterpretation = !normalizedTeachingInterpretation.isEmpty
             ? normalizedTeachingInterpretation
             : (!normalizedLegacyMeaning.isEmpty ? normalizedLegacyMeaning : "")
@@ -685,15 +685,26 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
     var renderedFaithfulTranslation: String {
         let explicit = purifiedChineseExplanation(faithfulTranslation)
         if !explicit.isEmpty { return explicit }
-        return ""
+
+        let fallback = purifiedChineseExplanation(naturalChineseMeaning)
+        if !fallback.isEmpty { return fallback }
+
+        return purifiedChineseExplanation(teachingInterpretation)
     }
 
     var renderedTeachingInterpretation: String {
         let explicit = purifiedChineseExplanation(teachingInterpretation)
         if !explicit.isEmpty { return explicit }
-        let legacy = purifiedChineseExplanation(naturalChineseMeaning)
-        if !legacy.isEmpty { return legacy }
-        return ""
+
+        return purifiedChineseExplanation(naturalChineseMeaning)
+    }
+
+    var needsLocalRepair: Bool {
+        let missingFaithful = renderedFaithfulTranslation.isEmpty
+        let missingTeaching = renderedTeachingInterpretation.isEmpty
+        let unstableCore = displayedStableCoreSkeleton == nil &&
+            renderedSentenceCore.contains("当前结果里主干拆分不稳定")
+        return missingFaithful || missingTeaching || unstableCore
     }
 
     var renderedChunkLayers: [String] {
@@ -1926,6 +1937,15 @@ struct StructuredSourceBundle: Equatable {
     func sentenceCard(id: String?) -> ProfessorSentenceCard? {
         guard let id else { return nil }
         return _sentenceCardIndex[id]
+    }
+
+    func displayedSentenceCard(id: String?) -> ProfessorSentenceCard? {
+        guard let id else { return nil }
+        guard let existing = sentenceCard(id: id) else {
+            return NormalizedDocumentConverter.rebuildSentenceCard(sentenceID: id, in: self)
+        }
+        guard existing.analysis.needsLocalRepair else { return existing }
+        return NormalizedDocumentConverter.rebuildSentenceCard(sentenceID: id, in: self) ?? existing
     }
 
     func paragraphCard(forSegmentID id: String?) -> ParagraphTeachingCard? {

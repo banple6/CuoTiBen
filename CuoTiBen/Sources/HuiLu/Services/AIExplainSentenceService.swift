@@ -219,21 +219,19 @@ struct AIExplainSentenceResult: Equatable {
         let faithfulTranslation = Self.firstString(
             in: dictionary,
             keys: hasProfessorPayload
-                ? ["faithful_translation", "faithfulTranslation", "translation"]
-                : ["faithful_translation", "translation"]
+                ? ["faithful_translation", "faithfulTranslation"]
+                : ["faithful_translation", "faithfulTranslation"]
         ) ?? ""
         let teachingInterpretation = Self.firstString(
             in: dictionary,
             keys: hasProfessorPayload
                 ? ["teaching_interpretation", "teachingInterpretation", "natural_chinese_meaning", "naturalChineseMeaning"]
-                : ["teaching_interpretation", "natural_chinese_meaning", "naturalChineseMeaning", "translation"]
+                : ["teaching_interpretation", "teachingInterpretation", "natural_chinese_meaning", "naturalChineseMeaning"]
         ) ?? ""
         let naturalChineseMeaning = Self.firstString(
             in: dictionary,
-            keys: hasProfessorPayload
-                ? ["teaching_interpretation", "natural_chinese_meaning", "naturalChineseMeaning", "faithful_translation"]
-                : ["teaching_interpretation", "natural_chinese_meaning", "translation", "naturalChineseMeaning"]
-        ) ?? Self.nonEmpty(teachingInterpretation) ?? faithfulTranslation
+            keys: ["natural_chinese_meaning", "naturalChineseMeaning"]
+        ) ?? Self.nonEmpty(teachingInterpretation) ?? ""
         let simplerRewrite = rewriteExample ?? ""
         let simplerRewriteTranslation = Self.firstString(
             in: dictionary,
@@ -269,7 +267,7 @@ struct AIExplainSentenceResult: Equatable {
         )
     }
 
-    var translation: String { Self.nonEmpty(faithfulTranslation) ?? naturalChineseMeaning }
+    var translation: String { Self.nonEmpty(faithfulTranslation) ?? "" }
     var mainStructure: String { sentenceCore }
     var keyTerms: [KeyTerm] { vocabularyInContext }
     var rewriteExample: String { simplifiedEnglish }
@@ -939,10 +937,67 @@ enum AIExplainSentenceServiceError: LocalizedError {
     }
 }
 
+private struct ExplainSentenceCacheEntry {
+    let result: AIExplainSentenceResult
+    let storedAt: Date
+}
+
+private actor ExplainSentenceRequestStore {
+    private var inFlight: [String: Task<AIExplainSentenceResult, Error>] = [:]
+    private var cache: [String: ExplainSentenceCacheEntry] = [:]
+    private let maxCachedResults = 64
+
+    func cachedResult(for key: String, now: Date, ttl: TimeInterval) -> AIExplainSentenceResult? {
+        guard let entry = cache[key] else { return nil }
+        guard now.timeIntervalSince(entry.storedAt) < ttl else {
+            cache.removeValue(forKey: key)
+            return nil
+        }
+        return entry.result
+    }
+
+    func inFlightTask(for key: String) -> Task<AIExplainSentenceResult, Error>? {
+        inFlight[key]
+    }
+
+    func setInFlightTask(_ task: Task<AIExplainSentenceResult, Error>, for key: String) {
+        inFlight[key] = task
+    }
+
+    func storeResult(_ result: AIExplainSentenceResult, for key: String, now: Date) {
+        inFlight.removeValue(forKey: key)
+        cache[key] = ExplainSentenceCacheEntry(result: result, storedAt: now)
+        trimCacheIfNeeded()
+    }
+
+    func removeInFlightTask(for key: String) {
+        inFlight.removeValue(forKey: key)
+    }
+
+    private func trimCacheIfNeeded() {
+        guard cache.count > maxCachedResults else { return }
+
+        let overflow = cache.count - maxCachedResults
+        let keysToRemove = cache
+            .sorted { lhs, rhs in
+                lhs.value.storedAt < rhs.value.storedAt
+            }
+            .prefix(overflow)
+            .map(\.key)
+
+        for key in keysToRemove {
+            cache.removeValue(forKey: key)
+        }
+    }
+}
+
 enum AIExplainSentenceService {
     private static let baseURLStorageKey = "huiLu.aiBackendBaseURL"
     private static let defaultBaseURL = "http://47.94.227.58"
     private static let preferredAIPort = 3000
+    private static let explainSentenceTimeout: TimeInterval = 75
+    private static let explainSentenceCacheTTL: TimeInterval = 10 * 60
+    private static let requestStore = ExplainSentenceRequestStore()
 
     static var storedBaseURL: String {
         let stored = UserDefaults.standard.string(forKey: baseURLStorageKey) ?? ""
@@ -1017,8 +1072,7 @@ enum AIExplainSentenceService {
 
     static func shouldRetrySameEndpoint(for error: URLError) -> Bool {
         switch error.code {
-        case .timedOut,
-             .cannotConnectToHost,
+        case .cannotConnectToHost,
              .networkConnectionLost,
              .dnsLookupFailed,
              .notConnectedToInternet:
@@ -1062,6 +1116,43 @@ enum AIExplainSentenceService {
     static func retryDelayNanoseconds(for attemptIndex: Int) -> UInt64 {
         let clamped = min(max(attemptIndex, 0), 2)
         return UInt64(350_000_000 * (clamped + 1))
+    }
+
+    private static func normalizedRequestField(_ value: String?) -> String {
+        (value ?? "")
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func stableFingerprint(for text: String) -> String {
+        var hash: UInt64 = 0xcbf29ce484222325
+        let prime: UInt64 = 0x100000001b3
+
+        for byte in text.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* prime
+        }
+
+        return String(hash, radix: 16)
+    }
+
+    private static func requestCacheKey(
+        for context: ExplainSentenceContext,
+        overrideBaseURL: String?
+    ) -> String {
+        let parts = [
+            normalizeBaseURL(overrideBaseURL ?? storedBaseURL),
+            normalizedRequestField(context.title),
+            normalizedRequestField(context.sentenceID),
+            normalizedRequestField(context.anchorLabel),
+            normalizedRequestField(context.sentence),
+            normalizedRequestField(context.context),
+            normalizedRequestField(context.paragraphTheme),
+            normalizedRequestField(context.paragraphRole),
+            normalizedRequestField(context.questionPrompt)
+        ]
+
+        return stableFingerprint(for: parts.joined(separator: "\u{1F}"))
     }
 
     private static func decodeResponseEnvelope(
@@ -1108,14 +1199,6 @@ enum AIExplainSentenceService {
         for context: ExplainSentenceContext,
         baseURL overrideBaseURL: String? = nil
     ) async throws -> AIExplainSentenceResult {
-        let endpointURLs = endpointCandidates(
-            path: "ai/explain-sentence",
-            overrideBaseURL: overrideBaseURL
-        )
-        guard !endpointURLs.isEmpty else {
-            throw AIExplainSentenceServiceError.missingBaseURL
-        }
-
         // 发送前检测句子文本是否反转，如有则自动修复
         let (validatedSentence, sentenceRepaired) = TextPipelineValidator.validateAndRepairIfReversed(context.sentence)
         let (validatedContext, _) = TextPipelineValidator.validateAndRepairIfReversed(context.context)
@@ -1139,6 +1222,31 @@ enum AIExplainSentenceService {
             questionPrompt: context.questionPrompt
         )
 
+        let endpointURLs = endpointCandidates(
+            path: "ai/explain-sentence",
+            overrideBaseURL: overrideBaseURL
+        )
+        guard !endpointURLs.isEmpty else {
+            throw AIExplainSentenceServiceError.missingBaseURL
+        }
+
+        let requestKey = requestCacheKey(
+            for: validatedExplainContext,
+            overrideBaseURL: overrideBaseURL
+        )
+
+        if let cached = await requestStore.cachedResult(
+            for: requestKey,
+            now: Date(),
+            ttl: explainSentenceCacheTTL
+        ) {
+            return cached
+        }
+
+        if let existingTask = await requestStore.inFlightTask(for: requestKey) {
+            return try await existingTask.value
+        }
+
         let requestData = try JSONEncoder().encode(
             ExplainSentenceRequest(
                 title: validatedExplainContext.title,
@@ -1150,13 +1258,38 @@ enum AIExplainSentenceService {
             )
         )
 
+        let task = Task<AIExplainSentenceResult, Error> {
+            try await performFetchExplanation(
+                for: validatedExplainContext,
+                requestData: requestData,
+                endpointURLs: endpointURLs
+            )
+        }
+
+        await requestStore.setInFlightTask(task, for: requestKey)
+
+        do {
+            let result = try await task.value
+            await requestStore.storeResult(result, for: requestKey, now: Date())
+            return result
+        } catch {
+            await requestStore.removeInFlightTask(for: requestKey)
+            throw error
+        }
+    }
+
+    private static func performFetchExplanation(
+        for context: ExplainSentenceContext,
+        requestData: Data,
+        endpointURLs: [URL]
+    ) async throws -> AIExplainSentenceResult {
         var lastError: Error?
 
         for (index, endpointURL) in endpointURLs.enumerated() {
             for attempt in 0..<2 {
                 var request = URLRequest(url: endpointURL)
                 request.httpMethod = "POST"
-                request.timeoutInterval = 25
+                request.timeoutInterval = explainSentenceTimeout
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                 request.httpBody = requestData
 
@@ -1201,15 +1334,15 @@ enum AIExplainSentenceService {
 
                     var decoded = try decodeResponseEnvelope(
                         from: data,
-                        sourceSentence: validatedExplainContext.sentence
+                        sourceSentence: context.sentence
                     )
 
-                    if let identity = currentIdentity(for: validatedExplainContext),
+                    if let identity = currentIdentity(for: context),
                        let payload = decoded.data {
                         let attached = payload.attachingIdentity(identity)
                         let warnings = AnalysisConsistencyGuard.warnings(
                             identity: identity,
-                            sentenceText: validatedExplainContext.sentence,
+                            sentenceText: context.sentence,
                             analysis: attached
                         )
 

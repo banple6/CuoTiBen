@@ -10,17 +10,22 @@ import { getDashScopeClient } from "../lib/dashscope.js";
 const MAX_PARAGRAPHS = 20;
 const MAX_KEY_SENTENCES = 8;
 const MAX_PARAGRAPH_CHARS = 900;
+const COMMON_ENGLISH_LEXICON = new Set([
+  "allow", "balance", "contact", "corporation", "cultural", "debate", "evidence", "growth",
+  "heading", "logical", "museum", "peaceful", "prosperity", "question", "reading", "sustainable",
+  "tourism", "visitor", "quantity", "archaeology", "community", "economic", "environmental"
+]);
 
 function buildAnalyzePassagePrompt({ title, paragraphs, keySentences }) {
   const safeParagraphs = paragraphs.slice(0, MAX_PARAGRAPHS);
   const safeSentences = keySentences.slice(0, MAX_KEY_SENTENCES);
 
   const paragraphBlock = safeParagraphs
-    .map((p, i) => `[P${i + 1}] ${p.text.slice(0, MAX_PARAGRAPH_CHARS)}`)
+    .map((p) => `[P${typeof p.index === "number" ? p.index : 0}] ${p.text.slice(0, MAX_PARAGRAPH_CHARS)}`)
     .join("\n\n");
 
   const sentenceBlock = safeSentences
-    .map((s) => `[${s.ref}] (来自第${s.paragraphIndex + 1}段) ${s.text}`)
+    .map((s) => `[${s.ref}] (来自段落 P${typeof s.paragraphIndex === "number" ? s.paragraphIndex : 0}) ${s.text}`)
     .join("\n");
 
   return [
@@ -57,7 +62,7 @@ function buildAnalyzePassagePrompt({ title, paragraphs, keySentences }) {
     "  vocabulary_highlights：字符串数组，最值得学习的 5-8 个词汇/搭配。",
     "",
     "二、paragraph_cards 数组（每段一项）：",
-    "  paragraph_index：段落编号（从0开始）。",
+    "  paragraph_index：段落编号，必须对应输入里的 [Pindex] 原始编号，不要重排。",
     "  theme：中文，本段真正要立住的判断或说明点。不能是'本段主要讲了...'式的废话，要像讲义里的段落主旨。",
     "  argument_role：必须为以下之一：background / support / objection / transition / evidence / conclusion。",
     "  core_sentence_local_index：段内最关键的一句话的序号（从0开始）。",
@@ -134,7 +139,7 @@ function purifyChineseExplanation(text) {
     return clauses.join("；");
   }
 
-  return normalized;
+  return "";
 }
 
 function purifyChineseDisplayText(text) {
@@ -157,6 +162,130 @@ function firstDefined(raw, keys) {
     }
   }
   return undefined;
+}
+
+function englishTokens(text) {
+  return normalizeString(text)
+    .match(/[A-Za-z]+(?:'[A-Za-z]+)?/g)
+    ?.map((token) => token.toLowerCase()) ?? [];
+}
+
+function reverseString(value) {
+  return String(value || "").split("").reverse().join("");
+}
+
+function textEnglishProfile(text) {
+  const normalized = normalizeString(text);
+  const englishLetters = (normalized.match(/[A-Za-z]/g) || []).length;
+  const chineseCharacters = (normalized.match(/[\u4e00-\u9fff]/g) || []).length;
+  const tokens = englishTokens(normalized);
+  const ratioBase = englishLetters + chineseCharacters;
+  return {
+    englishLetters,
+    chineseCharacters,
+    englishRatio: ratioBase === 0 ? 0 : englishLetters / ratioBase,
+    tokens
+  };
+}
+
+function looksLikeInstructionOrQuestionParagraph(text) {
+  const normalized = normalizeString(text);
+  if (!normalized) return false;
+  const lower = normalized.toLowerCase();
+
+  if (/第[一二三四五六七八九十\d]+部分|说明|题干|答案|解析|配对|标题|选择|判断|先做|对照答案|把下列|请根据|阅读下面|题目/.test(normalized)) {
+    return true;
+  }
+
+  if (/\bquestions?\b|\bheadings?\b|\bchoose\b|\bmatch(?:ing)?\b|\btrue\b|\bfalse\b|\bnot given\b|\banswer key\b/.test(lower)) {
+    return true;
+  }
+
+  return false;
+}
+
+function looksLikeBilingualGlossaryParagraph(text) {
+  const normalized = normalizeString(text);
+  if (!normalized) return false;
+  const profile = textEnglishProfile(normalized);
+
+  if (profile.chineseCharacters < 4 || profile.tokens.length < 2) {
+    return false;
+  }
+
+  return /(是|意为|意思是|译为|译作|mean(?:s|ing)?)/i.test(normalized)
+    && /[“”"']/u.test(normalized);
+}
+
+function looksLikeReversedEnglishGarbage(text) {
+  const tokens = englishTokens(text).filter((token) => token.length >= 4);
+  if (tokens.length < 4) return false;
+
+  const reversedHits = tokens.reduce((count, token) => {
+    const reversed = reverseString(token);
+    return COMMON_ENGLISH_LEXICON.has(reversed) ? count + 1 : count;
+  }, 0);
+
+  return reversedHits >= Math.max(3, Math.ceil(tokens.length * 0.35));
+}
+
+function looksLikeStrongPassageHeading(text) {
+  const normalized = normalizeString(text);
+  if (!normalized) return false;
+  const profile = textEnglishProfile(normalized);
+  return profile.englishRatio >= 0.72
+    && profile.tokens.length >= 2
+    && profile.tokens.length <= 12
+    && normalized.length <= 96
+    && !/[。！？]/.test(normalized);
+}
+
+function isPassageBodyText(text) {
+  const normalized = normalizeString(text);
+  if (!normalized) return false;
+  if (looksLikeInstructionOrQuestionParagraph(normalized)) return false;
+  if (looksLikeBilingualGlossaryParagraph(normalized)) return false;
+  if (looksLikeReversedEnglishGarbage(normalized)) return false;
+
+  const profile = textEnglishProfile(normalized);
+  if (profile.chineseCharacters > profile.englishLetters * 1.15 && !looksLikeStrongPassageHeading(normalized)) {
+    return false;
+  }
+
+  return profile.tokens.length >= 8 || looksLikeStrongPassageHeading(normalized);
+}
+
+function sanitizePassageInputs(paragraphs, keySentences) {
+  const safeParagraphs = normalizeArray(paragraphs)
+    .filter((item) => typeof item?.text === "string")
+    .map((item, idx) => ({
+      index: typeof item.index === "number" ? item.index : idx,
+      text: normalizeString(item.text)
+    }));
+
+  const filteredParagraphs = safeParagraphs.filter((item) => isPassageBodyText(item.text));
+  const retainedParagraphs = filteredParagraphs.length > 0 ? filteredParagraphs : safeParagraphs;
+  const retainedIndexSet = new Set(retainedParagraphs.map((item) => item.index));
+
+  const safeKeySentences = normalizeArray(keySentences)
+    .filter((item) => typeof item?.text === "string" && typeof item?.ref === "string")
+    .map((item) => ({
+      ref: normalizeString(item.ref),
+      text: normalizeString(item.text),
+      paragraphIndex: typeof item.paragraphIndex === "number"
+        ? item.paragraphIndex
+        : (typeof item.paragraph_index === "number" ? item.paragraph_index : 0)
+    }));
+
+  const filteredKeySentences = safeKeySentences.filter((item) => {
+    if (!retainedIndexSet.has(item.paragraphIndex)) return false;
+    return isPassageBodyText(item.text) && !looksLikeStrongPassageHeading(item.text);
+  });
+
+  return {
+    paragraphs: retainedParagraphs,
+    keySentences: filteredKeySentences.length > 0 ? filteredKeySentences : safeKeySentences.filter((item) => retainedIndexSet.has(item.paragraphIndex))
+  };
 }
 
 function normalizeEvidenceType(value, fallback = "supporting_evidence") {
@@ -350,8 +479,8 @@ function normalizeSentenceAnalysis(raw, sourceSentence) {
   const rawRewrite = firstDefined(raw, ["exam_paraphrase_routes", "exam_rewrite_points", "exam_paraphrase_points"]);
   const rawSimplerRewrite = firstDefined(raw, ["simpler_rewrite", "simplified_english"]);
   const rawSimplerRewriteTranslation = firstDefined(raw, ["simpler_rewrite_translation", "rewrite_translation"]);
-  const rawFaithfulTranslation = firstDefined(raw, ["faithful_translation", "translation", "natural_chinese_meaning"]);
-  const rawTeachingInterpretation = firstDefined(raw, ["teaching_interpretation", "natural_chinese_meaning", "translation"]);
+  const rawFaithfulTranslation = firstDefined(raw, ["faithful_translation"]);
+  const rawTeachingInterpretation = firstDefined(raw, ["teaching_interpretation", "natural_chinese_meaning"]);
   const rawChunkBreakdown = normalizeArray(raw.chunk_breakdown).map(String).filter(Boolean);
   const rawGrammarPoints = normalizeArray(raw.grammar_points)
     .map((item) => ({
@@ -371,9 +500,7 @@ function normalizeSentenceAnalysis(raw, sourceSentence) {
   const simplerRewrite = normalizeString(rawSimplerRewrite);
   const simplerRewriteTranslation = purifyChineseExplanation(rawSimplerRewriteTranslation);
   const faithfulTranslation = purifyChineseExplanation(rawFaithfulTranslation);
-  const teachingInterpretation = purifyChineseExplanation(
-    normalizeString(rawTeachingInterpretation, faithfulTranslation)
-  );
+  const teachingInterpretation = purifyChineseExplanation(rawTeachingInterpretation);
   const miniCheck = purifyChineseDisplayText(firstDefined(raw, ["mini_check", "mini_exercise"]));
   const derivedChunkBreakdown = chunkLayers
     .map((item) => {
@@ -624,14 +751,18 @@ export async function analyzePassage({ title = "", paragraphs = [], keySentences
     });
   }
 
+  const sanitizedInputs = sanitizePassageInputs(paragraphs, keySentences);
+  const effectiveParagraphs = sanitizedInputs.paragraphs;
+  const effectiveKeySentences = sanitizedInputs.keySentences;
+
   const sentenceTextIndex = Object.fromEntries(
-    keySentences.map((s) => [s.ref, s.text])
+    effectiveKeySentences.map((s) => [s.ref, s.text])
   );
 
   console.log("[ai/analyze-passage] calling model", {
     modelName,
-    paragraphCount: paragraphs.length,
-    keySentenceCount: keySentences.length,
+    paragraphCount: effectiveParagraphs.length,
+    keySentenceCount: effectiveKeySentences.length,
     titleLength: title.length
   });
 
@@ -657,7 +788,11 @@ export async function analyzePassage({ title = "", paragraphs = [], keySentences
   let completion;
 
   try {
-    completion = await requestModel(buildAnalyzePassagePrompt({ title, paragraphs, keySentences }));
+    completion = await requestModel(buildAnalyzePassagePrompt({
+      title,
+      paragraphs: effectiveParagraphs,
+      keySentences: effectiveKeySentences
+    }));
   } catch (error) {
     const status = typeof error?.status === "number" ? error.status : undefined;
     console.error("[ai/analyze-passage] model request failed", { status, message: error?.message });
@@ -686,16 +821,16 @@ export async function analyzePassage({ title = "", paragraphs = [], keySentences
 
   if (
     qualityWarnings.length >= 2 ||
-    normalized.paragraph_cards.length < Math.min(paragraphs.length, MAX_PARAGRAPHS) ||
-    normalized.sentence_analyses.length < Math.min(keySentences.length, MAX_KEY_SENTENCES)
+    normalized.paragraph_cards.length < Math.min(effectiveParagraphs.length, MAX_PARAGRAPHS) ||
+    normalized.sentence_analyses.length < Math.min(effectiveKeySentences.length, MAX_KEY_SENTENCES)
   ) {
     console.warn("[ai/analyze-passage] quality warnings after first pass:", qualityWarnings);
 
     try {
       const repairedCompletion = await requestModel(buildAnalyzePassageRepairPrompt({
         title,
-        paragraphs,
-        keySentences,
+        paragraphs: effectiveParagraphs,
+        keySentences: effectiveKeySentences,
         previousResult: normalized,
         warnings: qualityWarnings
       }));

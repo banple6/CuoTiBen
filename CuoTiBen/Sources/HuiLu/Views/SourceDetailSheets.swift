@@ -202,12 +202,13 @@ struct SentenceExplainDetailSheet: View {
                 .environmentObject(viewModel)
             }
         }
-        .onAppear {
-            scheduleExplanationLoad(force: result == nil)
-        }
         .onChange(of: activeSentence.id) { _ in
             actionNote = nil
-            scheduleExplanationLoad(force: true)
+            explanationTask?.cancel()
+            explanationTask = nil
+            result = nil
+            errorMessage = nil
+            isLoading = false
         }
         .onDisappear {
             explanationTask?.cancel()
@@ -341,6 +342,10 @@ struct SentenceExplainDetailSheet: View {
                     )
                 }
 
+                if !isLoading, result == nil {
+                    remoteExplanationButton(title: "补充云端精讲（会消耗额度）")
+                }
+
                 relatedContextPanel
             }
         } else if isLoading {
@@ -362,7 +367,27 @@ struct SentenceExplainDetailSheet: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(Color.blue.opacity(0.82))
             }
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("当前未自动请求云端讲解")
+                    .font(.system(size: 16, weight: .bold))
+
+                Text("现在默认只展示本地教学卡，避免自动消耗额度。需要时可手动获取云端精讲。")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(Color.black.opacity(0.62))
+
+                remoteExplanationButton(title: "获取云端精讲（会消耗额度）")
+            }
         }
+    }
+
+    private func remoteExplanationButton(title: String) -> some View {
+        Button(title) {
+            scheduleExplanationLoad(force: true)
+        }
+        .font(.system(size: 14, weight: .semibold))
+        .buttonStyle(.plain)
+        .foregroundStyle(Color.blue.opacity(0.82))
     }
 
     @ViewBuilder
@@ -1618,19 +1643,11 @@ private struct TranslationInterpretationGroup: View {
     let highlightTokens: [String]
 
     private var faithfulTranslationText: String {
-        analysis.renderedFaithfulTranslation.nonEmpty ?? "暂无忠实翻译。当前结果里还没有稳定可用的直译内容。"
+        analysis.renderedFaithfulTranslation.nonEmpty ?? "暂无忠实翻译"
     }
 
     private var teachingInterpretationText: String {
-        let synthesized = synthesizedTeachingInterpretation(for: analysis)
-
-        if let explicit = analysis.renderedTeachingInterpretation.nonEmpty,
-           !explanationLooksDuplicated(explicit, comparedTo: faithfulTranslationText),
-           !shouldPreferSynthesizedTeachingInterpretation(explicit) {
-            return explicit
-        }
-
-        return synthesized.nonEmpty ?? "暂无教学解读。当前结果里还没有稳定可用的教授式说明。"
+        analysis.renderedTeachingInterpretation.nonEmpty ?? "暂无教学解读"
     }
 
     var body: some View {
@@ -1924,19 +1941,6 @@ private extension String {
     }
 }
 
-private func explanationLooksDuplicated(_ lhs: String, comparedTo rhs: String) -> Bool {
-    let left = pedagogicalSignature(lhs)
-    let right = pedagogicalSignature(rhs)
-    guard !left.isEmpty, !right.isEmpty else { return false }
-    return left == right || left.contains(right) || right.contains(left)
-}
-
-private func pedagogicalSignature(_ value: String) -> String {
-    value
-        .lowercased()
-        .replacingOccurrences(of: "[\\s\\p{Punct}]+", with: "", options: .regularExpression)
-}
-
 private func conciseSentenceFunctionText(_ value: String) -> String {
     let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return "" }
@@ -1952,16 +1956,6 @@ private func conciseSentenceFunctionText(_ value: String) -> String {
     return String(firstSentence.prefix(43)) + "…"
 }
 
-private func shouldPreferSynthesizedTeachingInterpretation(_ value: String) -> Bool {
-    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else { return true }
-
-    let teacherCue = trimmed.contains("先抓") || trimmed.contains("不要把") || trimmed.contains("真正") || trimmed.contains("读偏") || trimmed.contains("主干")
-    let translationCue = trimmed.contains("意思是") || trimmed.contains("可以译为") || trimmed.contains("译作") || trimmed.contains("说的是")
-
-    return translationCue && !teacherCue
-}
-
 private func compactSkeletonPlaceholder(for label: String) -> String {
     switch label {
     case "主语":
@@ -1971,41 +1965,6 @@ private func compactSkeletonPlaceholder(for label: String) -> String {
     default:
         return "无明显单独补足"
     }
-}
-
-private func synthesizedTeachingInterpretation(for analysis: ProfessorSentenceAnalysis) -> String {
-    var parts: [String] = []
-
-    if let skeleton = analysis.displayedStableCoreSkeleton, skeleton.isMeaningful {
-        let boardCore = [skeleton.subject, skeleton.predicate, skeleton.complementOrObject]
-            .compactMap(\.nonEmpty)
-            .joined(separator: " ")
-        if !boardCore.isEmpty {
-            parts.append("先把“\(boardCore)”当成主句真正要成立的判断。")
-        }
-    }
-
-    if let firstLayer = analysis.displayedChunkLayers.first(where: {
-        let role = $0.role.lowercased()
-        return role.contains("前置") || role.contains("时间") || role.contains("让步") || role.contains("条件") || role.contains("后置")
-    }) {
-        let role = firstLayer.role.nonEmpty ?? "这一层"
-        parts.append("\(role)先当框架看，它只是帮主句补时间、范围或修饰关系。")
-    }
-
-    if let firstGrammar = analysis.displayedGrammarFocusCards.first {
-        parts.append("句中最关键的结构是“\(firstGrammar.title)”。\(firstGrammar.functionInSentence)")
-    }
-
-    if let firstTrap = analysis.renderedMisreadingTraps.first?.nonEmpty {
-        parts.append("最容易读偏的是：\(firstTrap)")
-    }
-
-    if let firstRoute = analysis.renderedExamParaphraseRoutes.first?.nonEmpty, parts.count < 2 {
-        parts.append("命题人常会从这里改写：\(firstRoute)")
-    }
-
-    return parts.joined(separator: " ")
 }
 
 private func conciseTeachingHeaderChip(_ value: String, fallback: String) -> String {

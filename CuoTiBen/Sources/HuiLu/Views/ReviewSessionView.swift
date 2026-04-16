@@ -1152,10 +1152,6 @@ struct ReviewDetailOverlay: View {
 
             contextCard
         }
-        .task(id: taskIdentifier) {
-            guard explanation == nil, errorMessage == nil else { return }
-            await fetchExplanationIfPossible()
-        }
     }
 
     private func sheetDragGesture(collapsedHeight: CGFloat, expandedHeight: CGFloat) -> some Gesture {
@@ -1231,12 +1227,14 @@ struct ReviewDetailOverlay: View {
                 .font(.system(size: 16, weight: .medium, design: .serif))
                 .foregroundStyle(AppPalette.paperInk.opacity(0.7))
                 .lineSpacing(4)
+
+            manualExplainButton(title: "重新获取云端讲解（会消耗额度）")
         }
     }
 
     private func placeholderCard(for explainContext: ExplainSentenceContext) -> some View {
         ReviewSectionPaper(title: "等待生成", tint: AppPalette.paperTapeBlue, rotation: 0.15) {
-            Text("已自动连接句子讲解服务，正在为这句英语生成中文讲解结果。")
+            Text("已关闭自动云端讲解，避免在复习时持续消耗额度。")
                 .font(.system(size: 16, weight: .medium, design: .serif))
                 .foregroundStyle(AppPalette.paperInk.opacity(0.68))
                 .lineSpacing(4)
@@ -1244,7 +1242,20 @@ struct ReviewDetailOverlay: View {
             Text("上下文长度：\(explainContext.context.count) 字符")
                 .font(.system(size: 13, weight: .semibold, design: .serif))
                 .foregroundStyle(AppPalette.paperMuted)
+
+            manualExplainButton(title: "生成云端讲解（会消耗额度）")
         }
+    }
+
+    private func manualExplainButton(title: String) -> some View {
+        Button(title) {
+            Task {
+                await reloadExplanation()
+            }
+        }
+        .font(.system(size: 14, weight: .semibold, design: .serif))
+        .buttonStyle(.plain)
+        .foregroundStyle(AppPalette.fabricNavy)
     }
 
     private func explanationSections(_ explanation: AIExplainSentenceResult) -> some View {
@@ -1300,7 +1311,19 @@ struct ReviewDetailOverlay: View {
                 explanationSection(title: "微练习", body: miniExercise, tint: AppPalette.amber.opacity(0.72), rotation: -0.08)
             }
 
-            explanationSection(title: "自然中文义", body: explanation.naturalChineseMeaning, tint: AppPalette.paperHighlightMint, rotation: -0.2)
+            explanationSection(
+                title: "忠实翻译",
+                body: explanation.renderedFaithfulTranslation.isEmpty ? "暂无忠实翻译" : explanation.renderedFaithfulTranslation,
+                tint: AppPalette.paperHighlightMint,
+                rotation: -0.2
+            )
+
+            explanationSection(
+                title: "教学解读",
+                body: explanation.renderedTeachingInterpretation.isEmpty ? "暂无教学解读" : explanation.renderedTeachingInterpretation,
+                tint: AppPalette.paperHighlight.opacity(0.78),
+                rotation: 0.12
+            )
 
             if !explanation.keyTerms.isEmpty {
                 ReviewSectionPaper(title: "词汇在句中义", tint: AppPalette.paperTapeBlue, rotation: 0.35) {

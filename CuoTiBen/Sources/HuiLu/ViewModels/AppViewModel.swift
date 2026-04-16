@@ -149,6 +149,7 @@ enum MaterialImportKind {
 @MainActor
 final class AppViewModel: ObservableObject {
     private static let sourceReaderModeDefaultsKey = "CuoTiBen.sourceReaderMode"
+    private static let automaticProfessorAIEnabled = false
 
     @Published var dailyProgress: DailyProgress
     @Published var sourceDocuments: [SourceDocument] {
@@ -537,27 +538,31 @@ final class AppViewModel: ObservableObject {
                 seedWorkbenchProgressIfNeeded(for: document, with: ppPayload.bundle)
                 structuredSourceErrors[document.id] = nil
 
-                // ── 阶段3: AI 教授级分析升级（非阻塞：先展示基础结果，后台升级） ──
-                structuredSourceStages[document.id] = .aiEnriching
-                Task { [weak self] in
-                    guard let self else { return }
-                    do {
-                        let enriched = try await ProfessorAnalysisService.enrichBundle(
-                            ppPayload.bundle,
-                            title: document.title
-                        )
-                        await MainActor.run {
-                            self.structuredSources[document.id] = enriched
-                            self.structuredSourceStages[document.id] = .ready
-                            TextPipelineDiagnostics.log("PP", "[PP] AI enrichment complete doc=\(document.id) sentenceCards=\(enriched.professorSentenceCards.count)", severity: .info)
-                        }
-                    } catch {
-                        await MainActor.run {
-                            // AI 升级失败不影响基础结果，静默降级
-                            self.structuredSourceStages[document.id] = .ready
-                            TextPipelineDiagnostics.log("PP", "[PP] AI enrichment failed (non-fatal) doc=\(document.id): \(error.localizedDescription)", severity: .warning)
+                if Self.automaticProfessorAIEnabled {
+                    // ── 阶段3: AI 教授级分析升级（非阻塞：先展示基础结果，后台升级） ──
+                    structuredSourceStages[document.id] = .aiEnriching
+                    Task { [weak self] in
+                        guard let self else { return }
+                        do {
+                            let enriched = try await ProfessorAnalysisService.enrichBundle(
+                                ppPayload.bundle,
+                                title: document.title
+                            )
+                            await MainActor.run {
+                                self.structuredSources[document.id] = enriched
+                                self.structuredSourceStages[document.id] = .ready
+                                TextPipelineDiagnostics.log("PP", "[PP] AI enrichment complete doc=\(document.id) sentenceCards=\(enriched.professorSentenceCards.count)", severity: .info)
+                            }
+                        } catch {
+                            await MainActor.run {
+                                self.structuredSourceStages[document.id] = .ready
+                                TextPipelineDiagnostics.log("PP", "[PP] AI enrichment failed (non-fatal) doc=\(document.id): \(error.localizedDescription)", severity: .warning)
+                            }
                         }
                     }
+                } else {
+                    structuredSourceStages[document.id] = .ready
+                    TextPipelineDiagnostics.log("PP", "[PP] 自动 AI 教授级升级已关闭，直接使用本地教学卡 doc=\(document.id)", severity: .info)
                 }
                 return
             }
@@ -593,21 +598,24 @@ final class AppViewModel: ObservableObject {
             seedWorkbenchProgressIfNeeded(for: document, with: legacyPayload.bundle)
             structuredSourceStages[document.id] = .fallbackLegacy
 
-            // Legacy 路径也尝试 AI 升级
-            Task { [weak self] in
-                guard let self else { return }
-                do {
-                    let enriched = try await ProfessorAnalysisService.enrichBundle(
-                        legacyPayload.bundle,
-                        title: document.title
-                    )
-                    await MainActor.run {
-                        self.structuredSources[document.id] = enriched
-                        TextPipelineDiagnostics.log("PP", "[PP] AI enrichment (legacy) complete doc=\(document.id)", severity: .info)
+            if Self.automaticProfessorAIEnabled {
+                Task { [weak self] in
+                    guard let self else { return }
+                    do {
+                        let enriched = try await ProfessorAnalysisService.enrichBundle(
+                            legacyPayload.bundle,
+                            title: document.title
+                        )
+                        await MainActor.run {
+                            self.structuredSources[document.id] = enriched
+                            TextPipelineDiagnostics.log("PP", "[PP] AI enrichment (legacy) complete doc=\(document.id)", severity: .info)
+                        }
+                    } catch {
+                        TextPipelineDiagnostics.log("PP", "[PP] AI enrichment (legacy) failed (non-fatal) doc=\(document.id): \(error.localizedDescription)", severity: .warning)
                     }
-                } catch {
-                    TextPipelineDiagnostics.log("PP", "[PP] AI enrichment (legacy) failed (non-fatal) doc=\(document.id): \(error.localizedDescription)", severity: .warning)
                 }
+            } else {
+                TextPipelineDiagnostics.log("PP", "[PP] 自动 AI 教授级升级已关闭（legacy）doc=\(document.id)", severity: .info)
             }
         } catch {
             let errorMessage: String
@@ -943,7 +951,7 @@ final class AppViewModel: ObservableObject {
     }
 
     func professorSentenceCard(for sentence: Sentence, in document: SourceDocument) -> ProfessorSentenceCard? {
-        structuredSource(for: document)?.sentenceCard(id: sentence.id)
+        structuredSource(for: document)?.displayedSentenceCard(id: sentence.id)
     }
 
     func wordExplanation(
@@ -1019,7 +1027,8 @@ final class AppViewModel: ObservableObject {
     ) -> NoteEditorSeed {
         let anchor = sourceAnchor(for: sentence, in: document)
         let suggestedBody = [
-            explanation?.naturalChineseMeaning,
+            explanation?.faithfulTranslation.nonEmpty,
+            explanation?.teachingInterpretation.nonEmpty,
             explanation?.sentenceCore,
             explanation?.examRewritePoints.first
         ]
@@ -1308,9 +1317,10 @@ final class AppViewModel: ObservableObject {
         explanation: AIExplainSentenceResult?,
         in document: SourceDocument
     ) -> Card {
+        let faithfulTranslation = explanation?.faithfulTranslation.nonEmpty ?? sentence.text
         let chunk = createChunk(
             title: "句子精讲",
-            content: explanation?.translation ?? sentence.text,
+            content: faithfulTranslation,
             locator: sentence.anchorLabel,
             sourceDocumentID: document.id,
             tags: (explanation?.keyTerms.map(\.term) ?? []).prefix(3).map { $0 },
@@ -1318,7 +1328,7 @@ final class AppViewModel: ObservableObject {
         )
 
         let back = [
-            explanation?.naturalChineseMeaning,
+            explanation?.teachingInterpretation.nonEmpty,
             explanation?.sentenceCore,
             explanation?.misreadPoints.first.map { "易错点：\($0)" },
             explanation?.examRewritePoints.first.map { "出题改写：\($0)" }

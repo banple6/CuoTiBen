@@ -226,7 +226,7 @@ function ensureExplainResultShape(raw) {
     ["core_skeleton", "sentence_core"],
     ["chunk_layers", "chunk_breakdown"],
     ["grammar_focus", "grammar_points"],
-    ["faithful_translation", "translation", "natural_chinese_meaning"],
+    ["faithful_translation"],
     ["teaching_interpretation", "natural_chinese_meaning"],
     ["contextual_vocabulary", "vocabulary_in_context"],
     ["misreading_traps", "misread_points", "common_misreadings"],
@@ -266,8 +266,8 @@ function normalizeExplainResult(raw, sourceSentence, paragraph_role = "") {
   const rawSimplerRewrite = firstDefined(raw, ["simpler_rewrite", "simplified_english"]);
   const rawSimplerRewriteTranslation = firstDefined(raw, ["simpler_rewrite_translation", "rewrite_translation"]);
   const rawEvidenceType = firstDefined(raw, ["evidence_type", "sentence_role"]);
-  const rawFaithfulTranslation = firstDefined(raw, ["faithful_translation", "translation", "natural_chinese_meaning"]);
-  const rawTeachingInterpretation = firstDefined(raw, ["teaching_interpretation", "natural_chinese_meaning", "translation"]);
+  const rawFaithfulTranslation = firstDefined(raw, ["faithful_translation"]);
+  const rawTeachingInterpretation = firstDefined(raw, ["teaching_interpretation", "natural_chinese_meaning"]);
   const evidenceType = normalizeEvidenceType(rawEvidenceType, inferEvidenceTypeFromParagraphRole(paragraph_role));
   const sentenceFunction = purifyChineseDisplayText(raw.sentence_function)
     || buildSentenceFunctionFromEvidenceType(evidenceType);
@@ -343,7 +343,7 @@ function normalizeExplainResult(raw, sourceSentence, paragraph_role = "") {
     grammar_focus: grammarFocus,
     faithful_translation: faithfulTranslation,
     teaching_interpretation: teachingInterpretation,
-    natural_chinese_meaning: teachingInterpretation || faithfulTranslation,
+    natural_chinese_meaning: teachingInterpretation,
     sentence_core: sentenceCore,
     evidence_type: evidenceType,
     chunk_breakdown: effectiveChunkBreakdown,
@@ -1409,7 +1409,7 @@ function enrichExplainResult(result, {
     paragraph_role
   });
   const simplerRewrite = result.simpler_rewrite || result.simplified_english || `${coreClause}.`;
-  const faithfulTranslation = result.faithful_translation || result.translation || buildFallbackFaithfulTranslation({
+  const faithfulTranslation = result.faithful_translation || buildFallbackFaithfulTranslation({
     sentence,
     paragraph_theme
   });

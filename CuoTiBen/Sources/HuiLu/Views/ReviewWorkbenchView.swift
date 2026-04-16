@@ -26,7 +26,7 @@ struct ReviewWorkbenchView: View {
     @State private var jumpTargetOutlineNodeID: String?
     @State private var hasRestoredInitialState = false
     @State private var showsPhoneAnalysisDrawer = false
-    @State private var showsPadOutlineSheet = false
+    @State private var showsPadOutlineWorkspace = false
     @State private var phoneDrawerDetent: PresentationDetent = .large
     @State private var padSplitRatio: CGFloat = 0.56
     @State private var padDragStartRatio: CGFloat?
@@ -159,6 +159,30 @@ struct ReviewWorkbenchView: View {
                 .padding(.top, safeTop + (usesPadLayout ? 8 : 2))
                 .padding(.horizontal, usesPadLayout ? 24 : 12)
                 .padding(.bottom, safeBottom)
+
+                if showsPadOutlineWorkspace, let structuredSource {
+                    StructureTreeWorkspaceOverlay(
+                        title: liveDocument.title,
+                        nodes: structuredSource.outline,
+                        highlightedNodeID: highlightedNodeID,
+                        jumpTargetNodeID: jumpTargetOutlineNodeID,
+                        ancestorNodeIDs: outlineAncestorNodeIDs,
+                        onNodeTap: { node in
+                            handleNodeSelection(
+                                node,
+                                recordProgress: true,
+                                shouldJump: true,
+                                revealAnalysisOnPhone: false
+                            )
+                        },
+                        onJumpHandled: handleOutlineJumpHandled,
+                        onClose: {
+                            showsPadOutlineWorkspace = false
+                        }
+                    )
+                    .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .center)))
+                    .zIndex(20)
+                }
             }
             .ignoresSafeArea()
         }
@@ -184,20 +208,6 @@ struct ReviewWorkbenchView: View {
             .environmentObject(viewModel)
             .presentationDetents([.fraction(0.72), .large], selection: $phoneDrawerDetent)
             .presentationDragIndicator(.visible)
-        }
-        .sheet(isPresented: $showsPadOutlineSheet) {
-            if let structuredSource {
-                ReviewWorkbenchOutlineSheet(
-                    bundle: structuredSource,
-                    highlightedNodeID: highlightedNodeID,
-                    ancestorNodeIDs: outlineAncestorNodeIDs
-                ) { node in
-                    handleNodeSelection(node)
-                    showsPadOutlineSheet = false
-                }
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-            }
         }
     }
 
@@ -297,7 +307,7 @@ struct ReviewWorkbenchView: View {
                     onAnchorTap: handleAnchorSelection,
                     onWordTap: handleWordSelection,
                     onShowOutline: {
-                        showsPadOutlineSheet = true
+                        showsPadOutlineWorkspace = true
                     }
                 )
                 .frame(width: rightWidth)
@@ -649,45 +659,6 @@ private struct WorkbenchSplitHandle: View {
         }
         .frame(maxHeight: .infinity)
         .padding(.vertical, 18)
-    }
-}
-
-private struct ReviewWorkbenchOutlineSheet: View {
-    let bundle: StructuredSourceBundle
-    let highlightedNodeID: String?
-    let ancestorNodeIDs: [String]
-    let onNodeTap: (OutlineNode) -> Void
-
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            ScrollView(showsIndicators: false) {
-                SourceOutlineTab(
-                    nodes: bundle.outline,
-                    highlightedNodeID: highlightedNodeID,
-                    jumpTargetNodeID: nil,
-                    ancestorNodeIDs: ancestorNodeIDs,
-                    onNodeTap: { node in
-                        onNodeTap(node)
-                    },
-                    onJumpHandled: {}
-                )
-                .padding(.horizontal, 18)
-                .padding(.top, 12)
-                .padding(.bottom, 24)
-            }
-            .background(AppBackground(style: .light))
-            .navigationTitle("结构树")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("关闭") {
-                        dismiss()
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -1328,10 +1299,6 @@ private struct ReviewWorkbenchSentencePanel: View {
         return bundled
     }
 
-    private var evidenceRolePresentation: SentenceRolePresentation? {
-        professorSentenceRolePresentation(for: effectiveAnalysis?.evidenceType)
-    }
-
     var body: some View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
@@ -1365,12 +1332,13 @@ private struct ReviewWorkbenchSentencePanel: View {
             NoteEditorSheet(seed: seed)
                 .environmentObject(viewModel)
         }
-        .onAppear {
-            scheduleExplanationLoad(force: result == nil)
-        }
         .onChange(of: sentence.id) { _ in
             actionNote = nil
-            scheduleExplanationLoad(force: true)
+            explanationTask?.cancel()
+            explanationTask = nil
+            result = nil
+            errorMessage = nil
+            isLoading = false
         }
         .onDisappear {
             explanationTask?.cancel()
@@ -1473,78 +1441,12 @@ private struct ReviewWorkbenchSentencePanel: View {
                     )
                 }
 
-                let sentenceFunction = analysis.renderedSentenceFunction.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !sentenceFunction.isEmpty {
-                    SentenceExplainBlock(
-                        title: "句子定位",
-                        content: sentenceFunction,
-                        tone: .node
-                    )
-                }
-
-                SentenceExplainBlock(
-                    title: "句子主干",
-                    content: analysis.renderedSentenceCore,
-                    tone: .structure,
-                    highlightTokens: analysis.grammarFocus.map(\.phenomenon) + analysis.grammarPoints.map(\.name) + analysis.vocabularyInContext.map(\.term)
-                )
-                SentenceExplainListBlock(
-                    title: "语块切分",
-                    items: analysis.renderedChunkLayers,
-                    tone: .sentence
-                )
-
-                SentenceExplainListBlock(
-                    title: "关键语法点",
-                    items: analysis.renderedGrammarFocus,
-                    tone: .grammar
-                )
-                SentenceExplainListBlock(
-                    title: "学生易错点",
-                    items: analysis.renderedMisreadingTraps,
-                    tone: .misread
-                )
-                SentenceExplainListBlock(
-                    title: "出题改写点",
-                    items: analysis.renderedExamParaphraseRoutes,
-                    tone: .rewrite
-                )
-                SentenceExplainBlock(
-                    title: "简化英文改写",
-                    content: analysis.renderedSimplerRewrite,
-                    tone: .rewrite,
-                    highlightTokens: analysis.vocabularyInContext.map(\.term)
-                )
-
-                if let miniExercise = analysis.renderedMiniCheck?.trimmingCharacters(in: .whitespacesAndNewlines),
-                   !miniExercise.isEmpty {
-                    SentenceExplainBlock(
-                        title: "微练习",
-                        content: miniExercise,
-                        tone: .grammar
-                    )
-                }
-
-                SentenceExplainBlock(
-                    title: "自然中文义",
-                    content: analysis.naturalChineseMeaning,
-                    tone: .translation,
-                    highlightTokens: analysis.vocabularyInContext.map(\.term)
-                )
-
-                if !analysis.vocabularyInContext.isEmpty {
-                    InteractiveKeywordSection(
-                        title: "词汇在句中义",
-                        minimumItemWidth: 140,
-                        selectedTerm: selectedWordTerm,
-                        keywords: analysis.vocabularyInContext.map {
-                            OutlineNodeKeyword(
-                                id: $0.term.lowercased(),
-                                term: $0.term,
-                                hint: $0.meaning
-                            )
-                        }
-                    ) { keyword in
+                ProfessorAnalysisPanel(
+                    analysis: analysis,
+                    keywordMinimumWidth: 140,
+                    selectedTerm: selectedWordTerm,
+                    relatedEvidenceItems: [],
+                    onWordTap: { keyword in
                         onWordTap(
                             viewModel.wordExplanation(
                                 for: keyword.term,
@@ -1554,23 +1456,10 @@ private struct ReviewWorkbenchSentencePanel: View {
                             )
                         )
                     }
-                }
+                )
 
-                if !analysis.hierarchyRebuild.isEmpty {
-                    SentenceExplainListBlock(
-                        title: "层级重组",
-                        items: analysis.hierarchyRebuild,
-                        tone: .structure
-                    )
-                }
-
-                if let variation = analysis.syntacticVariation?.trimmingCharacters(in: .whitespacesAndNewlines),
-                   !variation.isEmpty {
-                    SentenceExplainBlock(
-                        title: "句法替换版",
-                        content: variation,
-                        tone: .structure
-                    )
+                if !isLoading, result == nil {
+                    remoteExplanationButton(title: "补充云端精讲（会消耗额度）")
                 }
             }
         } else if isLoading {
@@ -1592,7 +1481,27 @@ private struct ReviewWorkbenchSentencePanel: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(Color.blue.opacity(0.82))
             }
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("当前未自动请求云端讲解")
+                    .font(.system(size: 16, weight: .bold))
+
+                Text("现在默认只展示本地教学卡，避免自动消耗额度。需要时可手动获取云端精讲。")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(Color.black.opacity(0.62))
+
+                remoteExplanationButton(title: "获取云端精讲（会消耗额度）")
+            }
         }
+    }
+
+    private func remoteExplanationButton(title: String) -> some View {
+        Button(title) {
+            scheduleExplanationLoad(force: true)
+        }
+        .font(.system(size: 14, weight: .semibold))
+        .buttonStyle(.plain)
+        .foregroundStyle(Color.blue.opacity(0.82))
     }
 
     private var actionSection: some View {

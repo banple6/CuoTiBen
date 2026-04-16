@@ -19,6 +19,14 @@ enum NormalizedDocumentConverter {
         "before", "during", "about", "also", "such", "very", "more", "most", "some",
         "many", "much", "other", "others", "one", "two", "three"
     ]
+    private static let commonEnglishLexicon: Set<String> = stopwords.union([
+        "reading", "headings", "question", "questions", "answer", "answers", "example", "examples",
+        "evidence", "support", "claim", "argument", "author", "attitude", "main", "idea", "people",
+        "world", "history", "society", "study", "research", "result", "results", "because", "therefore",
+        "however", "although", "while", "before", "after", "during", "through", "allowing", "outside",
+        "corporations", "venture", "dominate", "prosperity", "sustainable", "balance", "logical", "peaceful",
+        "contact", "museum", "tourism", "culture", "community", "economy", "local", "leaders", "consider"
+    ])
 
     static func convert(
         _ document: NormalizedDocument,
@@ -82,17 +90,12 @@ enum NormalizedDocumentConverter {
         let answerKeyParagraphs = cleanedParagraphs.filter { $0.zoneRole == .answerKey }
         let vocabularyParagraphs = cleanedParagraphs.filter { $0.zoneRole == .vocabularySupport }
         let instructionParagraphs = cleanedParagraphs.filter { $0.zoneRole == .metaInstruction }
+        let effectivePassageParagraphs = passageParagraphs
 
-        let effectivePassageParagraphs: [NormalizedParagraph]
-        if !passageParagraphs.isEmpty {
-            effectivePassageParagraphs = passageParagraphs
-        } else {
-            effectivePassageParagraphs = cleanedParagraphs.filter {
-                $0.language == .english || $0.language == .mixed
-            }
+        if effectivePassageParagraphs.isEmpty {
             TextPipelineDiagnostics.log(
                 "PP",
-                "[PP][Converter] 未检测到明确 passage 段落，退回英文/混合段落启发式正文选择",
+                "[PP][Converter] 严格正文过滤后未留下可用 passage 段落，后续正文树将保持空白而不是吃入污染材料",
                 severity: .warning
             )
         }
@@ -204,6 +207,43 @@ enum NormalizedDocumentConverter {
         )
     }
 
+    static func rebuildSentenceCard(
+        sentenceID: String,
+        in bundle: StructuredSourceBundle
+    ) -> ProfessorSentenceCard? {
+        guard let sentence = bundle.sentence(id: sentenceID) else { return nil }
+
+        let orderedSentences = bundle.sentences.sorted { lhs, rhs in
+            if lhs.index != rhs.index { return lhs.index < rhs.index }
+            return lhs.localIndex < rhs.localIndex
+        }
+        let sentencesBySegment = Dictionary(grouping: orderedSentences, by: \.segmentID)
+        let paragraphCards = buildParagraphTeachingCards(
+            segments: bundle.segments,
+            sentencesBySegment: sentencesBySegment,
+            title: bundle.source.title
+        )
+        guard let rebuilt = buildProfessorSentenceCards(
+            sentences: [sentence],
+            paragraphCards: paragraphCards,
+            sentenceIndex: sentencesBySegment
+        ).first else {
+            return bundle.sentenceCard(id: sentenceID)
+        }
+
+        guard let existing = bundle.sentenceCard(id: sentenceID) else {
+            return rebuilt
+        }
+
+        return ProfessorSentenceCard(
+            id: existing.id,
+            sentenceID: existing.sentenceID,
+            segmentID: existing.segmentID,
+            isKeySentence: existing.isKeySentence || rebuilt.isKeySentence,
+            analysis: rebuilt.analysis.mergingFallback(existing.analysis)
+        )
+    }
+
     private static func filterAndRepairParagraphs(
         _ paragraphs: [NormalizedParagraph],
         cleanedBlockIDs: Set<String>
@@ -228,9 +268,150 @@ enum NormalizedDocumentConverter {
     }
 
     private static func selectPassageParagraphs(from paragraphs: [NormalizedParagraph]) -> [NormalizedParagraph] {
-        let explicitPassage = paragraphs.filter(\.isPassageParagraph)
-        guard !explicitPassage.isEmpty else { return [] }
-        return explicitPassage
+        let explicitPassage = paragraphs.filter { isStrictPassageBodyParagraph($0, allowUnknownZone: false) }
+        if !explicitPassage.isEmpty {
+            return explicitPassage
+        }
+
+        return paragraphs.filter { isStrictPassageBodyParagraph($0, allowUnknownZone: true) }
+    }
+
+    private struct PassageBodyProfile {
+        let englishLetters: Int
+        let chineseCharacters: Int
+        let wordCount: Int
+        let contentWordCount: Int
+        let englishRatio: Double
+        let forwardLexiconHits: Int
+        let reversedLexiconHits: Int
+    }
+
+    private static func passageBodyProfile(for text: String) -> PassageBodyProfile {
+        let englishLetters = text.unicodeScalars.filter {
+            ($0.value >= 0x41 && $0.value <= 0x5A) || ($0.value >= 0x61 && $0.value <= 0x7A)
+        }.count
+        let chineseCharacters = text.unicodeScalars.filter {
+            $0.value >= 0x4E00 && $0.value <= 0x9FFF
+        }.count
+        let words = englishTokens(in: text)
+        let contentWords = words.filter { $0.count >= 3 && !stopwords.contains($0) }
+        let ratioBase = max(englishLetters + chineseCharacters, 1)
+        let forwardLexiconHits = words.filter { commonEnglishLexicon.contains($0) }.count
+        let reversedLexiconHits = words
+            .map { String($0.reversed()) }
+            .filter { commonEnglishLexicon.contains($0) }
+            .count
+
+        return PassageBodyProfile(
+            englishLetters: englishLetters,
+            chineseCharacters: chineseCharacters,
+            wordCount: words.count,
+            contentWordCount: contentWords.count,
+            englishRatio: Double(englishLetters) / Double(ratioBase),
+            forwardLexiconHits: forwardLexiconHits,
+            reversedLexiconHits: reversedLexiconHits
+        )
+    }
+
+    private static func englishTokens(in text: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: #"[A-Za-z]{2,}(?:'[A-Za-z]+)?"#) else {
+            return []
+        }
+        let nsText = text as NSString
+        let range = NSRange(location: 0, length: nsText.length)
+        return regex.matches(in: text, range: range).map {
+            nsText.substring(with: $0.range).lowercased()
+        }
+    }
+
+    private static func isStrictPassageBodyParagraph(
+        _ paragraph: NormalizedParagraph,
+        allowUnknownZone: Bool
+    ) -> Bool {
+        if !allowUnknownZone && paragraph.zoneRole != .passage {
+            return false
+        }
+
+        let trimmed = paragraph.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= minParagraphTextLength else { return false }
+
+        let profile = passageBodyProfile(for: trimmed)
+        if looksLikeInstructionOrQuestionParagraph(trimmed) { return false }
+        if looksLikeBilingualGlossaryParagraph(trimmed, profile: profile) { return false }
+        if looksLikeReversedEnglishGarbage(trimmed, profile: profile) { return false }
+
+        if looksLikePassageHeading(trimmed, profile: profile) {
+            return true
+        }
+
+        switch paragraph.language {
+        case .english:
+            return profile.wordCount >= 6 || profile.contentWordCount >= 4
+        case .mixed:
+            return profile.wordCount >= 8
+                && profile.contentWordCount >= 6
+                && profile.englishRatio >= 0.56
+                && profile.chineseCharacters <= max(16, Int(Double(profile.englishLetters) * 0.55))
+        case .unknown:
+            return profile.wordCount >= 8
+                && profile.contentWordCount >= 6
+                && profile.englishRatio >= 0.62
+        case .chinese:
+            return false
+        }
+    }
+
+    private static func looksLikePassageHeading(
+        _ text: String,
+        profile: PassageBodyProfile
+    ) -> Bool {
+        guard profile.chineseCharacters == 0 else { return false }
+        guard text.count <= maxTitleLength else { return false }
+        guard profile.wordCount >= 1 && profile.wordCount <= 10 else { return false }
+        return text.range(of: #"^[A-Za-z0-9 ,:;'"()\/-]+$"#, options: .regularExpression) != nil
+    }
+
+    private static func looksLikeInstructionOrQuestionParagraph(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        let chineseMarkers = [
+            "开始做题", "对照答案", "把下面", "选出最合适", "匹配题", "题目", "答案", "选项",
+            "背单词", "只背中文", "抄出来", "不但要", "第\(0)遍", "讲在", "第\(0)段"
+        ]
+        let englishMarkers = [
+            "match the headings", "matching headings", "choose the correct", "answer the questions",
+            "questions 1-", "question 1", "true false not given", "yes no not given", "look at the following"
+        ]
+
+        if chineseMarkers.contains(where: lower.contains) { return true }
+        if englishMarkers.contains(where: lower.contains) { return true }
+        if lower.range(of: #"^\s*(questions?|q\d+|[1-9]\d?\.)\s+"#, options: .regularExpression) != nil {
+            return true
+        }
+        return false
+    }
+
+    private static func looksLikeBilingualGlossaryParagraph(
+        _ text: String,
+        profile: PassageBodyProfile
+    ) -> Bool {
+        guard profile.chineseCharacters >= 6, profile.wordCount >= 3 else { return false }
+        if text.range(of: #"[A-Za-z]{3,}\s*[：:]\s*[\u4e00-\u9fff]{1,}"#, options: .regularExpression) != nil {
+            return true
+        }
+        if text.range(of: #"[\u4e00-\u9fff]{1,}\s*是\s*[A-Za-z]{3,}"#, options: .regularExpression) != nil {
+            return true
+        }
+        let quoteCount = text.filter { "“”‘’\"".contains($0) }.count
+        return quoteCount >= 2 && profile.englishRatio < 0.56
+    }
+
+    private static func looksLikeReversedEnglishGarbage(
+        _ text: String,
+        profile: PassageBodyProfile
+    ) -> Bool {
+        guard profile.wordCount >= 5 else { return false }
+        guard profile.reversedLexiconHits >= 3 else { return false }
+        return profile.reversedLexiconHits > max(profile.forwardLexiconHits * 2, profile.forwardLexiconHits + 2)
     }
 
     private static func buildSegments(
@@ -1392,14 +1573,28 @@ enum NormalizedDocumentConverter {
         coreClause: String,
         chunks: [String]
     ) -> String {
-        let focus = shortSnippet(from: coreClause)
+        let lower = sentence.lowercased()
+
+        if lower.hasPrefix("although") || lower.hasPrefix("though") || lower.contains(" even though ") {
+            return "句意可以理解为：前面先交代让步背景，真正落点在后面那层核心判断。"
+        }
+        if lower.contains("however") || lower.contains(" but ") || lower.contains(" yet ") {
+            return "句意可以理解为：前半部分更多是在铺垫或对比，真正要记住的是转折后落下来的判断。"
+        }
+        if lower.contains("because") || lower.contains("therefore") || lower.contains("thus") {
+            return "句意可以理解为：这句话在说明原因和结果之间的关系，核心判断要跟着主句主干读。"
+        }
+        if chunks.count >= 3 {
+            return "句意可以理解为：先抓住主句主干，再把条件、限定和补充说明一层层补回去。"
+        }
         if paragraphTheme?.nonEmpty != nil {
-            return ""
+            return "句意可以理解为：作者在这里围绕本段主题提出一个完整判断，其余信息都在为这个判断服务。"
         }
-        if let firstChunk = chunks.first, firstChunk != coreClause, firstChunk.count < 20, focus.count < 32 {
-            return "句意接近于：先说“\(shortSnippet(from: firstChunk))”，再落到“\(focus)”。"
+        let focus = shortSnippet(from: coreClause, limit: 48)
+        if !focus.isEmpty {
+            return "句意可以先抓“\(focus)”这一主干，再把周围修饰一起带回去理解。"
         }
-        return ""
+        return "句意可以理解为：这句话表达的是一个完整判断，其余成分是在补范围、条件或修饰。"
     }
 
     private static func buildTeachingInterpretation(
@@ -1409,24 +1604,27 @@ enum NormalizedDocumentConverter {
         chunks: [String]
     ) -> String {
         let lower = sentence.lowercased()
-        let focus = shortSnippet(from: coreClause)
 
         if lower.hasPrefix("although") || lower.hasPrefix("though") || lower.contains(" even though ") {
-            return "这句话先让你看到一种已知情况，但作者真正要你收住的判断落在“\(focus)”这一层。"
+            return "这句话先摆出一种让步背景，真正要抓的是后半句落下来的判断，不要把前面的铺垫当成答案。"
         }
         if lower.contains("however") || lower.contains(" but ") || lower.contains(" yet ") {
-            return "这句话要从转折后开始抓重点。前面的内容更多是在铺垫或对比，真正该记住的是“\(focus)”。"
+            return "这句话的重点要从转折后开始抓。前面的内容更多是在铺垫或对比，真正该记住的是后面的判断。"
         }
         if lower.contains("because") || lower.contains("therefore") || lower.contains("thus") {
-            return "这句话在交代因果链条。核心判断落在“\(focus)”这一块，其余语块是在说明原因、结果或推导依据。"
+            return "这句话在交代因果链条。阅读时先抓主句判断，再把原因、结果或推导依据按层级补回去。"
         }
         if chunks.count >= 3 {
-            return "这句话不能平着读。先把主句“\(focus)”读稳，再把其余语块当成条件、限定或补充说明一层层加回去。"
+            return "这句话不能平着读。先抓主句主干，再把条件、限定和补充说明一层层挂回去。"
         }
         if let card = paragraphCard {
-            return "放在本段里，这句话主要承担“\(card.argumentRole.displayName)”的作用；真正要先读懂的是“\(focus)”这一层。"
+            return "放在本段里，这句话主要承担“\(card.argumentRole.displayName)”的作用；阅读时先抓主句主干，再看细节怎样支撑它。"
         }
-        return "这句话真正要你抓的是“\(focus)”。其余成分是在把范围、条件和修饰关系补全。"
+        let focus = shortSnippet(from: coreClause, limit: 36)
+        if !focus.isEmpty {
+            return "这句话真正要先读稳的是主句主干；如果把“\(focus)”周围的修饰错挂，整句意思就会跟着偏。"
+        }
+        return "这句话真正要先读稳的是主句主干，其余成分是在补条件、范围和修饰关系。"
     }
 
     private static func buildMiniExercise(
@@ -1495,7 +1693,7 @@ enum NormalizedDocumentConverter {
     private static func extractCoreComponents(
         from clause: String
     ) -> (subject: String?, predicate: String?, complement: String?) {
-        let rawTokens = clause
+        var rawTokens = clause
             .replacingOccurrences(of: "—", with: " ")
             .replacingOccurrences(of: "–", with: " ")
             .split(whereSeparator: \.isWhitespace)
@@ -1503,6 +1701,11 @@ enum NormalizedDocumentConverter {
                 token.trimmingCharacters(in: CharacterSet.punctuationCharacters)
             }
             .filter { !$0.isEmpty }
+
+        let discourseMarkers: Set<String> = ["and", "but", "yet", "so", "or", "however", "therefore", "thus", "meanwhile"]
+        while let first = rawTokens.first, discourseMarkers.contains(first.lowercased()) {
+            rawTokens.removeFirst()
+        }
 
         guard rawTokens.count >= 2 else {
             return (nil, nil, nil)
@@ -1536,8 +1739,25 @@ enum NormalizedDocumentConverter {
         }
 
         let subject = rawTokens.prefix(predicateIndex).joined(separator: " ")
-        let predicate = rawTokens[predicateIndex]
-        let complementTokens = Array(rawTokens.dropFirst(predicateIndex + 1).prefix(8))
+        var predicateParts = [rawTokens[predicateIndex]]
+        var complementStartIndex = predicateIndex + 1
+
+        if complementStartIndex < rawTokens.count {
+            let currentLower = rawTokens[predicateIndex].lowercased()
+            let nextLower = rawTokens[complementStartIndex].lowercased()
+            let linkingFollowers: Set<String> = [
+                "become", "became", "becomes", "remain", "remains", "seem", "seems",
+                "appear", "appears", "mean", "means", "show", "shows", "suggest", "suggests"
+            ]
+            if ["have", "has", "had", "am", "is", "are", "was", "were", "be", "been", "being"].contains(currentLower),
+               linkingFollowers.contains(nextLower) || nextLower.hasSuffix("ed") || nextLower.hasSuffix("ing") {
+                predicateParts.append(rawTokens[complementStartIndex])
+                complementStartIndex += 1
+            }
+        }
+
+        let predicate = predicateParts.joined(separator: " ")
+        let complementTokens = Array(rawTokens.dropFirst(complementStartIndex).prefix(10))
         let complement = complementTokens.joined(separator: " ")
         return (
             subject.isEmpty ? nil : subject,
@@ -1550,17 +1770,19 @@ enum NormalizedDocumentConverter {
         analysis: ProfessorSentenceAnalysis?,
         sentence: String
     ) -> String {
-        guard let analysis else { return sentence }
+        guard let analysis else { return shortSnippet(from: sentence, limit: 36) }
 
-        let items = [
-            analysis.renderedSentenceFunction.nonEmpty,
-            analysis.renderedChunkLayers.first?.nonEmpty,
-            analysis.renderedMisreadingTraps.first?.nonEmpty,
-            analysis.renderedExamParaphraseRoutes.first?.nonEmpty
-        ]
-            .compactMap { $0 }
+        let functionHead = analysis.renderedSentenceFunction
+            .components(separatedBy: CharacterSet(charactersIn: "。！？\n"))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { !$0.isEmpty }) ?? ""
+        let trap = shortSnippet(from: analysis.renderedMisreadingTraps.first ?? "", limit: 18)
+        let summary = [
+            functionHead.isEmpty ? "" : "关键在：\(shortSnippet(from: functionHead, limit: 18))",
+            trap.isEmpty ? "" : "易错：\(trap)"
+        ].first(where: { !$0.isEmpty }) ?? shortSnippet(from: sentence, limit: 36)
 
-        return items.isEmpty ? sentence : items.joined(separator: "｜")
+        return shortSnippet(from: summary, limit: 36)
     }
 
     private static func teachingQuestionNodeTitle(link: QuestionEvidenceLink) -> String {
@@ -1591,28 +1813,17 @@ enum NormalizedDocumentConverter {
         card: ParagraphTeachingCard,
         linkedQuestions: [QuestionEvidenceLink]
     ) -> String {
-        var parts = [card.displayedExamValue]
+        let primaryFocus = shortSnippet(from: card.displayedTeachingFocuses.first ?? "", limit: 24)
+        let examValue = shortSnippet(from: card.displayedExamValue, limit: 20)
+        let questionHint = shortSnippet(from: linkedQuestions.first?.trapType ?? "", limit: 14)
 
-        if let blindSpot = card.displayedStudentBlindSpot?.nonEmpty {
-            parts.append("易偏点：\(blindSpot)")
-        }
+        let summary = [
+            primaryFocus.isEmpty ? "" : "优先学：\(primaryFocus)",
+            examValue.isEmpty ? "" : "命题点：\(examValue)",
+            questionHint.isEmpty ? "" : "考点：\(questionHint)"
+        ].first(where: { !$0.isEmpty }) ?? "本段最值得先学的一点"
 
-        parts.append(contentsOf: card.displayedTeachingFocuses)
-
-        if let linkedQuestion = linkedQuestions.first {
-            let evidence = linkedQuestion.paraphraseEvidence.first?.nonEmpty ?? ""
-            let trap = linkedQuestion.trapType.nonEmpty ?? ""
-            let merged = [trap, evidence].filter { !$0.isEmpty }.joined(separator: "｜")
-            if !merged.isEmpty {
-                parts.append("对应考点：\(merged)")
-            }
-        }
-
-        if parts.isEmpty {
-            parts.append(card.displayedExamValue)
-        }
-
-        return uniqueStrings(from: parts, limit: 4).joined(separator: "；")
+        return shortSnippet(from: summary, limit: 40)
     }
 
     private static func teachingFocusTitle(card: ParagraphTeachingCard) -> String {
@@ -1636,34 +1847,17 @@ enum NormalizedDocumentConverter {
         card: ParagraphTeachingCard,
         linkedQuestions: [QuestionEvidenceLink]
     ) -> String {
-        var parts: [String] = []
+        let theme = shortSnippet(from: card.displayedTheme, limit: 22)
+        let role = shortSnippet(from: card.argumentRole.displayName, limit: 10)
+        let questionHint = shortSnippet(from: linkedQuestions.first?.trapType ?? "", limit: 16)
 
-        if let theme = card.displayedTheme.nonEmpty {
-            parts.append(theme)
-        }
+        let summary = [
+            theme.isEmpty ? "" : "主旨：\(theme)",
+            role.isEmpty ? "" : "角色：\(role)",
+            questionHint.isEmpty ? "" : "考点：\(questionHint)"
+        ].first(where: { !$0.isEmpty }) ?? "段落教学节点"
 
-        if let relation = card.displayedRelationToPrevious.nonEmpty {
-            parts.append("和上一段：\(relation)")
-        }
-
-        if let examValue = card.displayedExamValue.nonEmpty {
-            parts.append("题型价值：\(examValue)")
-        }
-
-        if let blindSpot = card.displayedStudentBlindSpot?.nonEmpty {
-            parts.append("学生易偏：\(blindSpot)")
-        }
-
-        if let linkedQuestion = linkedQuestions.first {
-            let trap = linkedQuestion.trapType.nonEmpty ?? ""
-            let evidence = linkedQuestion.paraphraseEvidence.first?.nonEmpty ?? ""
-            let hint = [trap, evidence].filter { !$0.isEmpty }.joined(separator: "｜")
-            if !hint.isEmpty {
-                parts.append("对应考点：\(hint)")
-            }
-        }
-
-        return uniqueStrings(from: parts, limit: 4).joined(separator: "；")
+        return shortSnippet(from: summary, limit: 50)
     }
 
     private static func likelyQuestionType(for role: ParagraphArgumentRole) -> String {
@@ -1862,9 +2056,9 @@ enum NormalizedDocumentConverter {
         return String(trimmed.prefix(32))
     }
 
-    private static func shortSnippet(from text: String) -> String {
+    private static func shortSnippet(from text: String, limit: Int = 120) -> String {
         let trimmed = text.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
-        return String(trimmed.prefix(120))
+        return String(trimmed.prefix(max(limit, 0)))
     }
 
     private static func buildSectionTitles(title: String, paragraphCards: [ParagraphTeachingCard]) -> [String] {

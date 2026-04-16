@@ -69,6 +69,8 @@ struct EnhancedLibraryView: View {
                 selectedDocument = nil
             }
             .environmentObject(viewModel)
+            .interactiveDismissDisabled()
+            .presentationDragIndicator(.hidden)
         }
     }
     

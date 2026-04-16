@@ -87,10 +87,11 @@ final class AppStateReviewRepository: ReviewRepositoryProtocol {
         in document: SourceDocument
     ) -> Card {
         guard let appViewModel else {
+            let faithfulTranslation = explanation?.faithfulTranslation.trimmingCharacters(in: .whitespacesAndNewlines)
             return Card(
                 type: .questionAnswer,
                 frontContent: sentence.text,
-                backContent: explanation?.translation ?? sentence.text,
+                backContent: (faithfulTranslation?.isEmpty == false ? faithfulTranslation : nil) ?? sentence.text,
                 keywords: explanation?.keyTerms.map(\.term) ?? [],
                 knowledgeChunkID: UUID(),
                 difficultyLevel: 3,

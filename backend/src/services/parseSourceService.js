@@ -10,6 +10,11 @@ const ENGLISH_STOPWORDS = new Set([
   "would", "should", "could", "can", "may", "might", "will", "not", "we", "our", "you",
   "your", "them", "these", "those", "than", "then", "after", "before", "during", "about"
 ]);
+const COMMON_ENGLISH_LEXICON = new Set([
+  "allow", "balance", "contact", "corporation", "cultural", "evidence", "growth", "heading",
+  "logical", "museum", "peaceful", "prosperity", "question", "reading", "sustainable",
+  "tourism", "visitor", "quantity", "community", "economic", "environmental"
+]);
 
 const MAX_SEGMENTS_FOR_MODEL = 36;
 const MAX_SENTENCES_PER_SEGMENT_FOR_MODEL = 6;
@@ -293,6 +298,83 @@ function isEnglishMaterial(text) {
     profile.contentWordCount >= 30 &&
     profile.englishLetters >= 220
   );
+}
+
+function reverseString(value) {
+  return String(value || "").split("").reverse().join("");
+}
+
+function looksLikeInstructionOrQuestionParagraph(text) {
+  const normalized = cleanParagraph(text);
+  const lower = normalized.toLowerCase();
+
+  if (/第[一二三四五六七八九十\d]+部分|说明|题干|答案|解析|配对|标题|选择|判断|先做|对照答案|把下列|请根据|阅读下面|题目/.test(normalized)) {
+    return true;
+  }
+
+  return /\bquestions?\b|\bheadings?\b|\bchoose\b|\bmatch(?:ing)?\b|\btrue\b|\bfalse\b|\bnot given\b|\banswer key\b/.test(lower);
+}
+
+function looksLikeBilingualGlossaryParagraph(text) {
+  const normalized = cleanParagraph(text);
+  if (!normalized) return false;
+  const profile = englishProfile(normalized);
+  if (profile.chineseCharacters < 4 || profile.wordCount < 2) return false;
+  return /(是|意为|意思是|译为|译作|mean(?:s|ing)?)/i.test(normalized)
+    && /[“”"']/u.test(normalized);
+}
+
+function looksLikeReversedEnglishGarbage(text) {
+  const tokens = (cleanParagraph(text).match(/[A-Za-z]+(?:'[A-Za-z]+)?/g) || [])
+    .map((token) => token.toLowerCase())
+    .filter((token) => token.length >= 4);
+  if (tokens.length < 4) return false;
+
+  const reversedHits = tokens.reduce((count, token) => {
+    const reversed = reverseString(token);
+    return COMMON_ENGLISH_LEXICON.has(reversed) ? count + 1 : count;
+  }, 0);
+
+  return reversedHits >= Math.max(3, Math.ceil(tokens.length * 0.35));
+}
+
+function looksLikeStrongPassageHeading(text) {
+  const normalized = cleanParagraph(text);
+  if (!normalized) return false;
+  const profile = englishProfile(normalized);
+  return profile.englishRatio >= 0.72
+    && profile.wordCount >= 2
+    && profile.wordCount <= 12
+    && normalized.length <= 96
+    && !/[。！？]/.test(normalized);
+}
+
+function isPassageBodySegment(text) {
+  const normalized = cleanParagraph(text);
+  if (!normalized) return false;
+  if (looksLikeInstructionOrQuestionParagraph(normalized)) return false;
+  if (looksLikeBilingualGlossaryParagraph(normalized)) return false;
+  if (looksLikeReversedEnglishGarbage(normalized)) return false;
+
+  const profile = englishProfile(normalized);
+  if (profile.chineseCharacters > profile.englishLetters * 1.15 && !looksLikeStrongPassageHeading(normalized)) {
+    return false;
+  }
+
+  return isEnglishMaterial(normalized) || looksLikeStrongPassageHeading(normalized);
+}
+
+function filterPassageSegments(rawSegments) {
+  const filtered = rawSegments.filter((segment) => isPassageBodySegment(segment.text));
+  if (filtered.length === 0) {
+    return rawSegments;
+  }
+
+  return filtered.map((segment, index) => ({
+    ...segment,
+    key: `seg_${String(index + 1).padStart(3, "0")}`,
+    index
+  }));
 }
 
 function detectedSourceLanguage(text) {
@@ -1153,7 +1235,7 @@ export async function parseSource({
   }
 
   const sourceId = makeSourceId(source_id);
-  const rawSegments = buildRawSegments({ cleanedText, anchors });
+  const rawSegments = filterPassageSegments(buildRawSegments({ cleanedText, anchors }));
 
   if (rawSegments.length === 0) {
     throw new AppError("资料清洗后没有可用段落。", {

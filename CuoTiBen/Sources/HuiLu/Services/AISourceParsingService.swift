@@ -87,6 +87,8 @@ enum AISourceParsingServiceError: LocalizedError {
 }
 
 enum AISourceParsingService {
+    private static let parseSourceTimeout: TimeInterval = 90
+
     struct EnglishMaterialProfile {
         let englishLetterCount: Int
         let chineseCharacterCount: Int
@@ -162,7 +164,7 @@ enum AISourceParsingService {
 
         var request = URLRequest(url: endpointURL)
         request.httpMethod = "POST"
-        request.timeoutInterval = 40
+        request.timeoutInterval = parseSourceTimeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(
             ParseSourceRequest(
@@ -977,7 +979,9 @@ private extension AISourceParsingService {
         var sentenceIndex = 0
 
         for segment in segments {
-            let localSentences = splitSentencesPreservingPunctuation(in: segment.text)
+            let localSentences = mergeSentenceFragments(
+                splitSentencesPreservingPunctuation(in: segment.text)
+            )
             let fallbackSentences = localSentences.isEmpty ? [normalizedInlineWhitespace(segment.text)] : localSentences
 
             for (localIndex, sentenceText) in fallbackSentences.enumerated() {
@@ -1013,6 +1017,59 @@ private extension AISourceParsingService {
         }
 
         return sentences
+    }
+
+    private static func mergeSentenceFragments(_ sentences: [String]) -> [String] {
+        guard !sentences.isEmpty else { return [] }
+
+        var merged: [String] = []
+        var index = 0
+
+        while index < sentences.count {
+            let current = normalizedInlineWhitespace(sentences[index])
+            guard !current.isEmpty else {
+                index += 1
+                continue
+            }
+
+            if index < sentences.count - 1, looksLikeSentenceFragment(current) {
+                let combined = normalizedInlineWhitespace("\(current) \(sentences[index + 1])")
+                merged.append(combined)
+                index += 2
+                continue
+            }
+
+            if var last = merged.last, looksLikeSentenceFragment(current) {
+                last = normalizedInlineWhitespace("\(last) \(current)")
+                merged[merged.count - 1] = last
+            } else {
+                merged.append(current)
+            }
+
+            index += 1
+        }
+
+        return merged
+    }
+
+    private static func looksLikeSentenceFragment(_ text: String) -> Bool {
+        let normalized = normalizedInlineWhitespace(text)
+        guard !normalized.isEmpty else { return true }
+        if normalized.count >= 36 { return false }
+        if normalized.last.map({ ".!?。！？;；:：".contains($0) }) == true { return false }
+
+        let words = normalized.split(whereSeparator: \.isWhitespace)
+        if words.count <= 3 { return true }
+
+        let lower = normalized.lowercased()
+        let connectorPrefixes = ["and ", "or ", "but ", "yet ", "so ", "because ", "while "]
+        if connectorPrefixes.contains(where: { lower.hasPrefix($0) }) {
+            return true
+        }
+
+        let verbPattern = #"\b(am|is|are|was|were|be|been|being|do|does|did|have|has|had|can|could|may|might|must|shall|should|will|would|become|became|means|mean|shows|show|suggests|suggests|suggest|indicates|indicate|remains|remain|appears|appear|\w+ed|\w+ing)\b"#
+        let hasVerbLikeToken = lower.range(of: verbPattern, options: .regularExpression) != nil
+        return !hasVerbLikeToken
     }
 
     /// 截断到最近的句末标点边界

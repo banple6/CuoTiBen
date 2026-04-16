@@ -25,9 +25,9 @@ struct StructuredSourcePDFReader: UIViewRepresentable {
     func makeUIView(context: Context) -> PDFView {
         let pdfView = PDFView()
         pdfView.autoScales = true
-        pdfView.displayMode = .singlePageContinuous
+        pdfView.displayMode = .singlePage
         pdfView.displayDirection = .vertical
-        pdfView.displaysPageBreaks = true
+        pdfView.displaysPageBreaks = false
         pdfView.pageShadowsEnabled = false
         pdfView.backgroundColor = .clear
         pdfView.documentView?.backgroundColor = .clear
@@ -59,6 +59,11 @@ struct StructuredSourcePDFReader: UIViewRepresentable {
 
 extension StructuredSourcePDFReader {
     final class Coordinator: NSObject {
+        private enum DisplayStrategy: Equatable {
+            case continuous
+            case singlePage
+        }
+
         weak var pdfView: PDFView?
         var onSentenceTap: (Sentence) -> Void
         var onWordTap: (Sentence, String) -> Void
@@ -74,6 +79,8 @@ extension StructuredSourcePDFReader {
         private var currentHighlightAnnotations: [HighlightAnnotationKey: PDFAnnotation] = [:]
         private var lastNavigatedSentenceID: String?
         private var lastJumpToken: String?
+        private var currentDisplayStrategy: DisplayStrategy?
+        private var lastMeasuredViewportWidth: CGFloat = 0
 
         init(
             onSentenceTap: @escaping (Sentence) -> Void,
@@ -107,13 +114,28 @@ extension StructuredSourcePDFReader {
                     renderMode: renderMode
                 )
                 if let pdfDocument = renderResult?.document {
+                    configureDisplayStrategy(
+                        for: pdfDocument,
+                        renderMode: renderMode,
+                        in: pdfView
+                    )
                     pdfView.document = pdfDocument
+                    refreshScaleBounds(in: pdfView)
+                    scheduleViewportRefresh(for: pdfDocument, renderMode: renderMode, in: pdfView)
                 }
                 currentHighlightSentenceID = nil
                 currentHighlightWordToken = nil
                 currentHighlightAnnotations = [:]
                 currentHighlightPageIndex = nil
                 lastNavigatedSentenceID = nil
+            } else if let pdfDocument = pdfView.document {
+                configureDisplayStrategy(
+                    for: pdfDocument,
+                    renderMode: renderMode,
+                    in: pdfView
+                )
+                refreshScaleBounds(in: pdfView)
+                scheduleViewportRefresh(for: pdfDocument, renderMode: renderMode, in: pdfView)
             }
 
             updateHighlight(
@@ -335,6 +357,127 @@ extension StructuredSourcePDFReader {
 
         private func documentOrCurrentPage(in pdfView: PDFView, pageIndex: Int) -> PDFPage? {
             pdfView.document?.page(at: pageIndex)
+        }
+
+        private func configureDisplayStrategy(
+            for document: PDFDocument,
+            renderMode: SourceReaderMode,
+            in pdfView: PDFView
+        ) {
+            let viewportWidth = resolvedViewportWidth(in: pdfView)
+            let strategy = preferredDisplayStrategy(
+                for: document,
+                renderMode: renderMode,
+                viewportWidth: viewportWidth
+            )
+            guard strategy != currentDisplayStrategy || abs(lastMeasuredViewportWidth - viewportWidth) > 1 else { return }
+
+            currentDisplayStrategy = strategy
+            lastMeasuredViewportWidth = viewportWidth
+
+            switch strategy {
+            case .continuous:
+                pdfView.usePageViewController(false, withViewOptions: nil)
+                pdfView.displayMode = .singlePageContinuous
+                pdfView.displayDirection = .vertical
+                pdfView.displaysPageBreaks = true
+            case .singlePage:
+                pdfView.usePageViewController(false, withViewOptions: nil)
+                pdfView.displayMode = .singlePage
+                pdfView.displayDirection = .vertical
+                pdfView.displaysPageBreaks = false
+            }
+        }
+
+        private func refreshScaleBounds(in pdfView: PDFView) {
+            pdfView.autoScales = true
+
+            let fitScale = max(pdfView.scaleFactorForSizeToFit, 0.45)
+            if fitScale.isFinite, fitScale > 0 {
+                pdfView.minScaleFactor = fitScale * 0.88
+                pdfView.maxScaleFactor = max(fitScale * 2.2, pdfView.minScaleFactor + 0.2)
+                if pdfView.scaleFactor < pdfView.minScaleFactor || pdfView.scaleFactor > pdfView.maxScaleFactor {
+                    pdfView.scaleFactor = fitScale
+                }
+            }
+        }
+
+        private func preferredDisplayStrategy(
+            for document: PDFDocument,
+            renderMode: SourceReaderMode,
+            viewportWidth: CGFloat
+        ) -> DisplayStrategy {
+            let projectedHeight = projectedContinuousContentHeight(
+                for: document,
+                viewportWidth: viewportWidth
+            )
+            let safeLimit = preferredContinuousHeightLimit(for: renderMode)
+
+            if projectedHeight >= safeLimit {
+                return .singlePage
+            }
+
+            return .continuous
+        }
+
+        private func scheduleViewportRefresh(
+            for document: PDFDocument,
+            renderMode: SourceReaderMode,
+            in pdfView: PDFView
+        ) {
+            DispatchQueue.main.async { [weak self, weak pdfView] in
+                guard let self, let pdfView else { return }
+                self.configureDisplayStrategy(
+                    for: document,
+                    renderMode: renderMode,
+                    in: pdfView
+                )
+                self.refreshScaleBounds(in: pdfView)
+            }
+        }
+
+        private func resolvedViewportWidth(in pdfView: PDFView) -> CGFloat {
+            if pdfView.bounds.width > 0 {
+                return pdfView.bounds.width
+            }
+
+            if let windowWidth = pdfView.window?.bounds.width, windowWidth > 0 {
+                return windowWidth
+            }
+
+            return UIScreen.main.bounds.width
+        }
+
+        private func projectedContinuousContentHeight(
+            for document: PDFDocument,
+            viewportWidth: CGFloat
+        ) -> CGFloat {
+            guard viewportWidth > 0, document.pageCount > 0 else { return 0 }
+
+            let pageGap: CGFloat = 16
+            var totalHeight: CGFloat = 0
+
+            for index in 0..<document.pageCount {
+                guard let page = document.page(at: index) else { continue }
+                let bounds = page.bounds(for: .mediaBox)
+                guard bounds.width > 0, bounds.height > 0 else { continue }
+                let fitScale = viewportWidth / bounds.width
+                totalHeight += (bounds.height * fitScale)
+                if index < document.pageCount - 1 {
+                    totalHeight += pageGap
+                }
+            }
+
+            return totalHeight
+        }
+
+        private func preferredContinuousHeightLimit(for renderMode: SourceReaderMode) -> CGFloat {
+            switch renderMode {
+            case .readingPDF:
+                return 9_600
+            case .originalPDFAligned:
+                return 10_800
+            }
         }
     }
 }

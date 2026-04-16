@@ -580,7 +580,7 @@ enum ProfessorAnalysisService {
                 coreSkeleton: dto.core_skeleton,
                 chunkLayers: dto.chunk_layers ?? [],
                 grammarFocus: dto.grammar_focus ?? [],
-                faithfulTranslation: dto.faithful_translation ?? dto.natural_chinese_meaning ?? "",
+                faithfulTranslation: dto.faithful_translation ?? "",
                 teachingInterpretation: dto.teaching_interpretation ?? dto.natural_chinese_meaning ?? "",
                 naturalChineseMeaning: dto.natural_chinese_meaning ?? "",
                 sentenceCore: dto.sentence_core ?? "",

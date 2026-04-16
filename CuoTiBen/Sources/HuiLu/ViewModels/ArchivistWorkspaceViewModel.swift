@@ -62,7 +62,7 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
     }
 
     var effectiveAnalysis: ProfessorSentenceAnalysis? {
-        let bundled = bundle.sentenceCard(id: selectedSentenceID)?.analysis
+        let bundled = bundle.displayedSentenceCard(id: selectedSentenceID)?.analysis
         if let sentence = selectedSentence,
            let remote = analysisResult,
            isResultVisible(remote, for: sentence) {
@@ -180,13 +180,13 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
                 try Task.checkCancellation()
                 let context = appViewModel.explainSentenceContext(for: sentence, in: currentDocument)
 
-                // 30 秒超时
+                // 新模型响应更慢，给工作台留足等待窗口，避免未完成就被本地超时打断。
                 let result = try await withThrowingTaskGroup(of: AIExplainSentenceResult.self) { group in
                     group.addTask {
                         try await AIExplainSentenceService.fetchExplanation(for: context)
                     }
                     group.addTask {
-                        try await Task.sleep(nanoseconds: 30_000_000_000)
+                        try await Task.sleep(nanoseconds: 80_000_000_000)
                         throw CancellationError()
                     }
                     let first = try await group.next()!
@@ -243,6 +243,7 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
         analysisTask = nil
         analysisResult = nil
         analysisError = nil
+        isLoadingAnalysis = false
 
         if let sentence = selectedSentence {
             currentAnalysisIdentity = SentenceAnalysisIdentity(
@@ -250,10 +251,8 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
                 sentenceText: sentence.text,
                 anchorLabel: sentence.anchorLabel
             )
-            isLoadingAnalysis = true
         } else {
             currentAnalysisIdentity = nil
-            isLoadingAnalysis = false
         }
     }
 

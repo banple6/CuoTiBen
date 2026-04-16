@@ -118,6 +118,13 @@
 		B0000000000000000000006D /* DocumentParseService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000006D /* DocumentParseService.swift */; };
 		B0000000000000000000006E /* NormalizedDocumentConverter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000006E /* NormalizedDocumentConverter.swift */; };
 		B0000000000000000000006F /* ProfessorAnalysisService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000006F /* ProfessorAnalysisService.swift */; };
+		B00000000000000000000070 /* StructureTreePreviewStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000070 /* StructureTreePreviewStyle.swift */; };
+		B00000000000000000000071 /* StructureTreePreviewLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000071 /* StructureTreePreviewLayout.swift */; };
+		B00000000000000000000072 /* StructureTreePreviewNodeCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000072 /* StructureTreePreviewNodeCard.swift */; };
+		B00000000000000000000073 /* StructureTreePreviewMiniMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000073 /* StructureTreePreviewMiniMap.swift */; };
+		B00000000000000000000074 /* StructureTreePreviewToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000074 /* StructureTreePreviewToolbar.swift */; };
+		B00000000000000000000075 /* StructureTreePreviewCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000075 /* StructureTreePreviewCanvas.swift */; };
+		B00000000000000000000076 /* StructureTreePreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000076 /* StructureTreePreviewView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -233,6 +240,13 @@
 		C0000000000000000000006E /* NormalizedDocumentConverter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NormalizedDocumentConverter.swift; sourceTree = "<group>"; };
 		C00000000000000000000069 /* TextPipelineDiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextPipelineDiagnosticsView.swift; sourceTree = "<group>"; };
 		C0000000000000000000006F /* ProfessorAnalysisService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfessorAnalysisService.swift; sourceTree = "<group>"; };
+		C00000000000000000000070 /* StructureTreePreviewStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StructureTreePreviewStyle.swift; sourceTree = "<group>"; };
+		C00000000000000000000071 /* StructureTreePreviewLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StructureTreePreviewLayout.swift; sourceTree = "<group>"; };
+		C00000000000000000000072 /* StructureTreePreviewNodeCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StructureTreePreviewNodeCard.swift; sourceTree = "<group>"; };
+		C00000000000000000000073 /* StructureTreePreviewMiniMap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StructureTreePreviewMiniMap.swift; sourceTree = "<group>"; };
+		C00000000000000000000074 /* StructureTreePreviewToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StructureTreePreviewToolbar.swift; sourceTree = "<group>"; };
+		C00000000000000000000075 /* StructureTreePreviewCanvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StructureTreePreviewCanvas.swift; sourceTree = "<group>"; };
+		C00000000000000000000076 /* StructureTreePreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StructureTreePreviewView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -409,6 +423,13 @@
 				C0000000000000000000001C /* SourceDetailView.swift */,
 				C0000000000000000000001D /* SourceOriginalTab.swift */,
 				C0000000000000000000001E /* SourceOutlineTab.swift */,
+				C00000000000000000000070 /* StructureTreePreviewStyle.swift */,
+				C00000000000000000000071 /* StructureTreePreviewLayout.swift */,
+				C00000000000000000000072 /* StructureTreePreviewNodeCard.swift */,
+				C00000000000000000000073 /* StructureTreePreviewMiniMap.swift */,
+				C00000000000000000000074 /* StructureTreePreviewToolbar.swift */,
+				C00000000000000000000075 /* StructureTreePreviewCanvas.swift */,
+				C00000000000000000000076 /* StructureTreePreviewView.swift */,
 				C0000000000000000000001F /* SourceDetailSheets.swift */,
 				C00000000000000000000020 /* ReviewWorkbenchView.swift */,
 				C00000000000000000000021 /* StructuredSourcePDFReader.swift */,
@@ -664,6 +685,13 @@
 				B0000000000000000000001C /* SourceDetailView.swift in Sources */,
 				B0000000000000000000001D /* SourceOriginalTab.swift in Sources */,
 				B0000000000000000000001E /* SourceOutlineTab.swift in Sources */,
+				B00000000000000000000070 /* StructureTreePreviewStyle.swift in Sources */,
+				B00000000000000000000071 /* StructureTreePreviewLayout.swift in Sources */,
+				B00000000000000000000072 /* StructureTreePreviewNodeCard.swift in Sources */,
+				B00000000000000000000073 /* StructureTreePreviewMiniMap.swift in Sources */,
+				B00000000000000000000074 /* StructureTreePreviewToolbar.swift in Sources */,
+				B00000000000000000000075 /* StructureTreePreviewCanvas.swift in Sources */,
+				B00000000000000000000076 /* StructureTreePreviewView.swift in Sources */,
 				B0000000000000000000001F /* SourceDetailSheets.swift in Sources */,
 				B00000000000000000000020 /* ReviewWorkbenchView.swift in Sources */,
 				B00000000000000000000021 /* StructuredSourcePDFReader.swift in Sources */,

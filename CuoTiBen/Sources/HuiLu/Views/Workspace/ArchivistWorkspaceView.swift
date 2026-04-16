@@ -37,6 +37,7 @@ struct ArchivistWorkspaceView: View {
                     HStack(alignment: .top, spacing: layout.contentGap) {
                         ArchivistSideRail()
                             .frame(width: layout.sideRailWidth)
+                            .frame(maxHeight: .infinity, alignment: .top)
                             .padding(.top, 18)
 
                         EditorialPaperCanvas(
@@ -66,6 +67,7 @@ struct ArchivistWorkspaceView: View {
                             )
                         }
                         .frame(maxWidth: .infinity)
+                        .frame(maxHeight: .infinity, alignment: .top)
                         .padding(.top, 12)
 
                         ArchivistFloatingNavigator(
@@ -75,9 +77,11 @@ struct ArchivistWorkspaceView: View {
                             onNodeTap: { workspaceViewModel.selectNode($0) }
                         )
                         .frame(width: layout.navigatorWidth)
+                        .frame(maxHeight: .infinity, alignment: .top)
                         .padding(.top, 22)
                     }
                     .padding(.horizontal, layout.outerPadding)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
                     Spacer(minLength: 10)
 
@@ -109,9 +113,6 @@ struct ArchivistWorkspaceView: View {
             }
         }
         .background(ArchivistColors.deskBackground)
-        .task(id: workspaceViewModel.selectedSentenceID) {
-            await workspaceViewModel.loadAnalysis(using: appViewModel)
-        }
         .sheet(item: $selectedWord) { entry in
             WordExplainDetailSheet(document: document, entry: entry)
                 .environmentObject(appViewModel)
@@ -341,18 +342,23 @@ private struct ArchivistFloatingNavigator: View {
                 .font(ArchivistTypography.annotationSmall)
                 .foregroundStyle(ArchivistColors.softInk)
 
-            VStack(alignment: .leading, spacing: 12) {
-                ForEach(nodes) { node in
-                    NavigatorNodeRow(
-                        node: node,
-                        selectedNodeID: selectedNodeID,
-                        onNodeTap: onNodeTap
-                    )
+            ScrollView(showsIndicators: false) {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    ForEach(nodes) { node in
+                        NavigatorNodeRow(
+                            node: node,
+                            selectedNodeID: selectedNodeID,
+                            onNodeTap: onNodeTap
+                        )
+                    }
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(18)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .archivistFloatingShadow()
     }
 }

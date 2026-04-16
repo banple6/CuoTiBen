@@ -1,4 +1,4 @@
-const DEFAULT_MODEL_NAME = "qwen-plus";
+const DEFAULT_MODEL_NAME = "[次-流抗截]gemini-3.1-pro-preview-thinking";
 
 export function getServerConfig() {
   return {

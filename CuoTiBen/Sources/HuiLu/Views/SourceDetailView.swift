@@ -16,6 +16,7 @@ struct SourceDetailView: View {
     @State private var isExpanded = false
     @State private var dragOffset: CGFloat = 0
     @State private var selectedTab: SourceDetailTab = .professor
+    @State private var lastNonOutlineTab: SourceDetailTab = .professor
     @State private var selectedSentence: Sentence?
     @State private var selectedOutlineNode: OutlineNode?
     @State private var jumpTargetSentenceID: String?
@@ -103,7 +104,7 @@ struct SourceDetailView: View {
     private var currentAnalysisForTeachingStatus: ProfessorSentenceAnalysis? {
         guard let structuredSource else { return nil }
         if let sentence = currentSentenceForTeachingStatus {
-            return structuredSource.sentenceCard(id: sentence.id)?.analysis
+            return structuredSource.displayedSentenceCard(id: sentence.id)?.analysis
         }
         return structuredSource.professorSentenceCards.first?.analysis
     }
@@ -184,79 +185,99 @@ struct SourceDetailView: View {
             let baseHeight = isExpanded ? expandedHeight : collapsedHeight
             let liveHeight = min(max(baseHeight - dragOffset, collapsedHeight), expandedHeight)
 
-            VStack(spacing: 0) {
-                Spacer(minLength: 0)
-
-                HStack(spacing: 0) {
+            ZStack {
+                VStack(spacing: 0) {
                     Spacer(minLength: 0)
 
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 36, style: .continuous)
-                            .fill(AppPalette.paperCard.opacity(0.78))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 36, style: .continuous)
-                                    .stroke(Color.white.opacity(0.6), lineWidth: 1)
-                            )
-                            .offset(x: -10, y: 14)
-                            .padding(.horizontal, 16)
+                    HStack(spacing: 0) {
+                        Spacer(minLength: 0)
 
-                        RoundedRectangle(cornerRadius: 36, style: .continuous)
-                            .fill(AppPalette.paperBackgroundDeep.opacity(0.9))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 36, style: .continuous)
-                                    .stroke(AppPalette.paperLine.opacity(0.72), lineWidth: 1)
-                            )
-                            .offset(x: 8, y: 8)
-                            .padding(.horizontal, 8)
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 36, style: .continuous)
+                                .fill(AppPalette.paperCard.opacity(0.78))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 36, style: .continuous)
+                                        .stroke(Color.white.opacity(0.6), lineWidth: 1)
+                                )
+                                .offset(x: -10, y: 14)
+                                .padding(.horizontal, 16)
 
-                        VStack(spacing: 0) {
-                            overlayHeader
-                                .padding(.horizontal, usesPadChrome ? 30 : 24)
-                                .padding(.top, 14)
-                                .padding(.bottom, 18)
-                                .contentShape(Rectangle())
-                                .gesture(sheetDragGesture(collapsedHeight: collapsedHeight, expandedHeight: expandedHeight))
+                            RoundedRectangle(cornerRadius: 36, style: .continuous)
+                                .fill(AppPalette.paperBackgroundDeep.opacity(0.9))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 36, style: .continuous)
+                                        .stroke(AppPalette.paperLine.opacity(0.72), lineWidth: 1)
+                                )
+                                .offset(x: 8, y: 8)
+                                .padding(.horizontal, 8)
 
-                            ScrollView(showsIndicators: false) {
-                                overlayBody
-                                    .padding(.horizontal, usesPadChrome ? 30 : 24)
-                                    .padding(.bottom, safeBottom + 118)
-                            }
+                            VStack(spacing: 0) {
+                                overlayHeaderSection(
+                                    usesPadChrome: usesPadChrome,
+                                    collapsedHeight: collapsedHeight,
+                                    expandedHeight: expandedHeight
+                                )
+
+                                ScrollView(showsIndicators: false) {
+                                    overlayBody
+                                        .padding(.horizontal, usesPadChrome ? 30 : 24)
+                                        .padding(.bottom, safeBottom + 118)
+                                }
 
                                 overlayActionBar(
                                     safeBottom: safeBottom,
                                     usesPadChrome: usesPadChrome,
                                     panelWidth: panelWidth
                                 )
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    }
-                    .background(
-                        RoundedRectangle(cornerRadius: 36, style: .continuous)
-                            .fill(AppPalette.paperCard)
-                            .overlay {
-                                NotebookGrid(spacing: 28)
-                                    .opacity(0.12)
-                                    .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
-                            }
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 36, style: .continuous)
-                                    .stroke(Color.white.opacity(0.92), lineWidth: 1)
-                            )
-                            .overlay(alignment: .topTrailing) {
-                                PaperTapeAccent(color: AppPalette.paperTape)
-                                    .offset(x: -10, y: 8)
-                            }
-                            .shadow(color: Color.black.opacity(0.14), radius: 28, y: 16)
-                    )
-                    .frame(width: panelWidth, height: liveHeight)
+                        .background(
+                            RoundedRectangle(cornerRadius: 36, style: .continuous)
+                                .fill(AppPalette.paperCard)
+                                .overlay {
+                                    NotebookGrid(spacing: 28)
+                                        .opacity(0.12)
+                                        .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
+                                }
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 36, style: .continuous)
+                                        .stroke(Color.white.opacity(0.92), lineWidth: 1)
+                                )
+                                .overlay(alignment: .topTrailing) {
+                                    PaperTapeAccent(color: AppPalette.paperTape)
+                                        .offset(x: -10, y: 8)
+                                }
+                                .shadow(color: Color.black.opacity(0.14), radius: 28, y: 16)
+                        )
+                        .frame(width: panelWidth, height: liveHeight)
 
-                    Spacer(minLength: 0)
+                        Spacer(minLength: 0)
+                    }
+                }
+
+                if let structuredSource, selectedTab == .outline {
+                    StructureTreeWorkspaceOverlay(
+                        title: liveDocument.title,
+                        nodes: structuredSource.outline,
+                        highlightedNodeID: highlightedOutlineNodeID,
+                        jumpTargetNodeID: jumpTargetOutlineNodeID,
+                        ancestorNodeIDs: structuredOutlineAncestorNodeIDs,
+                        onNodeTap: { node in
+                            handleOutlineNodeTap(node)
+                        },
+                        onJumpHandled: handleOutlineJumpHandled,
+                        onClose: closeOutlineWorkspace
+                    )
+                    .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .center)))
+                    .zIndex(20)
                 }
             }
             }
         }
         .ignoresSafeArea()
+        .interactiveDismissDisabled(selectedTab == .outline)
+        .presentationDragIndicator(selectedTab == .outline ? .hidden : .visible)
         .task(id: liveDocument.id) {
             guard structuredSource == nil else { return }
             await viewModel.loadStructuredSource(for: liveDocument)
@@ -301,6 +322,11 @@ struct SourceDetailView: View {
             .environmentObject(viewModel)
             .presentationDetents([.medium, .large])
         }
+        .onChange(of: selectedTab) { newValue in
+            if newValue != .outline {
+                lastNonOutlineTab = newValue
+            }
+        }
     }
 
     private var overlayHeader: some View {
@@ -332,6 +358,30 @@ struct SourceDetailView: View {
             ProfessorTeachingStatusHeader(
                 snapshot: teachingStatusSnapshot,
                 compact: true
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func overlayHeaderSection(
+        usesPadChrome: Bool,
+        collapsedHeight: CGFloat,
+        expandedHeight: CGFloat
+    ) -> some View {
+        let header = overlayHeader
+            .padding(.horizontal, usesPadChrome ? 30 : 24)
+            .padding(.top, 14)
+            .padding(.bottom, 18)
+            .contentShape(Rectangle())
+
+        if selectedTab == .outline {
+            header
+        } else {
+            header.gesture(
+                sheetDragGesture(
+                    collapsedHeight: collapsedHeight,
+                    expandedHeight: expandedHeight
+                )
             )
         }
     }
@@ -412,15 +462,10 @@ struct SourceDetailView: View {
                 onJumpHandled: handleOriginalJumpHandled
             )
         } else if selectedTab == .outline {
-            TeachingTreeCanvasView(
-                nodes: structuredSource.outline,
-                highlightedNodeID: highlightedOutlineNodeID,
-                jumpTargetNodeID: jumpTargetOutlineNodeID,
-                ancestorNodeIDs: structuredOutlineAncestorNodeIDs,
-                onNodeTap: { node in
-                    handleOutlineNodeTap(node)
-                },
-                onJumpHandled: handleOutlineJumpHandled
+            SentenceExplainBlock(
+                title: "教学树工作区",
+                content: "结构树已切换到固定工作区。请在上层面板中平移、缩放并聚焦当前节点；关闭只通过右上角显式按钮完成。",
+                tone: .structure
             )
         } else {
             ProfessorAnalysisTab(
@@ -686,6 +731,10 @@ struct SourceDetailView: View {
     private func handleOutlineNodeTap(_ node: OutlineNode) {
         syncHighlight(for: node)
         selectedOutlineNode = node
+    }
+
+    private func closeOutlineWorkspace() {
+        selectedTab = lastNonOutlineTab == .outline ? .professor : lastNonOutlineTab
     }
 
     private func handleOriginalJumpHandled() {
