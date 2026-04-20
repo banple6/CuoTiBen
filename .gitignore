@@ -11,6 +11,7 @@ xcuserdata/
 DerivedData/
 .codex-derived/
 .codex/
+.worktrees/
 
 # Backend
 backend/node_modules/
