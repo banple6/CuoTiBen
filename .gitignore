@@ -15,4 +15,7 @@ DerivedData/
 
 # Backend
 backend/node_modules/
-backend/.env
+.env
+.env.*
+!.env.example
+!*.env.example
