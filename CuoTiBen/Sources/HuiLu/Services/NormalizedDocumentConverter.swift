@@ -80,12 +80,17 @@ enum NormalizedDocumentConverter {
             severity: .info
         )
 
+        let cleanedBlockIndex = Dictionary(uniqueKeysWithValues: cleanedBlocks.map { ($0.id, $0) })
         let cleanedParagraphs = filterAndRepairParagraphs(
             document.paragraphs,
-            cleanedBlockIDs: Set(cleanedBlocks.map(\.id))
+            cleanedBlockIDs: Set(cleanedBlocks.map(\.id)),
+            blockIndex: cleanedBlockIndex
         )
 
-        let passageParagraphs = selectPassageParagraphs(from: cleanedParagraphs)
+        let passageParagraphs = selectPassageParagraphs(
+            from: cleanedParagraphs,
+            blockIndex: cleanedBlockIndex
+        )
         let questionParagraphs = cleanedParagraphs.filter { $0.zoneRole == .question }
         let answerKeyParagraphs = cleanedParagraphs.filter { $0.zoneRole == .answerKey }
         let vocabularyParagraphs = cleanedParagraphs.filter { $0.zoneRole == .vocabularySupport }
@@ -235,6 +240,10 @@ enum NormalizedDocumentConverter {
             return rebuilt
         }
 
+        if !existing.analysis.isCompatible(with: sentence.text) {
+            return rebuilt
+        }
+
         return ProfessorSentenceCard(
             id: existing.id,
             sentenceID: existing.sentenceID,
@@ -246,19 +255,41 @@ enum NormalizedDocumentConverter {
 
     private static func filterAndRepairParagraphs(
         _ paragraphs: [NormalizedParagraph],
-        cleanedBlockIDs: Set<String>
+        cleanedBlockIDs: Set<String>,
+        blockIndex: [String: NormalizedBlock]
     ) -> [NormalizedParagraph] {
         paragraphs.compactMap { paragraph in
             let validBlockIDs = paragraph.blockIDs.filter { cleanedBlockIDs.contains($0) }
             guard !validBlockIDs.isEmpty else { return nil }
             let trimmed = paragraph.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard trimmed.count >= minParagraphTextLength else { return nil }
+            let repaired = TextPipelineValidator.validateAndRepairIfReversed(trimmed)
+            let sourceKind = classifyParagraphSourceKind(
+                paragraph: paragraph,
+                blockIndex: blockIndex,
+                text: repaired.text
+            )
+            let hygiene = sourceHygieneSnapshot(
+                for: paragraph,
+                blockIndex: blockIndex,
+                repairedText: repaired.text,
+                wasRepaired: repaired.wasRepaired,
+                sourceKind: sourceKind
+            )
+
+            if repaired.wasRepaired {
+                TextPipelineDiagnostics.log(
+                    "PP",
+                    "[PP][Hygiene] 段落级反转修复: page=\(paragraph.page) paragraph=\(paragraph.id) kind=\(sourceKind.rawValue) score=\(String(format: "%.2f", hygiene.score))",
+                    severity: .repaired
+                )
+            }
             return NormalizedParagraph(
                 id: paragraph.id,
                 blockIDs: validBlockIDs,
                 page: paragraph.page,
                 endPage: paragraph.endPage,
-                text: trimmed,
+                text: repaired.text,
                 language: paragraph.language,
                 zoneRole: paragraph.zoneRole,
                 crossPage: paragraph.crossPage,
@@ -267,13 +298,28 @@ enum NormalizedDocumentConverter {
         }
     }
 
-    private static func selectPassageParagraphs(from paragraphs: [NormalizedParagraph]) -> [NormalizedParagraph] {
-        let explicitPassage = paragraphs.filter { isStrictPassageBodyParagraph($0, allowUnknownZone: false) }
+    private static func selectPassageParagraphs(
+        from paragraphs: [NormalizedParagraph],
+        blockIndex: [String: NormalizedBlock]
+    ) -> [NormalizedParagraph] {
+        let explicitPassage = paragraphs.filter {
+            isStrictPassageBodyParagraph(
+                $0,
+                allowUnknownZone: false,
+                blockIndex: blockIndex
+            )
+        }
         if !explicitPassage.isEmpty {
             return explicitPassage
         }
 
-        return paragraphs.filter { isStrictPassageBodyParagraph($0, allowUnknownZone: true) }
+        return paragraphs.filter {
+            isStrictPassageBodyParagraph(
+                $0,
+                allowUnknownZone: true,
+                blockIndex: blockIndex
+            )
+        }
     }
 
     private struct PassageBodyProfile {
@@ -326,7 +372,8 @@ enum NormalizedDocumentConverter {
 
     private static func isStrictPassageBodyParagraph(
         _ paragraph: NormalizedParagraph,
-        allowUnknownZone: Bool
+        allowUnknownZone: Bool,
+        blockIndex: [String: NormalizedBlock]
     ) -> Bool {
         if !allowUnknownZone && paragraph.zoneRole != .passage {
             return false
@@ -336,9 +383,32 @@ enum NormalizedDocumentConverter {
         guard trimmed.count >= minParagraphTextLength else { return false }
 
         let profile = passageBodyProfile(for: trimmed)
+        let sourceKind = classifyParagraphSourceKind(
+            paragraph: paragraph,
+            blockIndex: blockIndex,
+            text: trimmed
+        )
+        let hygiene = sourceHygieneSnapshot(
+            for: paragraph,
+            blockIndex: blockIndex,
+            repairedText: trimmed,
+            wasRepaired: false,
+            sourceKind: sourceKind
+        )
         if looksLikeInstructionOrQuestionParagraph(trimmed) { return false }
         if looksLikeBilingualGlossaryParagraph(trimmed, profile: profile) { return false }
         if looksLikeReversedEnglishGarbage(trimmed, profile: profile) { return false }
+        if !hygiene.isReliableForTeachingMainline {
+            TextPipelineDiagnostics.log(
+                "PP",
+                "[PP][Hygiene] 跳过低卫生段落: page=\(paragraph.page) paragraph=\(paragraph.id) kind=\(sourceKind.rawValue) score=\(String(format: "%.2f", hygiene.score)) flags=\(hygiene.flags.joined(separator: ","))",
+                severity: .warning
+            )
+            return false
+        }
+        if sourceKind != .passageBody && sourceKind != .passageHeading {
+            return false
+        }
 
         if looksLikePassageHeading(trimmed, profile: profile) {
             return true
@@ -359,6 +429,108 @@ enum NormalizedDocumentConverter {
         case .chinese:
             return false
         }
+    }
+
+    private static func classifyParagraphSourceKind(
+        paragraph: NormalizedParagraph,
+        blockIndex: [String: NormalizedBlock],
+        text: String
+    ) -> SourceContentKind {
+        let blocks = paragraph.blockIDs.compactMap { blockIndex[$0] }
+        let blockTypes = Set(blocks.map(\.blockType))
+        let profile = passageBodyProfile(for: text)
+
+        if paragraph.zoneRole == .question || blockTypes.contains(.questionStem) || blockTypes.contains(.optionList) {
+            return .questionSupport
+        }
+        if paragraph.zoneRole == .answerKey {
+            return .answerSupport
+        }
+        if blockTypes.contains(.chineseExplanation) {
+            return .chineseExplanation
+        }
+        if blockTypes.contains(.bilingualNote) || blockTypes.contains(.glossary) {
+            return .bilingualAnnotation
+        }
+        if looksLikeInstructionOrQuestionParagraph(text) || paragraph.zoneRole == .metaInstruction {
+            return .polluted
+        }
+        if looksLikeBilingualGlossaryParagraph(text, profile: profile) {
+            return .bilingualAnnotation
+        }
+        if profile.chineseCharacters > max(12, Int(Double(max(profile.englishLetters, 1)) * 0.9)) {
+            return .polluted
+        }
+        if looksLikePassageHeading(text, profile: profile) {
+            return .passageHeading
+        }
+        if paragraph.zoneRole == .passage || paragraph.zoneRole == .unknown {
+            return .passageBody
+        }
+        return .unknown
+    }
+
+    private static func sourceHygieneSnapshot(
+        for paragraph: NormalizedParagraph,
+        blockIndex: [String: NormalizedBlock],
+        repairedText: String,
+        wasRepaired: Bool,
+        sourceKind: SourceContentKind
+    ) -> SourceHygieneSnapshot {
+        let blocks = paragraph.blockIDs.compactMap { blockIndex[$0] }
+        let englishLetters = repairedText.unicodeScalars.filter {
+            ($0.value >= 0x41 && $0.value <= 0x5A) || ($0.value >= 0x61 && $0.value <= 0x7A)
+        }.count
+        let chineseCharacters = repairedText.unicodeScalars.filter {
+            $0.value >= 0x4E00 && $0.value <= 0x9FFF
+        }.count
+        let ratioBase = max(englishLetters + chineseCharacters, 1)
+        let englishRatio = Double(englishLetters) / Double(ratioBase)
+        let chineseRatio = Double(chineseCharacters) / Double(ratioBase)
+        let averageOCRConfidence = blocks.isEmpty
+            ? 0.72
+            : blocks.map(\.confidence).reduce(0, +) / Double(blocks.count)
+
+        var flags: [String] = []
+        let hasChineseExplanation = blocks.contains { $0.blockType == .chineseExplanation }
+        let hasBilingualAnnotation = blocks.contains { $0.blockType == .bilingualNote || $0.blockType == .glossary }
+        let hasInstructionalLeak = blocks.contains {
+            $0.blockType == .questionStem || $0.blockType == .optionList || $0.zoneRole == .metaInstruction
+        }
+        let mixedContamination = hasChineseExplanation || hasBilingualAnnotation || hasInstructionalLeak
+            || (paragraph.language == .mixed && chineseRatio >= 0.18 && englishRatio <= 0.78)
+
+        if wasRepaired { flags.append("reversed_repaired") }
+        if hasChineseExplanation { flags.append("chinese_explanation") }
+        if hasBilingualAnnotation { flags.append("bilingual_annotation") }
+        if hasInstructionalLeak { flags.append("instructional") }
+        if sourceKind == .polluted { flags.append("polluted") }
+        if mixedContamination { flags.append("mixed_contamination") }
+
+        var score = 1.0
+        if wasRepaired { score -= 0.08 }
+        if mixedContamination { score -= 0.24 }
+        if chineseRatio > 0.24 { score -= min((chineseRatio - 0.24) * 0.8, 0.18) }
+        if englishRatio < 0.48 { score -= min((0.48 - englishRatio) * 0.85, 0.2) }
+        if averageOCRConfidence < 0.72 {
+            score -= min((0.72 - averageOCRConfidence) * 0.46, 0.18)
+        }
+        if sourceKind == .chineseExplanation || sourceKind == .bilingualAnnotation {
+            score -= 0.24
+        }
+        if sourceKind == .questionSupport || sourceKind == .answerSupport || sourceKind == .polluted {
+            score -= 0.3
+        }
+
+        return SourceHygieneSnapshot(
+            score: min(max(score, 0.02), 1),
+            reversedRepaired: wasRepaired,
+            hasMixedContamination: mixedContamination,
+            chineseRatio: chineseRatio,
+            englishRatio: englishRatio,
+            ocrConfidence: averageOCRConfidence,
+            flags: flags
+        )
     }
 
     private static func looksLikePassageHeading(
@@ -426,16 +598,38 @@ enum NormalizedDocumentConverter {
 
         for (paragraphIdx, paragraph) in paragraphs.enumerated() {
             let segmentID = "seg_\(paragraphIdx)"
+            let segmentSourceKind = classifyParagraphSourceKind(
+                paragraph: paragraph,
+                blockIndex: blockIndex,
+                text: paragraph.text
+            )
+            let segmentHygiene = sourceHygieneSnapshot(
+                for: paragraph,
+                blockIndex: blockIndex,
+                repairedText: paragraph.text,
+                wasRepaired: false,
+                sourceKind: segmentSourceKind
+            )
             let sentenceTexts = splitIntoSentences(paragraph.text)
             var sentenceIDs: [String] = []
             var localSentences: [Sentence] = []
 
             for (localIdx, sentenceText) in sentenceTexts.enumerated() {
-                let trimmed = sentenceText.trimmingCharacters(in: .whitespacesAndNewlines)
+                let repaired = TextPipelineValidator.validateAndRepairIfReversed(sentenceText)
+                let trimmed = repaired.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else { continue }
 
                 let sentenceID = "sen_\(globalSentenceIndex)"
                 let geometry = buildGeometry(for: paragraph, blockIndex: blockIndex)
+                let sentenceHygiene = SourceHygieneSnapshot(
+                    score: max(segmentHygiene.score - (repaired.wasRepaired ? 0.04 : 0), 0.02),
+                    reversedRepaired: segmentHygiene.reversedRepaired || repaired.wasRepaired,
+                    hasMixedContamination: segmentHygiene.hasMixedContamination,
+                    chineseRatio: segmentHygiene.chineseRatio,
+                    englishRatio: segmentHygiene.englishRatio,
+                    ocrConfidence: segmentHygiene.ocrConfidence,
+                    flags: Array(Set(segmentHygiene.flags + (repaired.wasRepaired ? ["sentence_reversed_repaired"] : []))).sorted()
+                )
 
                 let sentence = Sentence(
                     id: sentenceID,
@@ -446,7 +640,14 @@ enum NormalizedDocumentConverter {
                     text: trimmed,
                     anchorLabel: "第\(paragraph.page)页 第\(localIdx + 1)句",
                     page: paragraph.page,
-                    geometry: geometry
+                    geometry: geometry,
+                    provenance: NodeProvenance(
+                        sourceSegmentID: segmentID,
+                        sourceSentenceID: sentenceID,
+                        sourceKind: segmentSourceKind,
+                        consistencyScore: sentenceHygiene.score
+                    ),
+                    hygiene: sentenceHygiene
                 )
 
                 localSentences.append(sentence)
@@ -461,7 +662,14 @@ enum NormalizedDocumentConverter {
                 text: paragraph.text,
                 anchorLabel: "第\(paragraph.page)页",
                 page: paragraph.page,
-                sentenceIDs: sentenceIDs
+                sentenceIDs: sentenceIDs,
+                provenance: NodeProvenance(
+                    sourceSegmentID: segmentID,
+                    sourceSentenceID: sentenceIDs.first,
+                    sourceKind: segmentSourceKind,
+                    consistencyScore: segmentHygiene.score
+                ),
+                hygiene: segmentHygiene
             )
 
             segments.append(segment)
@@ -778,11 +986,18 @@ enum NormalizedDocumentConverter {
         let paragraphNodes: [OutlineNode] = paragraphCards.map { card in
             let sentences = sentencesBySegment[card.segmentID] ?? []
             let linkedQuestions = (linkedQuestionsBySegment[card.segmentID] ?? []).map(\.1)
+            let paragraphSegment = segments.first(where: { $0.id == card.segmentID })
+            let validatedParagraph = AnchorConsistencyValidator.validatedParagraphNodeContent(
+                card: card,
+                sentences: sentences,
+                proposedTitle: teachingParagraphNodeTitle(card: card),
+                proposedSummary: teachingParagraphNodeSummary(card: card, linkedQuestions: linkedQuestions)
+            )
             let questionNodes = linkedQuestions.enumerated().map { offset, link in
                 let localSentenceIDs = link.supportingSentenceIDs.filter {
                     sentenceSegmentIndex[$0] == card.segmentID
                 }
-                let anchorSentenceID = localSentenceIDs.first ?? card.coreSentenceID
+                let anchorSentenceID = localSentenceIDs.first ?? validatedParagraph.anchorSentenceID
                 return OutlineNode(
                     id: "question_\(card.segmentID)_\(link.id)",
                     sourceID: sourceID,
@@ -799,18 +1014,30 @@ enum NormalizedDocumentConverter {
                         label: card.anchorLabel
                     ),
                     sourceSegmentIDs: [card.segmentID],
-                    sourceSentenceIDs: localSentenceIDs,
+                    sourceSentenceIDs: anchorSentenceID.map { [$0] } ?? [],
+                    provenance: NodeProvenance(
+                        sourceSegmentID: card.segmentID,
+                        sourceSentenceID: anchorSentenceID,
+                        sourceKind: .questionSupport,
+                        consistencyScore: localSentenceIDs.isEmpty ? 0.58 : 0.76
+                    ),
                     children: []
                 )
             }
             let supportingSentenceNodes = sentences
                 .filter { sentence in
-                    sentence.id == card.coreSentenceID || sentenceCardIndex[sentence.id]?.isKeySentence == true
+                    sentence.id == validatedParagraph.anchorSentenceID || sentenceCardIndex[sentence.id]?.isKeySentence == true
                 }
                 .prefix(maxOutlineSupportingSentences)
                 .enumerated()
                 .map { _, sentence in
                     let analysis = sentenceCardIndex[sentence.id]?.analysis
+                    let validatedSentence = AnchorConsistencyValidator.validatedSentenceNodeContent(
+                        sentence: sentence,
+                        analysis: analysis,
+                        proposedTitle: teachingSentenceNodeTitle(sentence: sentence, analysis: analysis),
+                        proposedSummary: teachingSentenceSummary(analysis: analysis, sentence: sentence.text)
+                    )
                     return OutlineNode(
                         id: "support_\(sentence.id)",
                         sourceID: sourceID,
@@ -818,24 +1045,8 @@ enum NormalizedDocumentConverter {
                         depth: 2,
                         order: sentence.index,
                         nodeType: .supportingSentence,
-                        title: {
-                            if let analysis,
-                               let core = analysis.renderedSentenceCore.nonEmpty {
-                                let functionHead = analysis.renderedSentenceFunction
-                                    .split(separator: "：", maxSplits: 1)
-                                    .first
-                                    .map(String.init)?
-                                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                                if !functionHead.isEmpty {
-                                    return "\(functionHead)｜\(core)"
-                                }
-                                if let role = professorSentenceRolePresentation(for: analysis.evidenceType)?.label {
-                                    return "\(role)｜\(core)"
-                                }
-                            }
-                            return analysis?.renderedSentenceCore.nonEmpty ?? shortFocusText(from: sentence.text)
-                        }(),
-                        summary: teachingSentenceSummary(analysis: analysis, sentence: sentence.text),
+                        title: validatedSentence.title,
+                        summary: validatedSentence.summary,
                         anchor: OutlineAnchor(
                             segmentID: sentence.segmentID,
                             sentenceID: sentence.id,
@@ -844,11 +1055,22 @@ enum NormalizedDocumentConverter {
                         ),
                         sourceSegmentIDs: [sentence.segmentID],
                         sourceSentenceIDs: [sentence.id],
+                        provenance: NodeProvenance(
+                            sourceSegmentID: sentence.segmentID,
+                            sourceSentenceID: sentence.id,
+                            sourceKind: sentence.provenance.sourceKind,
+                            consistencyScore: validatedSentence.consistencyScore
+                        ),
                         children: []
                     )
                 }
 
-            let focusSummary = teachingFocusSummary(card: card, linkedQuestions: linkedQuestions)
+            let validatedFocus = AnchorConsistencyValidator.validatedFocusNodeContent(
+                card: card,
+                sentences: sentences,
+                proposedTitle: teachingFocusTitle(card: card),
+                proposedSummary: teachingFocusSummary(card: card, linkedQuestions: linkedQuestions)
+            )
             let focusNode = OutlineNode(
                 id: "focus_\(card.segmentID)",
                 sourceID: sourceID,
@@ -856,16 +1078,22 @@ enum NormalizedDocumentConverter {
                 depth: 2,
                 order: card.paragraphIndex * 10,
                 nodeType: .teachingFocus,
-                title: teachingFocusTitle(card: card),
-                summary: focusSummary,
+                title: validatedFocus.title,
+                summary: validatedFocus.summary,
                 anchor: OutlineAnchor(
                     segmentID: card.segmentID,
-                    sentenceID: card.coreSentenceID,
+                    sentenceID: validatedFocus.anchorSentenceID,
                     page: sentences.first?.page,
                     label: card.anchorLabel
                 ),
                 sourceSegmentIDs: [card.segmentID],
-                sourceSentenceIDs: card.coreSentenceID.map { [$0] } ?? [],
+                sourceSentenceIDs: validatedFocus.anchorSentenceID.map { [$0] } ?? [],
+                provenance: NodeProvenance(
+                    sourceSegmentID: card.segmentID,
+                    sourceSentenceID: validatedFocus.anchorSentenceID,
+                    sourceKind: paragraphSegment?.provenance.sourceKind ?? .passageBody,
+                    consistencyScore: validatedFocus.consistencyScore
+                ),
                 children: []
             )
 
@@ -876,16 +1104,22 @@ enum NormalizedDocumentConverter {
                 depth: 1,
                 order: card.paragraphIndex,
                 nodeType: .paragraphTheme,
-                title: teachingParagraphNodeTitle(card: card),
-                summary: teachingParagraphNodeSummary(card: card, linkedQuestions: linkedQuestions),
+                title: validatedParagraph.title,
+                summary: validatedParagraph.summary,
                 anchor: OutlineAnchor(
                     segmentID: card.segmentID,
-                    sentenceID: card.coreSentenceID,
+                    sentenceID: validatedParagraph.anchorSentenceID,
                     page: sentences.first?.page,
                     label: card.anchorLabel
                 ),
                 sourceSegmentIDs: [card.segmentID],
-                sourceSentenceIDs: sentences.map(\.id),
+                sourceSentenceIDs: validatedParagraph.anchorSentenceID.map { [$0] } ?? [],
+                provenance: NodeProvenance(
+                    sourceSegmentID: card.segmentID,
+                    sourceSentenceID: validatedParagraph.anchorSentenceID,
+                    sourceKind: paragraphSegment?.provenance.sourceKind ?? .passageBody,
+                    consistencyScore: validatedParagraph.consistencyScore
+                ),
                 children: [focusNode] + questionNodes + supportingSentenceNodes
             )
         }
@@ -897,11 +1131,18 @@ enum NormalizedDocumentConverter {
             depth: 0,
             order: 0,
             nodeType: .passageRoot,
-            title: "文章主题与问题意识",
-            summary: [overview?.displayedArticleTheme, overview?.displayedAuthorCoreQuestion, overview?.displayedProgressionPath, overview?.displayedLikelyQuestionTypes.first, overview?.displayedLogicPitfalls.first]
-                .compactMap { $0?.nonEmpty }
-                .joined(separator: "｜")
-                .nonEmpty ?? "正文教学树",
+            title: {
+                let theme = shortSnippet(from: overview?.displayedArticleTheme ?? "", limit: 22)
+                return theme.isEmpty ? "文章主题与问题意识" : theme
+            }(),
+            summary: {
+                let question = shortSnippet(from: overview?.displayedAuthorCoreQuestion ?? "", limit: 28)
+                if !question.isEmpty {
+                    return "核心问题：\(question)"
+                }
+                let progression = shortSnippet(from: overview?.displayedProgressionPath ?? "", limit: 52)
+                return progression.isEmpty ? "先看主题，再顺着段落分支定位关键句。" : progression
+            }(),
             anchor: OutlineAnchor(
                 segmentID: segments.first?.id,
                 sentenceID: segments.first.flatMap { sentencesBySegment[$0.id]?.first?.id },
@@ -909,7 +1150,13 @@ enum NormalizedDocumentConverter {
                 label: segments.first?.anchorLabel ?? "原文"
             ),
             sourceSegmentIDs: segments.map(\.id),
-            sourceSentenceIDs: segments.flatMap { sentencesBySegment[$0.id]?.map(\.id) ?? [] },
+            sourceSentenceIDs: segments.first.flatMap { sentencesBySegment[$0.id]?.first?.id }.map { [$0] } ?? [],
+            provenance: NodeProvenance(
+                sourceSegmentID: segments.first?.id,
+                sourceSentenceID: segments.first.flatMap { sentencesBySegment[$0.id]?.first?.id },
+                sourceKind: segments.first?.provenance.sourceKind ?? .passageBody,
+                consistencyScore: 0.9
+            ),
             children: paragraphNodes
         )
 
@@ -1013,6 +1260,11 @@ enum NormalizedDocumentConverter {
         if lower.contains("which") || lower.contains("that") || lower.contains("while") { score += 10 }
         if role == .conclusion && (lower.contains("therefore") || lower.contains("thus")) { score += 25 }
         if role == .evidence && (lower.contains("for example") || lower.contains("for instance")) { score += 25 }
+        score += sentence.hygiene.score * 24
+        if sentence.provenance.sourceKind == .passageHeading { score -= 12 }
+        if sentence.provenance.sourceKind == .chineseExplanation || sentence.provenance.sourceKind == .bilingualAnnotation {
+            score -= 30
+        }
         return score
     }
 
@@ -1573,28 +1825,13 @@ enum NormalizedDocumentConverter {
         coreClause: String,
         chunks: [String]
     ) -> String {
-        let lower = sentence.lowercased()
+        _ = sentence
+        _ = paragraphTheme
+        _ = coreClause
+        _ = chunks
 
-        if lower.hasPrefix("although") || lower.hasPrefix("though") || lower.contains(" even though ") {
-            return "句意可以理解为：前面先交代让步背景，真正落点在后面那层核心判断。"
-        }
-        if lower.contains("however") || lower.contains(" but ") || lower.contains(" yet ") {
-            return "句意可以理解为：前半部分更多是在铺垫或对比，真正要记住的是转折后落下来的判断。"
-        }
-        if lower.contains("because") || lower.contains("therefore") || lower.contains("thus") {
-            return "句意可以理解为：这句话在说明原因和结果之间的关系，核心判断要跟着主句主干读。"
-        }
-        if chunks.count >= 3 {
-            return "句意可以理解为：先抓住主句主干，再把条件、限定和补充说明一层层补回去。"
-        }
-        if paragraphTheme?.nonEmpty != nil {
-            return "句意可以理解为：作者在这里围绕本段主题提出一个完整判断，其余信息都在为这个判断服务。"
-        }
-        let focus = shortSnippet(from: coreClause, limit: 48)
-        if !focus.isEmpty {
-            return "句意可以先抓“\(focus)”这一主干，再把周围修饰一起带回去理解。"
-        }
-        return "句意可以理解为：这句话表达的是一个完整判断，其余成分是在补范围、条件或修饰。"
+        // 本地骨架不再伪造“忠实翻译”，避免把教学提示错当译文展示给用户。
+        return ""
     }
 
     private static func buildTeachingInterpretation(
@@ -1785,6 +2022,30 @@ enum NormalizedDocumentConverter {
         return shortSnippet(from: summary, limit: 36)
     }
 
+    private static func teachingSentenceNodeTitle(
+        sentence: Sentence,
+        analysis: ProfessorSentenceAnalysis?
+    ) -> String {
+        if let analysis {
+            let functionHead = analysis.renderedSentenceFunction
+                .split(separator: "：", maxSplits: 1)
+                .first
+                .map(String.init)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !functionHead.isEmpty {
+                return "第\(sentence.localIndex + 1)句｜\(shortSnippet(from: functionHead, limit: 12))"
+            }
+            if let role = professorSentenceRolePresentation(for: analysis.evidenceType)?.label,
+               !role.isEmpty {
+                return "第\(sentence.localIndex + 1)句｜\(shortSnippet(from: role, limit: 12))"
+            }
+            if let core = analysis.renderedSentenceCore.nonEmpty {
+                return "第\(sentence.localIndex + 1)句｜\(shortSnippet(from: core, limit: 12))"
+            }
+        }
+        return "第\(sentence.localIndex + 1)句关键句"
+    }
+
     private static func teachingQuestionNodeTitle(link: QuestionEvidenceLink) -> String {
         if let trap = link.trapType.nonEmpty {
             return trap
@@ -1794,19 +2055,15 @@ enum NormalizedDocumentConverter {
     }
 
     private static func teachingQuestionNodeSummary(link: QuestionEvidenceLink) -> String {
-        var parts: [String] = []
-
-        if let question = link.questionText.nonEmpty {
-            parts.append("题干：\(question)")
+        let evidence = shortSnippet(from: link.paraphraseEvidence.first ?? "", limit: 22)
+        if !evidence.isEmpty {
+            return "证据：\(evidence)"
         }
-        if let evidence = link.paraphraseEvidence.first?.nonEmpty {
-            parts.append("证据：\(evidence)")
+        let answerKey = shortSnippet(from: link.answerKeySnippet ?? "", limit: 20)
+        if !answerKey.isEmpty {
+            return "答案线索：\(answerKey)"
         }
-        if let answerKey = link.answerKeySnippet?.nonEmpty {
-            parts.append("答案线索：\(answerKey)")
-        }
-
-        return uniqueStrings(from: parts, limit: 3).joined(separator: "｜")
+        return shortSnippet(from: link.questionText, limit: 24)
     }
 
     private static func teachingFocusSummary(
@@ -1814,13 +2071,15 @@ enum NormalizedDocumentConverter {
         linkedQuestions: [QuestionEvidenceLink]
     ) -> String {
         let primaryFocus = shortSnippet(from: card.displayedTeachingFocuses.first ?? "", limit: 24)
-        let examValue = shortSnippet(from: card.displayedExamValue, limit: 20)
-        let questionHint = shortSnippet(from: linkedQuestions.first?.trapType ?? "", limit: 14)
+        let blindSpot = shortSnippet(from: card.displayedStudentBlindSpot ?? "", limit: 18)
+        let examValue = shortSnippet(from: card.displayedExamValue, limit: 18)
+        let questionHint = shortSnippet(from: linkedQuestions.first?.trapType ?? "", limit: 12)
 
         let summary = [
             primaryFocus.isEmpty ? "" : "优先学：\(primaryFocus)",
-            examValue.isEmpty ? "" : "命题点：\(examValue)",
-            questionHint.isEmpty ? "" : "考点：\(questionHint)"
+            primaryFocus.isEmpty && !blindSpot.isEmpty ? "别读偏：\(blindSpot)" : "",
+            primaryFocus.isEmpty && blindSpot.isEmpty && !examValue.isEmpty ? "命题点：\(examValue)" : "",
+            primaryFocus.isEmpty && blindSpot.isEmpty && examValue.isEmpty && !questionHint.isEmpty ? "考点：\(questionHint)" : ""
         ].first(where: { !$0.isEmpty }) ?? "本段最值得先学的一点"
 
         return shortSnippet(from: summary, limit: 40)
@@ -1830,15 +2089,15 @@ enum NormalizedDocumentConverter {
         guard let first = card.displayedTeachingFocuses.first?.nonEmpty else {
             return "教学重点"
         }
-        let short = first.count > 24 ? String(first.prefix(24)) + "…" : first
+        let short = first.count > 18 ? String(first.prefix(18)) + "…" : first
         return "教学重点｜\(short)"
     }
 
     private static func teachingParagraphNodeTitle(card: ParagraphTeachingCard) -> String {
         let theme = card.displayedTheme.nonEmpty ?? ""
-        let short = theme.count > 22 ? String(theme.prefix(22)) + "…" : theme
+        let short = theme.count > 16 ? String(theme.prefix(16)) + "…" : theme
         if !short.isEmpty {
-            return "第\(card.paragraphIndex + 1)段｜\(card.argumentRole.displayName)｜\(short)"
+            return "第\(card.paragraphIndex + 1)段｜\(short)"
         }
         return "第\(card.paragraphIndex + 1)段｜\(card.argumentRole.displayName)"
     }
@@ -1847,14 +2106,16 @@ enum NormalizedDocumentConverter {
         card: ParagraphTeachingCard,
         linkedQuestions: [QuestionEvidenceLink]
     ) -> String {
-        let theme = shortSnippet(from: card.displayedTheme, limit: 22)
-        let role = shortSnippet(from: card.argumentRole.displayName, limit: 10)
-        let questionHint = shortSnippet(from: linkedQuestions.first?.trapType ?? "", limit: 16)
+        let primaryFocus = shortSnippet(from: card.displayedTeachingFocuses.first ?? "", limit: 20)
+        let blindSpot = shortSnippet(from: card.displayedStudentBlindSpot ?? "", limit: 18)
+        let examValue = shortSnippet(from: card.displayedExamValue, limit: 18)
+        let questionHint = shortSnippet(from: linkedQuestions.first?.trapType ?? "", limit: 14)
 
         let summary = [
-            theme.isEmpty ? "" : "主旨：\(theme)",
-            role.isEmpty ? "" : "角色：\(role)",
-            questionHint.isEmpty ? "" : "考点：\(questionHint)"
+            !primaryFocus.isEmpty ? "先抓：\(primaryFocus)" : "",
+            primaryFocus.isEmpty && !blindSpot.isEmpty ? "别读偏：\(blindSpot)" : "",
+            primaryFocus.isEmpty && blindSpot.isEmpty && !examValue.isEmpty ? "命题点：\(examValue)" : "",
+            primaryFocus.isEmpty && blindSpot.isEmpty && examValue.isEmpty && !questionHint.isEmpty ? "考点：\(questionHint)" : ""
         ].first(where: { !$0.isEmpty }) ?? "段落教学节点"
 
         return shortSnippet(from: summary, limit: 50)

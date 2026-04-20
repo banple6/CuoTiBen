@@ -170,7 +170,11 @@ enum ProfessorAnalysisService {
             case .missingBaseURL: return "未配置后端地址"
             case .invalidBaseURL: return "后端地址格式错误"
             case .invalidServerResponse: return "服务器响应格式异常"
-            case .requestFailed(let msg): return "请求失败: \(msg)"
+            case .requestFailed(let msg):
+                return AIServiceAvailabilityPolicy.userFacingMessage(
+                    for: .professorAnalysis,
+                    technicalReason: msg
+                )
             case .noContent: return "后端未返回分析内容"
             }
         }
@@ -184,6 +188,15 @@ enum ProfessorAnalysisService {
         title: String,
         overrideBaseURL: String? = nil
     ) async throws -> StructuredSourceBundle {
+        if let blockingMessage = await aiServiceAvailabilityGate.blockingMessage(for: .professorAnalysis) {
+            TextPipelineDiagnostics.log(
+                "AI",
+                "[AI][ProfessorAnalysis] service gate open",
+                severity: .warning
+            )
+            throw AnalysisError.requestFailed(blockingMessage)
+        }
+
         let endpointURLs = AIExplainSentenceService.endpointCandidates(
             path: "ai/analyze-passage",
             overrideBaseURL: overrideBaseURL
@@ -232,6 +245,11 @@ enum ProfessorAnalysisService {
 
                     if !(200 ..< 300).contains(http.statusCode) {
                         let bodySnippet = String(data: data.prefix(500), encoding: .utf8) ?? ""
+                        await aiServiceAvailabilityGate.recordFailure(
+                            for: .professorAnalysis,
+                            technicalReason: bodySnippet.isEmpty ? "HTTP \(http.statusCode)" : "HTTP \(http.statusCode): \(bodySnippet)",
+                            cooldown: AIServiceAvailabilityPolicy.cooldown(for: http.statusCode)
+                        )
                         TextPipelineDiagnostics.log(
                             "AI",
                             "[AI][ProfessorAnalysis] 后端返回 HTTP \(http.statusCode): \(bodySnippet)",
@@ -268,6 +286,7 @@ enum ProfessorAnalysisService {
                         throw AnalysisError.noContent
                     }
 
+                    await aiServiceAvailabilityGate.recordSuccess(for: .professorAnalysis)
                     payload = data
                     break
                 } catch is CancellationError {
@@ -276,6 +295,11 @@ enum ProfessorAnalysisService {
                     if error.code == .cancelled || Task.isCancelled {
                         throw CancellationError()
                     }
+                    await aiServiceAvailabilityGate.recordFailure(
+                        for: .professorAnalysis,
+                        technicalReason: error.localizedDescription,
+                        cooldown: AIServiceAvailabilityPolicy.cooldown(for: error)
+                    )
                     if AIExplainSentenceService.shouldRetrySameEndpoint(for: error), attempt == 0 {
                         TextPipelineDiagnostics.log(
                             "AI",

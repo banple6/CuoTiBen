@@ -26,7 +26,7 @@ export function buildExplainSentencePrompt({ title, sentence, context, paragraph
     "chunk_layers 必须是数组，每项都是对象，字段固定为 text、role、attaches_to、gloss。role 要说明它是核心信息、前置框架、后置修饰、补充说明还是让步/条件框架。",
     "grammar_focus 必须是数组，每项都是对象，字段固定为 phenomenon、function、why_it_matters、title_zh、explanation_zh、why_it_matters_zh、example_en。function 必须写“这个结构在本句起什么作用”；explanation_zh 必须写“它是什么”；why_it_matters_zh 必须写“为什么重要”。只保留最关键的 1-3 个。",
     "faithful_translation 必须是忠实翻译：中文自然，但要尽量贴住原句真实意思，不要偷换成教学评论。",
-    "teaching_interpretation 必须是教学解读：说明这句话真正承担什么功能、该先抓哪一层、为什么容易读错。",
+    "teaching_interpretation 必须是教学解读：说明这句话真正承担什么功能、该先抓哪一层、为什么容易读错。不能只是把 faithful_translation 换个说法重复一遍。",
     "natural_chinese_meaning 用于兼容旧字段，内容与 teaching_interpretation 保持一致。",
     "contextual_vocabulary 必须是数组，每项字段固定为 term、meaning，meaning 必须是本句义。",
     "misreading_traps 必须指出学生最容易误判主干、修饰范围、指代、否定或逻辑关系的地方。",
@@ -47,7 +47,7 @@ export function buildExplainSentencePrompt({ title, sentence, context, paragraph
     "",
     "输出标准：",
     "1. 输出优先级必须体现：句子定位 → 句子主干 → 语块切分 → 关键语法点 → 学生易错点 → 出题改写点 → 简化英文改写 → 微练习。",
-    "2. faithful_translation 必须是忠实翻译；teaching_interpretation 才负责老师口吻的解释，两者不能混写。",
+    "2. faithful_translation 必须是忠实翻译；teaching_interpretation 才负责老师口吻的解释，两者不能混写，也不能互相抄写。",
     "2.1 faithful_translation 和 teaching_interpretation 都必须以中文为主；除专门术语、原句片段、语法标签外，不允许出现整段英文说明。",
     "3. core_skeleton 必须直接说清主句主干，不能写成“本句讲了什么”或“先抓主干”。",
     "4. chunk_layers 不是机械切分，必须说明每一块的功能和挂接对象。",
@@ -267,7 +267,8 @@ function normalizeExplainResult(raw, sourceSentence, paragraph_role = "") {
   const rawSimplerRewriteTranslation = firstDefined(raw, ["simpler_rewrite_translation", "rewrite_translation"]);
   const rawEvidenceType = firstDefined(raw, ["evidence_type", "sentence_role"]);
   const rawFaithfulTranslation = firstDefined(raw, ["faithful_translation"]);
-  const rawTeachingInterpretation = firstDefined(raw, ["teaching_interpretation", "natural_chinese_meaning"]);
+  const rawTeachingInterpretation = firstDefined(raw, ["teaching_interpretation"]);
+  const rawNaturalChineseMeaning = firstDefined(raw, ["natural_chinese_meaning"]);
   const evidenceType = normalizeEvidenceType(rawEvidenceType, inferEvidenceTypeFromParagraphRole(paragraph_role));
   const sentenceFunction = purifyChineseDisplayText(raw.sentence_function)
     || buildSentenceFunctionFromEvidenceType(evidenceType);
@@ -320,15 +321,27 @@ function normalizeExplainResult(raw, sourceSentence, paragraph_role = "") {
   const misreadingTraps = purifyChineseList(rawMisreadingTraps, 4);
   const examParaphraseRoutes = purifyChineseList(rawExamParaphraseRoutes, 4);
   const faithfulTranslation = purifyChineseExplanation(rawFaithfulTranslation);
-  const teachingInterpretation = purifyChineseExplanation(rawTeachingInterpretation);
+  const teachingInterpretation = resolveTeachingInterpretation({
+    teachingInterpretation: rawTeachingInterpretation,
+    naturalChineseMeaning: rawNaturalChineseMeaning,
+    faithfulTranslation,
+    sentenceFunction,
+    coreSkeleton,
+    chunkLayers
+  });
   const simplerRewrite = typeof rawSimplerRewrite === "string" ? rawSimplerRewrite.trim() : "";
-  const simplerRewriteTranslation = purifyChineseExplanation(rawSimplerRewriteTranslation)
-    || buildRewriteTranslationExplanation({
+  const simplerRewriteTranslation = (function resolveRewriteTranslation() {
+    const explicit = purifyChineseExplanation(rawSimplerRewriteTranslation);
+    if (explicit && normalizedChineseComparisonKey(explicit) !== normalizedChineseComparisonKey(faithfulTranslation)) {
+      return explicit;
+    }
+    return buildRewriteTranslationExplanation({
       simplerRewrite,
       faithfulTranslation,
       coreSkeleton,
       chunkLayers
     });
+  })();
   const miniCheck = typeof firstDefined(raw, ["mini_check", "mini_exercise"]) === "string"
     ? firstDefined(raw, ["mini_check", "mini_exercise"]).trim()
     : "";
@@ -408,6 +421,70 @@ function buildRewriteTranslationExplanation({ simplerRewrite, faithfulTranslatio
   }
 
   return parts.join(" ");
+}
+
+function normalizedChineseComparisonKey(text) {
+  return purifyChineseExplanation(text)
+    .toLowerCase()
+    .replace(/[^\p{sc=Han}a-z0-9]+/gu, "");
+}
+
+function buildTeachingInterpretationFallback({ sentenceFunction, coreSkeleton, chunkLayers, faithfulTranslation }) {
+  const parts = [];
+  const localizedFunction = purifyChineseDisplayText(sentenceFunction);
+  if (localizedFunction) {
+    parts.push(`老师先会把这句当成“${localizedFunction}”来看。`);
+  }
+
+  if (coreSkeleton?.subject || coreSkeleton?.predicate || coreSkeleton?.complement_or_object || coreSkeleton?.complementOrObject) {
+    const subject = typeof coreSkeleton.subject === "string" ? coreSkeleton.subject.trim() : "";
+    const predicate = typeof coreSkeleton.predicate === "string" ? coreSkeleton.predicate.trim() : "";
+    const complement = typeof coreSkeleton.complement_or_object === "string"
+      ? coreSkeleton.complement_or_object.trim()
+      : (typeof coreSkeleton.complementOrObject === "string" ? coreSkeleton.complementOrObject.trim() : "");
+    const stableCore = [
+      subject ? `主语“${subject}”` : "",
+      predicate ? `谓语“${predicate}”` : "",
+      complement ? `核心补足“${complement}”` : ""
+    ].filter(Boolean).join("、");
+    if (stableCore) {
+      parts.push(`板书时先锁定 ${stableCore}，其余信息都往这个主干上挂。`);
+    }
+  }
+
+  const layeredRoles = Array.isArray(chunkLayers) ? chunkLayers.map((item) => String(item?.role || "").trim()) : [];
+  if (layeredRoles.some((role) => /前置框架|条件|让步/.test(role))) {
+    parts.push("读的时候不要被句首框架带走，真正判断一般落在后面的主句主干。");
+  } else if (layeredRoles.some((role) => /后置修饰|补充说明/.test(role))) {
+    parts.push("其余语块主要是在补限定范围和修饰关系，不要把枝叶误抬成主干。");
+  }
+
+  const faithful = purifyChineseExplanation(faithfulTranslation);
+  if (faithful) {
+    parts.push(`先把“${faithful}”这个基本意思抓稳，再回头分层看修饰关系。`);
+  }
+
+  return parts.join(" ");
+}
+
+function resolveTeachingInterpretation({ teachingInterpretation, naturalChineseMeaning, faithfulTranslation, sentenceFunction, coreSkeleton, chunkLayers }) {
+  const faithfulKey = normalizedChineseComparisonKey(faithfulTranslation);
+  const explicit = purifyChineseExplanation(teachingInterpretation);
+  if (explicit && normalizedChineseComparisonKey(explicit) !== faithfulKey) {
+    return explicit;
+  }
+
+  const legacy = purifyChineseExplanation(naturalChineseMeaning);
+  if (legacy && normalizedChineseComparisonKey(legacy) !== faithfulKey) {
+    return legacy;
+  }
+
+  return buildTeachingInterpretationFallback({
+    sentenceFunction,
+    coreSkeleton,
+    chunkLayers,
+    faithfulTranslation
+  });
 }
 
 function isChineseDominantText(text) {
@@ -1427,10 +1504,17 @@ function enrichExplainResult(result, {
     sentence,
     paragraph_theme
   });
-  const teachingInterpretation = result.teaching_interpretation || result.natural_chinese_meaning || buildFallbackTeachingInterpretation({
-    sentence,
-    paragraph_theme,
-    paragraph_role
+  const teachingInterpretation = resolveTeachingInterpretation({
+    teachingInterpretation: result.teaching_interpretation,
+    naturalChineseMeaning: result.natural_chinese_meaning || buildFallbackTeachingInterpretation({
+      sentence,
+      paragraph_theme,
+      paragraph_role
+    }),
+    faithfulTranslation,
+    sentenceFunction,
+    coreSkeleton,
+    chunkLayers
   });
   const miniCheck = result.mini_check || result.mini_exercise || buildFallbackMiniExercise({
     ...result,

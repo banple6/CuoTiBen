@@ -11,13 +11,13 @@ enum TextPipelineValidator {
     /// 检测文本是否为字符级反转（如 "wen yreve etanimod" 实为 "dominate every new"）
     static func isLikelyReversedEnglish(_ text: String) -> Bool {
         let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard cleaned.count >= 12 else { return false }
+        guard cleaned.count >= 8 else { return false }
 
         let words = cleaned.lowercased()
             .components(separatedBy: .whitespacesAndNewlines)
             .filter { $0.count >= 2 && $0.rangeOfCharacter(from: .letters) != nil }
 
-        guard words.count >= 4 else { return false }
+        guard words.count >= 3 else { return false }
 
         let forwardHits = commonEnglishWordHits(in: words)
 
@@ -36,12 +36,12 @@ enum TextPipelineValidator {
         let reverseNonPalindrome = reversedWords.filter { !palindromeWords.contains($0) && highFrequencyEnglishWords.contains($0) }.count
 
         // 反转后非回文常见词 >= 4 且显著多于正向：判定为反转
-        if reverseNonPalindrome >= 4 && reverseNonPalindrome > forwardNonPalindrome + 2 {
+        if reverseNonPalindrome >= 3 && reverseNonPalindrome > forwardNonPalindrome + 2 {
             return true
         }
 
-        // 严格模式：反转后总命中 >= 5 且正向 <= 1
-        if reverseHits >= 5 && forwardHits <= 1 {
+        // 严格模式：反转后总命中 >= 4 且正向 <= 1
+        if reverseHits >= 4 && forwardHits <= 1 {
             return true
         }
 
@@ -65,22 +65,33 @@ enum TextPipelineValidator {
     /// 对文本做反转检测，如果检测到反转则自动修复；否则原样返回
     /// 修复后会验证修复质量，避免把正常文本搞坏
     static func validateAndRepairIfReversed(_ text: String) -> (text: String, wasRepaired: Bool) {
-        guard isLikelyReversedEnglish(text) else {
-            return (text, false)
-        }
         let repaired = repairReversedText(text)
+        let originalChineseScore = chineseNaturalnessScore(for: text)
+        let repairedChineseScore = chineseNaturalnessScore(for: repaired)
 
-        // 验证修复后质量确实优于原文
-        let originalHits = commonEnglishWordHits(in: text.lowercased().components(separatedBy: .whitespacesAndNewlines))
-        let repairedHits = commonEnglishWordHits(in: repaired.lowercased().components(separatedBy: .whitespacesAndNewlines))
+        if isLikelyReversedEnglish(text) {
+            let originalHits = commonEnglishWordHits(in: text.lowercased().components(separatedBy: .whitespacesAndNewlines))
+            let repairedHits = commonEnglishWordHits(in: repaired.lowercased().components(separatedBy: .whitespacesAndNewlines))
 
-        if repairedHits > originalHits {
-            TextPipelineDiagnostics.log("反转修复", "修复成功: 命中 \(originalHits) → \(repairedHits)", severity: .repaired)
-            return (repaired, true)
-        } else {
-            TextPipelineDiagnostics.log("反转修复", "修复未提升质量(\(originalHits) vs \(repairedHits))，保留原文", severity: .warning)
-            return (text, false)
+            if repairedHits > originalHits {
+                TextPipelineDiagnostics.log("反转修复", "修复成功: 命中 \(originalHits) → \(repairedHits)", severity: .repaired)
+                return (repaired, true)
+            } else {
+                TextPipelineDiagnostics.log("反转修复", "修复未提升质量(\(originalHits) vs \(repairedHits))，保留原文", severity: .warning)
+                return (text, false)
+            }
         }
+
+        if repairedChineseScore >= originalChineseScore + 3 && repairedChineseScore >= 4 {
+            TextPipelineDiagnostics.log(
+                "反转修复",
+                "修复成功: 中文序列分 \(originalChineseScore) → \(repairedChineseScore)",
+                severity: .repaired
+            )
+            return (repaired, true)
+        }
+
+        return (text, false)
     }
 
     // MARK: - 文本质量评估
@@ -227,6 +238,51 @@ enum TextPipelineValidator {
         }
 
         return false
+    }
+
+    private static func chineseNaturalnessScore(for text: String) -> Int {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return 0 }
+
+        let patterns = [
+            #"雅思阅读"#,
+            #"词汇部分"#,
+            #"第[一二三四五六七八九十0-9]+段"#,
+            #"第[一二三四五六七八九十0-9]+遍"#,
+            #"在讲"#,
+            #"答案"#,
+            #"原句"#,
+            #"主语"#,
+            #"谓语"#,
+            #"宾语"#,
+            #"修饰"#,
+            #"语块"#,
+            #"对照"#,
+            #"不要"#,
+            #"可以"#,
+            #"然后"#,
+            #"但是"#,
+            #"环保"#,
+            #"游客"#,
+            #"社区"#,
+            #"文化"#,
+            #"生态"#,
+            #"古迹"#
+        ]
+
+        var score = patterns.reduce(0) { partial, pattern in
+            partial + (trimmed.range(of: pattern, options: .regularExpression) != nil ? 1 : 0)
+        }
+
+        if trimmed.hasPrefix("。") || trimmed.hasPrefix("，") || trimmed.hasPrefix("：") {
+            score -= 2
+        }
+
+        if trimmed.hasSuffix("第") || trimmed.hasSuffix("在") || trimmed.hasSuffix("把") {
+            score -= 1
+        }
+
+        return score
     }
 }
 

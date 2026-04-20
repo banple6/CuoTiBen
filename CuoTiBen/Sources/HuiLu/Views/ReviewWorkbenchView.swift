@@ -30,6 +30,7 @@ struct ReviewWorkbenchView: View {
     @State private var phoneDrawerDetent: PresentationDetent = .large
     @State private var padSplitRatio: CGFloat = 0.56
     @State private var padDragStartRatio: CGFloat?
+    @State private var isEnsuringProfessorAnalysis = false
 
     private var liveDocument: SourceDocument {
         viewModel.sourceDocuments.first(where: { $0.id == document.id }) ?? document
@@ -193,10 +194,7 @@ struct ReviewWorkbenchView: View {
             restoreInitialStateIfNeeded()
             guard structuredSource != nil else { return }
             Task {
-                await viewModel.ensureProfessorAnalysis(
-                    for: liveDocument,
-                    trigger: .openReviewWorkbench
-                )
+                await ensureWorkbenchProfessorAnalysisIfNeeded()
             }
         }
         .sheet(isPresented: $showsPhoneAnalysisDrawer) {
@@ -406,7 +404,16 @@ struct ReviewWorkbenchView: View {
 
         restoreInitialStateIfNeeded()
 
+        await ensureWorkbenchProfessorAnalysisIfNeeded()
+    }
+
+    private func ensureWorkbenchProfessorAnalysisIfNeeded() async {
         guard viewModel.structuredSource(for: liveDocument) != nil else { return }
+        guard !isEnsuringProfessorAnalysis else { return }
+
+        isEnsuringProfessorAnalysis = true
+        defer { isEnsuringProfessorAnalysis = false }
+
         await viewModel.ensureProfessorAnalysis(
             for: liveDocument,
             trigger: .openReviewWorkbench
@@ -1304,12 +1311,29 @@ private struct ReviewWorkbenchSentencePanel: View {
         viewModel.contextSentences(for: sentence, in: document)
     }
 
+    private var bundledAnalysis: ProfessorSentenceAnalysis? {
+        viewModel.professorSentenceCard(for: sentence, in: document)?.analysis
+    }
+
     private var effectiveAnalysis: ProfessorSentenceAnalysis? {
-        let bundled = viewModel.professorSentenceCard(for: sentence, in: document)?.analysis
-        if let remote = result?.localFallbackAnalysis {
+        let bundled = bundledAnalysis
+        if let remote = visibleResult?.localFallbackAnalysis {
             return remote.mergingFallback(bundled)
         }
         return bundled
+    }
+
+    private var visibleResult: AIExplainSentenceResult? {
+        guard let result, isResultVisible(result, for: sentence) else {
+            return nil
+        }
+        return result
+    }
+
+    private var shouldAutoLoadRemoteExplanation: Bool {
+        guard !isLoading, result == nil else { return false }
+        guard let bundled = bundledAnalysis else { return true }
+        return bundled.shouldPreferSentenceExplain(for: sentence.text)
     }
 
     var body: some View {
@@ -1352,6 +1376,10 @@ private struct ReviewWorkbenchSentencePanel: View {
             result = nil
             errorMessage = nil
             isLoading = false
+            maybeAutoLoadExplanation()
+        }
+        .onAppear {
+            maybeAutoLoadExplanation()
         }
         .onDisappear {
             explanationTask?.cancel()
@@ -1571,6 +1599,10 @@ private struct ReviewWorkbenchSentencePanel: View {
             )
             try Task.checkCancellation()
 
+            guard isResultVisible(fetched, for: currentSentence) else {
+                throw AIExplainSentenceServiceError.requestFailed("返回结果与当前句不一致")
+            }
+
             await MainActor.run {
                 guard sentence.id == currentSentence.id else { return }
                 result = fetched
@@ -1589,6 +1621,26 @@ private struct ReviewWorkbenchSentencePanel: View {
                 isLoading = false
             }
         }
+    }
+
+    private func maybeAutoLoadExplanation() {
+        guard shouldAutoLoadRemoteExplanation else { return }
+        scheduleExplanationLoad(force: false)
+    }
+
+    private func isResultVisible(_ result: AIExplainSentenceResult, for sentence: Sentence) -> Bool {
+        guard let identity = result.analysisIdentity else { return false }
+        let expectedIdentity = SentenceAnalysisIdentity(
+            sentenceID: sentence.id,
+            sentenceText: sentence.text,
+            anchorLabel: sentence.anchorLabel
+        )
+        return identity == expectedIdentity &&
+            AnalysisConsistencyGuard.warnings(
+                identity: expectedIdentity,
+                sentenceText: sentence.text,
+                analysis: result
+            ).isEmpty
     }
 }
 

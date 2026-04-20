@@ -63,13 +63,13 @@ function buildAnalyzePassagePrompt({ title, paragraphs, keySentences }) {
     "",
     "二、paragraph_cards 数组（每段一项）：",
     "  paragraph_index：段落编号，必须对应输入里的 [Pindex] 原始编号，不要重排。",
-    "  theme：中文，本段真正要立住的判断或说明点。不能是'本段主要讲了...'式的废话，要像讲义里的段落主旨。",
+    "  theme：中文，本段真正要立住的判断或说明点。不能是'本段主要讲了...'式的废话，要像讲义里的段落主旨，而且必须只根据本段内容生成，不能揉入别段信息。",
     "  argument_role：必须为以下之一：background / support / objection / transition / evidence / conclusion。",
     "  core_sentence_local_index：段内最关键的一句话的序号（从0开始）。",
     "  keywords：5个本段最重要的英语关键词或短语。",
     "  relation_to_previous：中文，本段和上一段之间的逻辑关系，不要说'承接上文'这类空话，要写清上一段做了什么、这一段怎么接或怎么转。",
     "  exam_value：中文，说清这段内容在阅读理解考试中最可能对应什么题型、命题人会抓哪层信息、学生最容易掉进什么陷阱。",
-    "  teaching_focuses：字符串数组，2-3个具体教学动作。每条都必须体现“先读哪层 / 为什么重要 / 学生会怎么错”，像老师课堂提示。",
+    "  teaching_focuses：字符串数组，2-3个具体教学动作。每条都必须体现“先读哪层 / 为什么重要 / 学生会怎么错”，像老师课堂提示，而且必须能在本段文本里找到支点。",
     "  student_blind_spot：中文一句话，学生最容易在本段读偏的点。要写成能直接提醒学生的讲义批注。",
     "",
     "三、sentence_analyses 数组（每个关键句一项）：",
@@ -80,7 +80,7 @@ function buildAnalyzePassagePrompt({ title, paragraphs, keySentences }) {
     "  chunk_layers：数组，每项是对象，字段固定为 text、role、attaches_to、gloss。要说明每个语块是核心信息、框架、后置修饰还是补充说明。",
     "  grammar_focus：数组，每项包含 phenomenon、function、why_it_matters、title_zh、explanation_zh、why_it_matters_zh、example_en。只保留真正帮助理解的 1-3 个。",
     "  faithful_translation：忠实翻译。中文自然，但要尽量贴住原句真实意思，不要偷换成教学评论。",
-    "  teaching_interpretation：教学解读。说明这句话真正承担什么功能、该先抓哪一层、学生最可能错在哪。",
+    "  teaching_interpretation：教学解读。说明这句话真正承担什么功能、该先抓哪一层、学生最可能错在哪。绝不能只是把 faithful_translation 换个说法重复一遍。",
     "  vocabulary_in_context：数组，每项包含 term 和 meaning。meaning 是本句中的具体含义，不要给通用词典义。",
     "  misreading_traps：字符串数组，学生最容易在这句话上犯的 1-3 个误读。必须具体说明会把哪一层挂错。",
     "  exam_paraphrase_routes：字符串数组，1-3 条，这句话在阅读理解题中可能怎么被改写出题。必须给出具体改写路线。",
@@ -92,7 +92,7 @@ function buildAnalyzePassagePrompt({ title, paragraphs, keySentences }) {
     "质量底线（违反任何一条都视为失败）：",
     "═══════════════════════",
     "1. core_skeleton 绝不能是'本句主要讲了...'或'本句说的是...'，必须指出具体的主语+谓语+宾语。",
-    "2. faithful_translation 必须像可靠译文，teaching_interpretation 才负责老师口吻的解释，两者不能混写。",
+    "2. faithful_translation 必须像可靠译文，teaching_interpretation 才负责老师口吻的解释，两者不能混写，也不能互相抄写。",
     "3. evidence_type 不能空缺，也不能乱给；它决定了学生先把这句当背景、转折还是核心判断。",
     "4. misreading_traps 绝不能是泛泛的'注意理解'，必须说清学生具体会怎么误读。",
     "5. exam_paraphrase_routes 绝不能只说'可能考同义替换'，必须给出具体的替换示例。",
@@ -255,6 +255,56 @@ function isPassageBodyText(text) {
   return profile.tokens.length >= 8 || looksLikeStrongPassageHeading(normalized);
 }
 
+function classifyPassageTextKind(text) {
+  const normalized = normalizeString(text);
+  if (!normalized) return "unknown";
+  if (looksLikeInstructionOrQuestionParagraph(normalized)) return "polluted";
+  if (looksLikeBilingualGlossaryParagraph(normalized)) return "bilingual_annotation";
+  if (looksLikeReversedEnglishGarbage(normalized)) return "polluted";
+  if (looksLikeStrongPassageHeading(normalized)) return "passage_heading";
+
+  const profile = textEnglishProfile(normalized);
+  if (profile.chineseCharacters > Math.max(8, profile.englishLetters * 0.9)) {
+    return "polluted";
+  }
+  return "passage_body";
+}
+
+function scorePassageTextHygiene(text) {
+  const normalized = normalizeString(text);
+  if (!normalized) {
+    return { score: 0, kind: "unknown", flags: ["empty"] };
+  }
+
+  const profile = textEnglishProfile(normalized);
+  const kind = classifyPassageTextKind(normalized);
+  const flags = [];
+  let score = 1;
+
+  if (kind === "bilingual_annotation") {
+    score -= 0.28;
+    flags.push("bilingual_annotation");
+  }
+  if (kind === "polluted") {
+    score -= 0.34;
+    flags.push("polluted");
+  }
+  if (profile.chineseCharacters > 0 && profile.englishRatio < 0.52) {
+    score -= 0.2;
+    flags.push("mixed_contamination");
+  }
+  if (profile.tokens.length < 6 && kind !== "passage_heading") {
+    score -= 0.18;
+    flags.push("too_short");
+  }
+
+  return {
+    score: Math.max(0, Math.min(1, score)),
+    kind,
+    flags
+  };
+}
+
 function sanitizePassageInputs(paragraphs, keySentences) {
   const safeParagraphs = normalizeArray(paragraphs)
     .filter((item) => typeof item?.text === "string")
@@ -263,7 +313,13 @@ function sanitizePassageInputs(paragraphs, keySentences) {
       text: normalizeString(item.text)
     }));
 
-  const filteredParagraphs = safeParagraphs.filter((item) => isPassageBodyText(item.text));
+  const filteredParagraphs = safeParagraphs.filter((item) => {
+    const hygiene = scorePassageTextHygiene(item.text);
+    if (hygiene.kind !== "passage_body" && hygiene.kind !== "passage_heading") {
+      return false;
+    }
+    return isPassageBodyText(item.text) && hygiene.score >= 0.54;
+  });
   const retainedParagraphs = filteredParagraphs.length > 0 ? filteredParagraphs : safeParagraphs;
   const retainedIndexSet = new Set(retainedParagraphs.map((item) => item.index));
 
@@ -279,7 +335,9 @@ function sanitizePassageInputs(paragraphs, keySentences) {
 
   const filteredKeySentences = safeKeySentences.filter((item) => {
     if (!retainedIndexSet.has(item.paragraphIndex)) return false;
-    return isPassageBodyText(item.text) && !looksLikeStrongPassageHeading(item.text);
+    const hygiene = scorePassageTextHygiene(item.text);
+    if (hygiene.kind !== "passage_body") return false;
+    return isPassageBodyText(item.text) && !looksLikeStrongPassageHeading(item.text) && hygiene.score >= 0.52;
   });
 
   return {
@@ -617,6 +675,54 @@ function buildPassageRewriteTranslationExplanation({ simplerRewrite, faithfulTra
   return parts.join(" ");
 }
 
+function normalizedChineseComparisonKey(text) {
+  return purifyChineseExplanation(text)
+    .toLowerCase()
+    .replace(/[^\p{sc=Han}a-z0-9]+/gu, "");
+}
+
+function buildPassageTeachingInterpretationFallback({ sentenceFunction, coreSkeleton, chunkLayers, faithfulTranslation }) {
+  const parts = [];
+  const localizedFunction = purifyChineseDisplayText(sentenceFunction);
+  if (localizedFunction) {
+    parts.push(`老师先会把这句当成“${localizedFunction}”来看。`);
+  }
+
+  const stableCore = renderCoreSkeleton(coreSkeleton);
+  if (stableCore) {
+    parts.push(`板书时先锁定“${stableCore}”，其余语块都往这个主干上挂。`);
+  }
+
+  const layeredRoles = normalizeArray(chunkLayers).map((item) => normalizeString(item?.role));
+  if (layeredRoles.some((role) => /前置框架|条件|让步/.test(role))) {
+    parts.push("读的时候不要被句首框架带走，真正判断一般落在后面的主句主干。");
+  } else if (layeredRoles.some((role) => /后置修饰|补充说明/.test(role))) {
+    parts.push("其余语块主要是在补限定范围和修饰关系，不要把枝叶误抬成主干。");
+  }
+
+  const faithful = purifyChineseExplanation(faithfulTranslation);
+  if (faithful) {
+    parts.push(`先把“${faithful}”这个基本意思抓稳，再回头分层看修饰关系。`);
+  }
+
+  return parts.join(" ");
+}
+
+function resolvePassageTeachingInterpretation({ teachingInterpretation, faithfulTranslation, sentenceFunction, coreSkeleton, chunkLayers }) {
+  const faithfulKey = normalizedChineseComparisonKey(faithfulTranslation);
+  const explicit = purifyChineseExplanation(teachingInterpretation);
+  if (explicit && normalizedChineseComparisonKey(explicit) !== faithfulKey) {
+    return explicit;
+  }
+
+  return buildPassageTeachingInterpretationFallback({
+    sentenceFunction,
+    coreSkeleton,
+    chunkLayers,
+    faithfulTranslation
+  });
+}
+
 function normalizePassageOverview(raw) {
   if (!raw || typeof raw !== "object") {
     return {
@@ -671,7 +777,8 @@ function normalizeSentenceAnalysis(raw, sourceSentence) {
   const rawSimplerRewrite = firstDefined(raw, ["simpler_rewrite", "simplified_english"]);
   const rawSimplerRewriteTranslation = firstDefined(raw, ["simpler_rewrite_translation", "rewrite_translation"]);
   const rawFaithfulTranslation = firstDefined(raw, ["faithful_translation"]);
-  const rawTeachingInterpretation = firstDefined(raw, ["teaching_interpretation", "natural_chinese_meaning"]);
+  const rawTeachingInterpretation = firstDefined(raw, ["teaching_interpretation"]);
+  const rawNaturalChineseMeaning = firstDefined(raw, ["natural_chinese_meaning"]);
   const rawChunkBreakdown = normalizeArray(raw.chunk_breakdown).map(String).filter(Boolean);
   const rawGrammarPoints = normalizeArray(raw.grammar_points)
     .map((item) => ({
@@ -689,15 +796,26 @@ function normalizeSentenceAnalysis(raw, sourceSentence) {
   const misreadingTraps = purifyChineseList(rawMisread, 3);
   const examParaphraseRoutes = purifyChineseList(rawRewrite, 3);
   const simplerRewrite = normalizeString(rawSimplerRewrite);
-  const simplerRewriteTranslation = purifyChineseExplanation(rawSimplerRewriteTranslation)
-    || buildPassageRewriteTranslationExplanation({
+  const faithfulTranslation = purifyChineseExplanation(rawFaithfulTranslation);
+  const simplerRewriteTranslation = (function resolveRewriteTranslation() {
+    const explicit = purifyChineseExplanation(rawSimplerRewriteTranslation);
+    if (explicit && normalizedChineseComparisonKey(explicit) !== normalizedChineseComparisonKey(faithfulTranslation)) {
+      return explicit;
+    }
+    return buildPassageRewriteTranslationExplanation({
       simplerRewrite,
-      faithfulTranslation: purifyChineseExplanation(rawFaithfulTranslation),
+      faithfulTranslation,
       coreSkeleton,
       chunkLayers
     });
-  const faithfulTranslation = purifyChineseExplanation(rawFaithfulTranslation);
-  const teachingInterpretation = purifyChineseExplanation(rawTeachingInterpretation);
+  })();
+  const teachingInterpretation = resolvePassageTeachingInterpretation({
+    teachingInterpretation: rawTeachingInterpretation || rawNaturalChineseMeaning,
+    faithfulTranslation,
+    sentenceFunction,
+    coreSkeleton,
+    chunkLayers
+  });
   const miniCheck = purifyChineseDisplayText(firstDefined(raw, ["mini_check", "mini_exercise"]));
   const derivedChunkBreakdown = chunkLayers
     .map((item) => {

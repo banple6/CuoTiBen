@@ -101,7 +101,7 @@ struct StructureTreePreviewCanvas: View {
                 }
             }
             .onChange(of: expandedNodeIDs) { _ in
-                clampCanvasStateDeferred(animated: true)
+                clampCanvasStateDeferred(animated: !isCanvasInteracting)
                 ensureHighlightedNodeVisibleDeferred(animated: false)
             }
             .onChange(of: jumpTargetNodeID) { target in
@@ -112,7 +112,7 @@ struct StructureTreePreviewCanvas: View {
             }
             .onChange(of: highlightedNodeID) { _ in
                 guard jumpTargetNodeID == nil else { return }
-                ensureHighlightedNodeVisibleDeferred(animated: true)
+                ensureHighlightedNodeVisibleDeferred(animated: !isCanvasInteracting)
             }
             .onChange(of: command) { command in
                 guard let command else { return }
@@ -168,8 +168,6 @@ struct StructureTreePreviewCanvas: View {
                     x: canvasOffset.width + scaledRenderOrigin.x,
                     y: canvasOffset.height + scaledRenderOrigin.y
                 )
-                .animation(.spring(response: 0.28, dampingFraction: 0.88), value: canvasScale)
-                .animation(.spring(response: 0.28, dampingFraction: 0.88), value: canvasOffset)
             }
             .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
             .overlay(alignment: .topLeading) {
@@ -240,44 +238,21 @@ struct StructureTreePreviewCanvas: View {
         connectors: [StructureTreePreviewScene.Connector],
         renderRect: CGRect
     ) -> some View {
-        Canvas { context, _ in
-            for connector in connectors {
-                let start = CGPoint(
-                    x: connector.start.x - renderRect.minX,
-                    y: connector.start.y - renderRect.minY
+        ZStack(alignment: .topLeading) {
+            ForEach(connectors) { connector in
+                connectorPath(
+                    connector: connector,
+                    renderRect: renderRect
                 )
-                let end = CGPoint(
-                    x: connector.end.x - renderRect.minX,
-                    y: connector.end.y - renderRect.minY
-                )
-                var path = Path()
-                path.move(to: start)
-
-                switch connector.kind {
-                case .trunk:
-                    let midY = (start.y + end.y) / 2
-                    path.addCurve(
-                        to: end,
-                        control1: CGPoint(x: start.x, y: midY),
-                        control2: CGPoint(x: end.x, y: midY)
+                .stroke(
+                    connector.kind == .trunk
+                        ? StructureTreePreviewPalette.connector
+                        : StructureTreePreviewPalette.branchConnector,
+                    style: StrokeStyle(
+                        lineWidth: connector.kind == .trunk ? 2.2 : 1.6,
+                        lineCap: .round,
+                        lineJoin: .round
                     )
-                case .branch:
-                    let midX = start.x + (end.x - start.x) * 0.54
-                    path.addCurve(
-                        to: end,
-                        control1: CGPoint(x: midX, y: start.y),
-                        control2: CGPoint(x: midX, y: end.y)
-                    )
-                }
-
-                context.stroke(
-                    path,
-                    with: .color(
-                        connector.kind == .trunk
-                            ? StructureTreePreviewPalette.connector
-                            : StructureTreePreviewPalette.branchConnector
-                    ),
-                    style: StrokeStyle(lineWidth: connector.kind == .trunk ? 2.2 : 1.6, lineCap: .round, lineJoin: .round)
                 )
             }
         }
@@ -615,6 +590,42 @@ struct StructureTreePreviewCanvas: View {
             height: abs(connector.end.y - connector.start.y)
         )
         .insetBy(dx: -28, dy: -28)
+    }
+
+    private func connectorPath(
+        connector: StructureTreePreviewScene.Connector,
+        renderRect: CGRect
+    ) -> Path {
+        let start = CGPoint(
+            x: connector.start.x - renderRect.minX,
+            y: connector.start.y - renderRect.minY
+        )
+        let end = CGPoint(
+            x: connector.end.x - renderRect.minX,
+            y: connector.end.y - renderRect.minY
+        )
+
+        var path = Path()
+        path.move(to: start)
+
+        switch connector.kind {
+        case .trunk:
+            let midY = (start.y + end.y) / 2
+            path.addCurve(
+                to: end,
+                control1: CGPoint(x: start.x, y: midY),
+                control2: CGPoint(x: end.x, y: midY)
+            )
+        case .branch:
+            let midX = start.x + (end.x - start.x) * 0.54
+            path.addCurve(
+                to: end,
+                control1: CGPoint(x: midX, y: start.y),
+                control2: CGPoint(x: midX, y: end.y)
+            )
+        }
+
+        return path
     }
 
     private func dragGesture(

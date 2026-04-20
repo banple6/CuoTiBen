@@ -52,6 +52,102 @@ struct Source: Identifiable, Codable, Equatable, Hashable {
     }
 }
 
+enum SourceContentKind: String, Codable, Equatable, Hashable {
+    case passageBody = "passage_body"
+    case passageHeading = "passage_heading"
+    case chineseExplanation = "chinese_explanation"
+    case bilingualAnnotation = "bilingual_annotation"
+    case questionSupport = "question_support"
+    case answerSupport = "answer_support"
+    case polluted = "polluted"
+    case synthetic = "synthetic"
+    case unknown = "unknown"
+
+    var displayName: String {
+        switch self {
+        case .passageBody:
+            return "英文正文"
+        case .passageHeading:
+            return "正文标题"
+        case .chineseExplanation:
+            return "中文说明"
+        case .bilingualAnnotation:
+            return "双语注释"
+        case .questionSupport:
+            return "题目辅助"
+        case .answerSupport:
+            return "答案辅助"
+        case .polluted:
+            return "污染块"
+        case .synthetic:
+            return "本地补全"
+        case .unknown:
+            return "未知来源"
+        }
+    }
+}
+
+struct SourceHygieneSnapshot: Codable, Equatable, Hashable {
+    let score: Double
+    let reversedRepaired: Bool
+    let hasMixedContamination: Bool
+    let chineseRatio: Double
+    let englishRatio: Double
+    let ocrConfidence: Double
+    let flags: [String]
+
+    private enum CodingKeys: String, CodingKey {
+        case score
+        case reversedRepaired = "reversed_repaired"
+        case hasMixedContamination = "has_mixed_contamination"
+        case chineseRatio = "chinese_ratio"
+        case englishRatio = "english_ratio"
+        case ocrConfidence = "ocr_confidence"
+        case flags
+    }
+
+    var isReliableForTeachingMainline: Bool {
+        score >= 0.58 &&
+        !hasMixedContamination &&
+        englishRatio >= 0.42 &&
+        !flags.contains("polluted") &&
+        !flags.contains("chinese_explanation") &&
+        !flags.contains("bilingual_annotation") &&
+        !flags.contains("instructional")
+    }
+
+    static let clean = SourceHygieneSnapshot(
+        score: 1,
+        reversedRepaired: false,
+        hasMixedContamination: false,
+        chineseRatio: 0,
+        englishRatio: 1,
+        ocrConfidence: 1,
+        flags: []
+    )
+}
+
+struct NodeProvenance: Codable, Equatable, Hashable {
+    let sourceSegmentID: String?
+    let sourceSentenceID: String?
+    let sourceKind: SourceContentKind
+    let consistencyScore: Double
+
+    private enum CodingKeys: String, CodingKey {
+        case sourceSegmentID = "source_segment_id"
+        case sourceSentenceID = "source_sentence_id"
+        case sourceKind = "source_kind"
+        case consistencyScore = "consistency_score"
+    }
+
+    static let unknown = NodeProvenance(
+        sourceSegmentID: nil,
+        sourceSentenceID: nil,
+        sourceKind: .unknown,
+        consistencyScore: 0.5
+    )
+}
+
 struct Segment: Identifiable, Codable, Equatable, Hashable {
     let id: String
     let sourceID: String
@@ -60,6 +156,8 @@ struct Segment: Identifiable, Codable, Equatable, Hashable {
     let anchorLabel: String
     let page: Int?
     let sentenceIDs: [String]
+    let provenance: NodeProvenance
+    let hygiene: SourceHygieneSnapshot
 
     private enum CodingKeys: String, CodingKey {
         case id
@@ -69,6 +167,62 @@ struct Segment: Identifiable, Codable, Equatable, Hashable {
         case anchorLabel = "anchor_label"
         case page
         case sentenceIDs = "sentence_ids"
+        case provenance
+        case hygiene
+    }
+
+    init(
+        id: String,
+        sourceID: String,
+        index: Int,
+        text: String,
+        anchorLabel: String,
+        page: Int?,
+        sentenceIDs: [String],
+        provenance: NodeProvenance = .unknown,
+        hygiene: SourceHygieneSnapshot = .clean
+    ) {
+        self.id = id
+        self.sourceID = sourceID
+        self.index = index
+        self.text = text
+        self.anchorLabel = anchorLabel
+        self.page = page
+        self.sentenceIDs = sentenceIDs
+        self.provenance = provenance
+        self.hygiene = hygiene
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        sourceID = try container.decode(String.self, forKey: .sourceID)
+        index = try container.decode(Int.self, forKey: .index)
+        text = try container.decode(String.self, forKey: .text)
+        anchorLabel = try container.decode(String.self, forKey: .anchorLabel)
+        page = try container.decodeIfPresent(Int.self, forKey: .page)
+        sentenceIDs = try container.decodeIfPresent([String].self, forKey: .sentenceIDs) ?? []
+        provenance = try container.decodeIfPresent(NodeProvenance.self, forKey: .provenance)
+            ?? NodeProvenance(
+                sourceSegmentID: id,
+                sourceSentenceID: sentenceIDs.first,
+                sourceKind: .unknown,
+                consistencyScore: 0.5
+            )
+        hygiene = try container.decodeIfPresent(SourceHygieneSnapshot.self, forKey: .hygiene) ?? .clean
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(sourceID, forKey: .sourceID)
+        try container.encode(index, forKey: .index)
+        try container.encode(text, forKey: .text)
+        try container.encode(anchorLabel, forKey: .anchorLabel)
+        try container.encodeIfPresent(page, forKey: .page)
+        try container.encode(sentenceIDs, forKey: .sentenceIDs)
+        try container.encode(provenance, forKey: .provenance)
+        try container.encode(hygiene, forKey: .hygiene)
     }
 }
 
@@ -176,6 +330,8 @@ struct Sentence: Identifiable, Codable, Equatable, Hashable {
     let anchorLabel: String
     let page: Int?
     let geometry: SentenceGeometry?
+    let provenance: NodeProvenance
+    let hygiene: SourceHygieneSnapshot
 
     private enum CodingKeys: String, CodingKey {
         case id
@@ -187,6 +343,8 @@ struct Sentence: Identifiable, Codable, Equatable, Hashable {
         case anchorLabel = "anchor_label"
         case page
         case geometry
+        case provenance
+        case hygiene
     }
 
     init(
@@ -198,7 +356,9 @@ struct Sentence: Identifiable, Codable, Equatable, Hashable {
         text: String,
         anchorLabel: String,
         page: Int?,
-        geometry: SentenceGeometry? = nil
+        geometry: SentenceGeometry? = nil,
+        provenance: NodeProvenance = .unknown,
+        hygiene: SourceHygieneSnapshot = .clean
     ) {
         self.id = id
         self.sourceID = sourceID
@@ -209,6 +369,8 @@ struct Sentence: Identifiable, Codable, Equatable, Hashable {
         self.anchorLabel = anchorLabel
         self.page = page
         self.geometry = geometry
+        self.provenance = provenance
+        self.hygiene = hygiene
     }
 
     init(from decoder: Decoder) throws {
@@ -222,6 +384,14 @@ struct Sentence: Identifiable, Codable, Equatable, Hashable {
         anchorLabel = try container.decode(String.self, forKey: .anchorLabel)
         page = try container.decodeIfPresent(Int.self, forKey: .page)
         geometry = try container.decodeIfPresent(SentenceGeometry.self, forKey: .geometry)
+        provenance = try container.decodeIfPresent(NodeProvenance.self, forKey: .provenance)
+            ?? NodeProvenance(
+                sourceSegmentID: segmentID,
+                sourceSentenceID: id,
+                sourceKind: .unknown,
+                consistencyScore: 0.5
+            )
+        hygiene = try container.decodeIfPresent(SourceHygieneSnapshot.self, forKey: .hygiene) ?? .clean
     }
 
     func encode(to encoder: Encoder) throws {
@@ -235,6 +405,8 @@ struct Sentence: Identifiable, Codable, Equatable, Hashable {
         try container.encode(anchorLabel, forKey: .anchorLabel)
         try container.encodeIfPresent(page, forKey: .page)
         try container.encodeIfPresent(geometry, forKey: .geometry)
+        try container.encode(provenance, forKey: .provenance)
+        try container.encode(hygiene, forKey: .hygiene)
     }
 
     func withGeometry(_ geometry: SentenceGeometry?) -> Sentence {
@@ -247,7 +419,9 @@ struct Sentence: Identifiable, Codable, Equatable, Hashable {
             text: text,
             anchorLabel: anchorLabel,
             page: page,
-            geometry: geometry
+            geometry: geometry,
+            provenance: provenance,
+            hygiene: hygiene
         )
     }
 }
@@ -595,14 +769,19 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
         let normalizedFaithfulTranslation = trimmedOrEmpty(faithfulTranslation)
         let normalizedTeachingInterpretation = trimmedOrEmpty(teachingInterpretation)
         let normalizedLegacyMeaning = trimmedOrEmpty(naturalChineseMeaning)
-        self.faithfulTranslation = !normalizedFaithfulTranslation.isEmpty
-            ? normalizedFaithfulTranslation
-            : (!normalizedLegacyMeaning.isEmpty ? normalizedLegacyMeaning : normalizedTeachingInterpretation)
-        self.teachingInterpretation = !normalizedTeachingInterpretation.isEmpty
-            ? normalizedTeachingInterpretation
-            : (!normalizedLegacyMeaning.isEmpty ? normalizedLegacyMeaning : "")
-        self.naturalChineseMeaning = !normalizedLegacyMeaning.isEmpty
-            ? normalizedLegacyMeaning
+        let reliableFaithful = reliableFaithfulTranslation(normalizedFaithfulTranslation)
+        let reliableLegacyFaithful = reliableFaithfulTranslation(normalizedLegacyMeaning)
+        let explicitTeachingInterpretation = purifiedChineseExplanation(normalizedTeachingInterpretation)
+        let explicitLegacyMeaning = purifiedChineseExplanation(normalizedLegacyMeaning)
+
+        self.faithfulTranslation = !reliableFaithful.isEmpty
+            ? reliableFaithful
+            : reliableLegacyFaithful
+        self.teachingInterpretation = !explicitTeachingInterpretation.isEmpty
+            ? explicitTeachingInterpretation
+            : (!explicitLegacyMeaning.isEmpty ? explicitLegacyMeaning : "")
+        self.naturalChineseMeaning = !explicitLegacyMeaning.isEmpty
+            ? explicitLegacyMeaning
             : (!self.teachingInterpretation.isEmpty ? self.teachingInterpretation : self.faithfulTranslation)
         self.sentenceCore = sentenceCore
         self.chunkBreakdown = chunkBreakdown
@@ -633,13 +812,16 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
         let decodedFaithfulTranslation = try container.decodeIfPresent(String.self, forKey: .faithfulTranslation) ?? ""
         let decodedTeachingInterpretation = try container.decodeIfPresent(String.self, forKey: .teachingInterpretation) ?? ""
         let decodedLegacyMeaning = try container.decodeIfPresent(String.self, forKey: .naturalChineseMeaning) ?? ""
-        faithfulTranslation = trimmedOrEmpty(decodedFaithfulTranslation).isEmpty
-            ? ""
-            : decodedFaithfulTranslation
-        teachingInterpretation = trimmedOrEmpty(decodedTeachingInterpretation).isEmpty
-            ? (trimmedOrEmpty(decodedLegacyMeaning).isEmpty ? "" : decodedLegacyMeaning)
-            : decodedTeachingInterpretation
-        naturalChineseMeaning = trimmedOrEmpty(decodedLegacyMeaning).isEmpty ? teachingInterpretation : decodedLegacyMeaning
+        let explicitFaithful = reliableFaithfulTranslation(decodedFaithfulTranslation)
+        let explicitLegacyFaithful = reliableFaithfulTranslation(decodedLegacyMeaning)
+        faithfulTranslation = !explicitFaithful.isEmpty ? explicitFaithful : explicitLegacyFaithful
+
+        let explicitTeaching = purifiedChineseExplanation(decodedTeachingInterpretation)
+        let explicitLegacyMeaning = purifiedChineseExplanation(decodedLegacyMeaning)
+        teachingInterpretation = !explicitTeaching.isEmpty
+            ? explicitTeaching
+            : explicitLegacyMeaning
+        naturalChineseMeaning = !explicitLegacyMeaning.isEmpty ? explicitLegacyMeaning : teachingInterpretation
         sentenceCore = try container.decode(String.self, forKey: .sentenceCore)
         chunkBreakdown = try container.decode([String].self, forKey: .chunkBreakdown)
         grammarPoints = try container.decode([ProfessorGrammarPoint].self, forKey: .grammarPoints)
@@ -683,28 +865,70 @@ struct ProfessorSentenceAnalysis: Codable, Equatable, Hashable {
     }
 
     var renderedFaithfulTranslation: String {
-        let explicit = purifiedChineseExplanation(faithfulTranslation)
+        let explicit = reliableFaithfulTranslation(faithfulTranslation)
         if !explicit.isEmpty { return explicit }
 
-        let fallback = purifiedChineseExplanation(naturalChineseMeaning)
+        let fallback = reliableFaithfulTranslation(naturalChineseMeaning)
         if !fallback.isEmpty { return fallback }
 
-        return purifiedChineseExplanation(teachingInterpretation)
+        return ""
     }
 
     var renderedTeachingInterpretation: String {
         let explicit = purifiedChineseExplanation(teachingInterpretation)
-        if !explicit.isEmpty { return explicit }
+        let faithful = renderedFaithfulTranslation
+        if !explicit.isEmpty, normalizedChineseComparisonKey(explicit) != normalizedChineseComparisonKey(faithful) {
+            return explicit
+        }
 
-        return purifiedChineseExplanation(naturalChineseMeaning)
+        let legacy = purifiedChineseExplanation(naturalChineseMeaning)
+        if !legacy.isEmpty, normalizedChineseComparisonKey(legacy) != normalizedChineseComparisonKey(faithful) {
+            return legacy
+        }
+
+        return pedagogicalTeachingInterpretationFallback(
+            sentenceFunction: renderedSentenceFunction,
+            coreSkeleton: displayedStableCoreSkeleton,
+            chunkLayers: displayedChunkLayers,
+            faithfulTranslation: faithful
+        )
     }
 
     var needsLocalRepair: Bool {
-        let missingFaithful = renderedFaithfulTranslation.isEmpty
-        let missingTeaching = renderedTeachingInterpretation.isEmpty
+        let missingTeaching = !hasReliableTeachingInterpretation
         let unstableCore = displayedStableCoreSkeleton == nil &&
             renderedSentenceCore.contains("当前结果里主干拆分不稳定")
-        return missingFaithful || missingTeaching || unstableCore
+        return missingTeaching || unstableCore
+    }
+
+    var hasReliableFaithfulTranslation: Bool {
+        !renderedFaithfulTranslation.isEmpty
+    }
+
+    var hasReliableTeachingInterpretation: Bool {
+        let explicit = purifiedChineseExplanation(teachingInterpretation)
+        guard !explicit.isEmpty else { return false }
+        let faithful = renderedFaithfulTranslation
+        if faithful.isEmpty { return true }
+        return normalizedChineseComparisonKey(explicit) != normalizedChineseComparisonKey(faithful)
+    }
+
+    func isCompatible(with sentenceText: String) -> Bool {
+        let normalizedOriginal = normalizedEnglishSentenceComparisonKey(originalSentence)
+        let normalizedSentence = normalizedEnglishSentenceComparisonKey(sentenceText)
+
+        guard !normalizedSentence.isEmpty else { return true }
+        guard !normalizedOriginal.isEmpty else { return true }
+        if normalizedOriginal == normalizedSentence { return true }
+
+        return englishSentenceTokenOverlap(normalizedOriginal, normalizedSentence) >= 0.58
+    }
+
+    func shouldPreferSentenceExplain(for sentenceText: String) -> Bool {
+        !isCompatible(with: sentenceText) ||
+        !hasReliableFaithfulTranslation ||
+        !hasReliableTeachingInterpretation ||
+        !isAIGenerated
     }
 
     var renderedChunkLayers: [String] {
@@ -1076,6 +1300,52 @@ private func purifiedChineseExplanation(_ value: String) -> String {
     return recovered.joined(separator: "。")
 }
 
+private func reliableFaithfulTranslation(_ value: String) -> String {
+    let explicit = purifiedChineseExplanation(value)
+    guard !explicit.isEmpty else { return "" }
+    guard looksLikeFaithfulTranslation(explicit) else { return "" }
+    return explicit
+}
+
+private func looksLikeFaithfulTranslation(_ value: String) -> Bool {
+    let normalized = purifiedChineseExplanation(value)
+    guard !normalized.isEmpty, isChineseDominant(normalized) else { return false }
+
+    let rejectMarkers = [
+        "句意可以理解为",
+        "这句话真正要",
+        "真正要抓",
+        "重点在于",
+        "先抓",
+        "不要把",
+        "阅读时",
+        "做题时",
+        "放在本段里",
+        "老师会",
+        "板书时",
+        "其余信息都在",
+        "主句主干"
+    ]
+
+    return !rejectMarkers.contains { normalized.contains($0) }
+}
+
+private func normalizedEnglishSentenceComparisonKey(_ value: String) -> String {
+    value
+        .lowercased()
+        .replacingOccurrences(of: #"[^\p{Latin}0-9]+"#, with: " ", options: .regularExpression)
+        .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private func englishSentenceTokenOverlap(_ lhs: String, _ rhs: String) -> Double {
+    let lhsTokens = Set(lhs.split(separator: " ").map(String.init).filter { $0.count >= 2 })
+    let rhsTokens = Set(rhs.split(separator: " ").map(String.init).filter { $0.count >= 2 })
+    guard !lhsTokens.isEmpty, !rhsTokens.isEmpty else { return 1 }
+    let overlap = lhsTokens.intersection(rhsTokens).count
+    return Double(overlap) / Double(max(lhsTokens.count, rhsTokens.count))
+}
+
 private func purifiedChineseList(_ values: [String], limit: Int) -> [String] {
     var ordered: [String] = []
     var seen: Set<String> = []
@@ -1092,6 +1362,52 @@ private func purifiedChineseList(_ values: [String], limit: Int) -> [String] {
     }
 
     return ordered
+}
+
+private func normalizedChineseComparisonKey(_ value: String) -> String {
+    purifiedChineseExplanation(value)
+        .lowercased()
+        .replacingOccurrences(of: #"[^\p{Han}a-z0-9]+"#, with: "", options: .regularExpression)
+}
+
+private func pedagogicalTeachingInterpretationFallback(
+    sentenceFunction: String,
+    coreSkeleton: ProfessorCoreSkeleton?,
+    chunkLayers: [ProfessorChunkLayerDisplayItem],
+    faithfulTranslation: String
+) -> String {
+    var parts: [String] = []
+    let functionHead = purifiedChineseDisplayText(sentenceFunction)
+    if !functionHead.isEmpty {
+        parts.append("老师先会把这句当成“\(functionHead)”来看。")
+    }
+
+    if let coreSkeleton, coreSkeleton.isMeaningful {
+        let stableCore = [
+            coreSkeleton.subject.isEmpty ? nil : "主语“\(coreSkeleton.subject)”",
+            coreSkeleton.predicate.isEmpty ? nil : "谓语“\(coreSkeleton.predicate)”",
+            coreSkeleton.complementOrObject.isEmpty ? nil : "核心补足“\(coreSkeleton.complementOrObject)”"
+        ]
+        .compactMap { $0 }
+        .joined(separator: "、")
+        if !stableCore.isEmpty {
+            parts.append("板书时先锁定 \(stableCore)，其余信息都往这个主干上挂。")
+        }
+    }
+
+    let roleHints = chunkLayers.map(\.role)
+    if roleHints.contains(where: { $0.contains("前置") || $0.contains("条件") || $0.contains("让步") }) {
+        parts.append("读的时候不要被句首框架带走，真正判断一般落在后面的主句主干。")
+    } else if roleHints.contains(where: { $0.contains("后置") || $0.contains("补充") }) {
+        parts.append("其余语块主要是在补限定范围和修饰关系，不要把枝叶误抬成主干。")
+    }
+
+    let faithful = purifiedChineseExplanation(faithfulTranslation)
+    if !faithful.isEmpty {
+        parts.append("先把“\(faithful)”这个基本意思抓稳，再回头分层看修饰关系。")
+    }
+
+    return parts.joined(separator: " ")
 }
 
 private struct LocalizedGrammarTemplate {
@@ -1793,6 +2109,7 @@ struct OutlineNode: Identifiable, Codable, Equatable, Hashable {
     let anchor: OutlineAnchor
     let sourceSegmentIDs: [String]
     let sourceSentenceIDs: [String]
+    let provenance: NodeProvenance
     let children: [OutlineNode]
 
     private enum CodingKeys: String, CodingKey {
@@ -1807,6 +2124,7 @@ struct OutlineNode: Identifiable, Codable, Equatable, Hashable {
         case anchor
         case sourceSegmentIDs = "source_segment_ids"
         case sourceSentenceIDs = "source_sentence_ids"
+        case provenance
         case children
     }
 
@@ -1822,6 +2140,7 @@ struct OutlineNode: Identifiable, Codable, Equatable, Hashable {
         anchor: OutlineAnchor,
         sourceSegmentIDs: [String],
         sourceSentenceIDs: [String],
+        provenance: NodeProvenance = .unknown,
         children: [OutlineNode]
     ) {
         self.id = id
@@ -1835,6 +2154,7 @@ struct OutlineNode: Identifiable, Codable, Equatable, Hashable {
         self.anchor = anchor
         self.sourceSegmentIDs = sourceSegmentIDs
         self.sourceSentenceIDs = sourceSentenceIDs
+        self.provenance = provenance
         self.children = children
     }
 
@@ -1851,15 +2171,22 @@ struct OutlineNode: Identifiable, Codable, Equatable, Hashable {
         anchor = try container.decode(OutlineAnchor.self, forKey: .anchor)
         sourceSegmentIDs = try container.decodeIfPresent([String].self, forKey: .sourceSegmentIDs) ?? []
         sourceSentenceIDs = try container.decodeIfPresent([String].self, forKey: .sourceSentenceIDs) ?? []
+        provenance = try container.decodeIfPresent(NodeProvenance.self, forKey: .provenance)
+            ?? NodeProvenance(
+                sourceSegmentID: sourceSegmentIDs.first ?? anchor.segmentID,
+                sourceSentenceID: sourceSentenceIDs.first ?? anchor.sentenceID,
+                sourceKind: .unknown,
+                consistencyScore: 0.5
+            )
         children = try container.decodeIfPresent([OutlineNode].self, forKey: .children) ?? []
     }
 
     var primarySegmentID: String? {
-        sourceSegmentIDs.first ?? anchor.segmentID
+        provenance.sourceSegmentID ?? sourceSegmentIDs.first ?? anchor.segmentID
     }
 
     var primarySentenceID: String? {
-        sourceSentenceIDs.first ?? anchor.sentenceID
+        provenance.sourceSentenceID ?? sourceSentenceIDs.first ?? anchor.sentenceID
     }
 }
 
@@ -1948,11 +2275,16 @@ struct StructuredSourceBundle: Equatable {
 
     func displayedSentenceCard(id: String?) -> ProfessorSentenceCard? {
         guard let id else { return nil }
+        let rebuiltCard = { NormalizedDocumentConverter.rebuildSentenceCard(sentenceID: id, in: self) }
         guard let existing = sentenceCard(id: id) else {
-            return NormalizedDocumentConverter.rebuildSentenceCard(sentenceID: id, in: self)
+            return rebuiltCard()
+        }
+        if let sentence = sentence(id: id),
+           !existing.analysis.isCompatible(with: sentence.text) {
+            return rebuiltCard() ?? existing
         }
         guard existing.analysis.needsLocalRepair else { return existing }
-        return NormalizedDocumentConverter.rebuildSentenceCard(sentenceID: id, in: self) ?? existing
+        return rebuiltCard() ?? existing
     }
 
     func paragraphCard(forSegmentID id: String?) -> ParagraphTeachingCard? {
@@ -1968,11 +2300,14 @@ struct StructuredSourceBundle: Equatable {
     func bestOutlineNode(forSentenceID id: String?) -> OutlineNode? {
         guard let id else { return nil }
 
-        return _cachedFlatNodes
+        let matched = _cachedFlatNodes
             .filter { node in
                 node.sourceSentenceIDs.contains(id) || node.anchor.sentenceID == id
             }
             .sorted {
+                if $0.provenance.consistencyScore != $1.provenance.consistencyScore {
+                    return $0.provenance.consistencyScore > $1.provenance.consistencyScore
+                }
                 if $0.depth != $1.depth {
                     return $0.depth > $1.depth
                 }
@@ -1980,6 +2315,12 @@ struct StructuredSourceBundle: Equatable {
                 return $0.coverageSpan < $1.coverageSpan
             }
             .first
+        if let matched {
+            return matched
+        }
+
+        guard let sentence = sentence(id: id) else { return nil }
+        return bestOutlineNode(forSegmentID: sentence.segmentID)
     }
 
     func bestOutlineNode(forSegmentID id: String?) -> OutlineNode? {
@@ -1990,6 +2331,9 @@ struct StructuredSourceBundle: Equatable {
                 node.sourceSegmentIDs.contains(id) || node.anchor.segmentID == id
             }
             .sorted {
+                if $0.provenance.consistencyScore != $1.provenance.consistencyScore {
+                    return $0.provenance.consistencyScore > $1.provenance.consistencyScore
+                }
                 if $0.depth != $1.depth {
                     return $0.depth > $1.depth
                 }
@@ -2129,6 +2473,7 @@ struct StructuredSourceBundle: Equatable {
         let paragraphNodes: [OutlineNode] = paragraphCards.map { card in
             let sentences = sentencesBySegment[card.segmentID] ?? []
             let linkedQuestions = (questionHintsBySegment[card.segmentID] ?? []).map(\.1)
+            let paragraphSegment = segments.first(where: { $0.id == card.segmentID })
             let proposedParagraphTitle = pedagogicalParagraphTitle(card: card)
             let proposedParagraphSummary = pedagogicalParagraphSummary(card: card, linkedQuestions: linkedQuestions)
             let validatedParagraph = AnchorConsistencyValidator.validatedParagraphNodeContent(
@@ -2158,7 +2503,13 @@ struct StructuredSourceBundle: Equatable {
                         label: card.anchorLabel
                     ),
                     sourceSegmentIDs: [card.segmentID],
-                    sourceSentenceIDs: localSentenceIDs,
+                    sourceSentenceIDs: anchorSentenceID.map { [$0] } ?? [],
+                    provenance: NodeProvenance(
+                        sourceSegmentID: card.segmentID,
+                        sourceSentenceID: anchorSentenceID,
+                        sourceKind: .questionSupport,
+                        consistencyScore: localSentenceIDs.isEmpty ? 0.58 : 0.76
+                    ),
                     children: []
                 )
             }
@@ -2192,6 +2543,12 @@ struct StructuredSourceBundle: Equatable {
                         ),
                         sourceSegmentIDs: [sentence.segmentID],
                         sourceSentenceIDs: [sentence.id],
+                        provenance: NodeProvenance(
+                            sourceSegmentID: sentence.segmentID,
+                            sourceSentenceID: sentence.id,
+                            sourceKind: sentence.provenance.sourceKind,
+                            consistencyScore: validatedSentence.consistencyScore
+                        ),
                         children: []
                     )
                 }
@@ -2219,6 +2576,12 @@ struct StructuredSourceBundle: Equatable {
                 ),
                 sourceSegmentIDs: [card.segmentID],
                 sourceSentenceIDs: validatedFocus.anchorSentenceID.map { [$0] } ?? [],
+                provenance: NodeProvenance(
+                    sourceSegmentID: card.segmentID,
+                    sourceSentenceID: validatedFocus.anchorSentenceID,
+                    sourceKind: paragraphSegment?.provenance.sourceKind ?? .passageBody,
+                    consistencyScore: validatedFocus.consistencyScore
+                ),
                 children: []
             )
 
@@ -2238,7 +2601,13 @@ struct StructuredSourceBundle: Equatable {
                     label: card.anchorLabel
                 ),
                 sourceSegmentIDs: [card.segmentID],
-                sourceSentenceIDs: sentences.map(\.id),
+                sourceSentenceIDs: validatedParagraph.anchorSentenceID.map { [$0] } ?? [],
+                provenance: NodeProvenance(
+                    sourceSegmentID: card.segmentID,
+                    sourceSentenceID: validatedParagraph.anchorSentenceID,
+                    sourceKind: paragraphSegment?.provenance.sourceKind ?? .passageBody,
+                    consistencyScore: validatedParagraph.consistencyScore
+                ),
                 children: [focusNode] + questionNodes + supportingSentenceNodes
             )
         }
@@ -2260,6 +2629,12 @@ struct StructuredSourceBundle: Equatable {
             ),
             sourceSegmentIDs: segments.map(\.id),
             sourceSentenceIDs: [],
+            provenance: NodeProvenance(
+                sourceSegmentID: segments.first?.id,
+                sourceSentenceID: segments.first.flatMap { sentencesBySegment[$0.id]?.first?.id },
+                sourceKind: segments.first?.provenance.sourceKind ?? .passageBody,
+                consistencyScore: 0.9
+            ),
             children: paragraphNodes
         )
 
@@ -2294,13 +2669,11 @@ struct StructuredSourceBundle: Equatable {
         card: ParagraphTeachingCard,
         linkedQuestions _: [QuestionEvidenceLink]
     ) -> String {
-        let role = truncatedPedagogicalText(card.argumentRole.displayName, limit: 10)
         let primaryFocus = truncatedPedagogicalText(card.displayedTeachingFocuses.first ?? "", limit: 20)
         let blindSpot = truncatedPedagogicalText(card.displayedStudentBlindSpot ?? "", limit: 20)
         let examValue = truncatedPedagogicalText(card.displayedExamValue, limit: 18)
 
         let summary = [
-            role.isEmpty ? "" : "段落角色：\(role)",
             !primaryFocus.isEmpty ? "先抓：\(primaryFocus)" : "",
             primaryFocus.isEmpty && !blindSpot.isEmpty ? "别读偏：\(blindSpot)" : "",
             primaryFocus.isEmpty && blindSpot.isEmpty && !examValue.isEmpty ? "命题点：\(examValue)" : ""

@@ -15,8 +15,8 @@ struct SourceDetailView: View {
     @State private var generationNote: String?
     @State private var isExpanded = false
     @State private var dragOffset: CGFloat = 0
-    @State private var selectedTab: SourceDetailTab = .professor
-    @State private var lastNonOutlineTab: SourceDetailTab = .professor
+    @State private var selectedTab: SourceDetailTab = .outline
+    @State private var lastNonOutlineTab: SourceDetailTab = .original
     @State private var selectedSentence: Sentence?
     @State private var selectedOutlineNode: OutlineNode?
     @State private var jumpTargetSentenceID: String?
@@ -104,9 +104,13 @@ struct SourceDetailView: View {
     private var currentAnalysisForTeachingStatus: ProfessorSentenceAnalysis? {
         guard let structuredSource else { return nil }
         if let sentence = currentSentenceForTeachingStatus {
-            return structuredSource.displayedSentenceCard(id: sentence.id)?.analysis
+            guard let analysis = structuredSource.displayedSentenceCard(id: sentence.id)?.analysis,
+                  analysis.isCompatible(with: sentence.text) else {
+                return nil
+            }
+            return analysis
         }
-        return structuredSource.professorSentenceCards.first?.analysis
+        return nil
     }
 
     private var currentModeLabel: String {
@@ -758,7 +762,7 @@ struct SourceDetailView: View {
     }
 
     private func closeOutlineWorkspace() {
-        selectedTab = lastNonOutlineTab == .outline ? .professor : lastNonOutlineTab
+        selectedTab = lastNonOutlineTab == .outline ? .original : lastNonOutlineTab
     }
 
     private func handleOriginalJumpHandled() {

@@ -85,12 +85,29 @@ struct SentenceExplainDetailSheet: View {
         viewModel.contextSentences(for: activeSentence, in: document)
     }
 
+    private var bundledAnalysis: ProfessorSentenceAnalysis? {
+        viewModel.professorSentenceCard(for: activeSentence, in: document)?.analysis
+    }
+
     private var effectiveAnalysis: ProfessorSentenceAnalysis? {
-        let bundled = viewModel.professorSentenceCard(for: activeSentence, in: document)?.analysis
-        if let remote = result?.localFallbackAnalysis {
+        let bundled = bundledAnalysis
+        if let remote = visibleResult?.localFallbackAnalysis {
             return remote.mergingFallback(bundled)
         }
         return bundled
+    }
+
+    private var visibleResult: AIExplainSentenceResult? {
+        guard let result, isResultVisible(result, for: activeSentence) else {
+            return nil
+        }
+        return result
+    }
+
+    private var shouldAutoLoadRemoteExplanation: Bool {
+        guard !isLoading, result == nil else { return false }
+        guard let bundled = bundledAnalysis else { return true }
+        return bundled.shouldPreferSentenceExplain(for: activeSentence.text)
     }
 
     private let contentBottomInset: CGFloat = 170
@@ -209,6 +226,10 @@ struct SentenceExplainDetailSheet: View {
             result = nil
             errorMessage = nil
             isLoading = false
+            maybeAutoLoadExplanation()
+        }
+        .onAppear {
+            maybeAutoLoadExplanation()
         }
         .onDisappear {
             explanationTask?.cancel()
@@ -465,6 +486,10 @@ struct SentenceExplainDetailSheet: View {
             )
             try Task.checkCancellation()
 
+            guard isResultVisible(fetched, for: sentence) else {
+                throw AIExplainSentenceServiceError.requestFailed("返回结果与当前句不一致")
+            }
+
             await MainActor.run {
                 guard activeSentence.id == sentence.id else { return }
                 result = fetched
@@ -514,6 +539,26 @@ struct SentenceExplainDetailSheet: View {
         } else {
             actionNote = "该来源暂时无法直接定位到句子。"
         }
+    }
+
+    private func maybeAutoLoadExplanation() {
+        guard shouldAutoLoadRemoteExplanation else { return }
+        scheduleExplanationLoad(force: false)
+    }
+
+    private func isResultVisible(_ result: AIExplainSentenceResult, for sentence: Sentence) -> Bool {
+        guard let identity = result.analysisIdentity else { return false }
+        let expectedIdentity = SentenceAnalysisIdentity(
+            sentenceID: sentence.id,
+            sentenceText: sentence.text,
+            anchorLabel: sentence.anchorLabel
+        )
+        return identity == expectedIdentity &&
+            AnalysisConsistencyGuard.warnings(
+                identity: expectedIdentity,
+                sentenceText: sentence.text,
+                analysis: result
+            ).isEmpty
     }
 }
 

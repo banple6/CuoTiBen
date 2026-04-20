@@ -274,7 +274,7 @@ public final class ChunkingService: ChunkingServiceProtocol {
                 } else {
                     // 多语言块分类
                     let classified = BlockContentClassifier.classifyBlocks(groupingResult.blocks)
-                    let eligible = BlockContentClassifier.filterEligibleBlocks(classified)
+                    let eligible = BlockContentClassifier.filterPrimaryPassageBlocks(classified)
 
                     let headingCount = eligible.filter { $0.classification.contentType == .title || $0.classification.contentType == .heading || $0.classification.contentType == .subheading }.count
                     var headingIndex = 0
@@ -286,6 +286,13 @@ public final class ChunkingService: ChunkingServiceProtocol {
                     )
 
                     for (block, classification) in eligible {
+                        let repairedBlockText = TextPipelineValidator
+                            .validateAndRepairIfReversed(block.text)
+                            .text
+                            .normalizedWhitespace()
+                        let effectiveBlockText = repairedBlockText.isEmpty
+                            ? block.text.normalizedWhitespace()
+                            : repairedBlockText
                         let locator: String
                         let typeName = classification.contentType
 
@@ -313,32 +320,42 @@ public final class ChunkingService: ChunkingServiceProtocol {
                             ParsedSegment(
                                 locator: locator,
                                 position: index + 1,
-                                text: block.text,
+                                text: effectiveBlockText,
                                 sentenceDrafts: []
                             )
                         )
 
                         TextPipelineDiagnostics.log(
                             "块分类",
-                            "第\(index + 1)页 \(classification.contentType.displayName): \"\(String(block.text.prefix(60)))\" 置信度=\(String(format: "%.2f", classification.confidence)) 语言=\(classification.languageProfile.dominantLanguage.rawValue) 原因=\(classification.reasons.joined(separator: ","))"
+                            "第\(index + 1)页 \(classification.contentType.displayName): \"\(String(effectiveBlockText.prefix(60)))\" 置信度=\(String(format: "%.2f", classification.confidence)) 语言=\(classification.languageProfile.dominantLanguage.rawValue) 原因=\(classification.reasons.joined(separator: ","))"
                         )
                     }
 
-                    // 如果所有块都被过滤掉，回退到整页文本
+                    // 只有在版面分组失真时才回退整页文本；
+                    // 如果只是因为它们属于中文说明/注释等非正文主链内容，则不再把整页污染块塞回 rawText。
                     if eligible.isEmpty && !groupingResult.blocks.isEmpty {
-                        TextPipelineDiagnostics.log(
-                            "块分类",
-                            "第\(index + 1)页 所有块不合格，回退整页文本",
-                            severity: .warning
-                        )
-                        segments.append(
-                            ParsedSegment(
-                                locator: "第\(index + 1)页",
-                                position: index + 1,
-                                text: trimmedPageText.normalizedWhitespace(),
-                                sentenceDrafts: []
+                        let hadTreeEligible = classified.contains { $0.classification.isTreeNodeEligible }
+                        if hadTreeEligible {
+                            TextPipelineDiagnostics.log(
+                                "块分类",
+                                "第\(index + 1)页 仅检测到说明/注释类内容，跳过正文主链回退",
+                                severity: .info
                             )
-                        )
+                        } else {
+                            TextPipelineDiagnostics.log(
+                                "块分类",
+                                "第\(index + 1)页 所有块不合格，回退整页文本",
+                                severity: .warning
+                            )
+                            segments.append(
+                                ParsedSegment(
+                                    locator: "第\(index + 1)页",
+                                    position: index + 1,
+                                    text: trimmedPageText.normalizedWhitespace(),
+                                    sentenceDrafts: []
+                                )
+                            )
+                        }
                     }
                 }
                 continue

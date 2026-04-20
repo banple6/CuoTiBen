@@ -113,6 +113,13 @@ struct ArchivistWorkspaceView: View {
             }
         }
         .background(ArchivistColors.deskBackground)
+        .task(id: workspaceViewModel.selectedSentenceID) {
+            guard workspaceViewModel.shouldAutoLoadAnalysis else { return }
+            await workspaceViewModel.loadAnalysis(using: appViewModel)
+        }
+        .onDisappear {
+            workspaceViewModel.cancelAnalysis()
+        }
         .sheet(item: $selectedWord) { entry in
             WordExplainDetailSheet(document: document, entry: entry)
                 .environmentObject(appViewModel)
@@ -254,10 +261,10 @@ private struct ToolbarCircleButton: View {
 
 private struct ArchivistSideRail: View {
     private let items: [(String, String)] = [
-        ("Mind Map", "point.3.connected.trianglepath.dotted"),
-        ("Structure", "square.grid.2x2"),
-        ("Archive", "archivebox"),
-        ("Tags", "tag")
+        ("思维导图", "point.3.connected.trianglepath.dotted"),
+        ("结构总览", "square.grid.2x2"),
+        ("资料档案", "archivebox"),
+        ("标签", "tag")
     ]
 
     var body: some View {
@@ -272,10 +279,10 @@ private struct ArchivistSideRail: View {
                     )
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Research Library")
+                    Text("资料库")
                         .font(ArchivistTypography.label)
                         .foregroundStyle(ArchivistColors.primaryInk)
-                    Text("Ph.D. Candidate")
+                    Text("教授式研读")
                         .font(ArchivistTypography.annotationSmall)
                         .foregroundStyle(ArchivistColors.softInk)
                 }
@@ -289,12 +296,12 @@ private struct ArchivistSideRail: View {
                         Text(item.0)
                             .font(ArchivistTypography.annotation)
                     }
-                    .foregroundStyle(item.0 == "Mind Map" ? ArchivistColors.primaryInk : ArchivistColors.mutedInk.opacity(0.74))
+                    .foregroundStyle(item.0 == "思维导图" ? ArchivistColors.primaryInk : ArchivistColors.mutedInk.opacity(0.74))
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
                     .background(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(item.0 == "Mind Map" ? ArchivistColors.blueWash.opacity(0.45) : Color.clear)
+                            .fill(item.0 == "思维导图" ? ArchivistColors.blueWash.opacity(0.45) : Color.clear)
                     )
                 }
             }
@@ -303,7 +310,7 @@ private struct ArchivistSideRail: View {
 
             Button {
             } label: {
-                Text("New Document")
+                Text("新建资料")
                     .font(ArchivistTypography.label)
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
@@ -330,7 +337,7 @@ private struct ArchivistFloatingNavigator: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Text("Mind Map")
+                Text("思维导图")
                     .font(ArchivistTypography.label)
                     .foregroundStyle(ArchivistColors.softInk)
                 Spacer()

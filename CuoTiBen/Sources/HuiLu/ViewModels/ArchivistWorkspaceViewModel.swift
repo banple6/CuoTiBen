@@ -61,8 +61,20 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
         return bundle.paragraphTeachingCards.first
     }
 
+    private var bundledAnalysis: ProfessorSentenceAnalysis? {
+        guard let selectedSentence else {
+            return bundle.displayedSentenceCard(id: selectedSentenceID)?.analysis
+        }
+
+        guard let analysis = bundle.displayedSentenceCard(id: selectedSentence.id)?.analysis,
+              analysis.isCompatible(with: selectedSentence.text) else {
+            return nil
+        }
+        return analysis
+    }
+
     var effectiveAnalysis: ProfessorSentenceAnalysis? {
-        let bundled = bundle.displayedSentenceCard(id: selectedSentenceID)?.analysis
+        let bundled = bundledAnalysis
         if let sentence = selectedSentence,
            let remote = analysisResult,
            isResultVisible(remote, for: sentence) {
@@ -77,6 +89,12 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
             )
         }
         return bundled
+    }
+
+    var shouldAutoLoadAnalysis: Bool {
+        guard !isLoadingAnalysis, analysisResult == nil, let selectedSentence else { return false }
+        guard let bundled = bundledAnalysis else { return true }
+        return bundled.shouldPreferSentenceExplain(for: selectedSentence.text)
     }
 
     var relatedEvidenceItems: [String] {

@@ -31,18 +31,18 @@ struct StructureTreePreviewMetrics {
     var canvasViewportHeight: CGFloat {
         switch densityMode {
         case .detailed:
-            return 548
+            return 520
         case .compact:
-            return 452
+            return 408
         }
     }
 
     var contentInset: CGSize {
         switch densityMode {
         case .detailed:
-            return CGSize(width: 22, height: 22)
-        case .compact:
             return CGSize(width: 18, height: 18)
+        case .compact:
+            return CGSize(width: 12, height: 12)
         }
     }
 
@@ -92,8 +92,8 @@ struct StructureTreePreviewMetrics {
 
     var defaultScale: CGFloat {
         switch densityMode {
-        case .detailed: return 0.9
-        case .compact: return 0.94
+        case .detailed: return 0.88
+        case .compact: return 0.9
         }
     }
 
@@ -108,14 +108,14 @@ struct StructureTreePreviewMetrics {
 
     var leadingViewportPadding: CGFloat {
         switch densityMode {
-        case .detailed: return 26
-        case .compact: return 20
+        case .detailed: return 18
+        case .compact: return 14
         }
     }
 
-    var trailingViewportPadding: CGFloat { 24 }
-    var topViewportPadding: CGFloat { 20 }
-    var bottomViewportPadding: CGFloat { 20 }
+    var trailingViewportPadding: CGFloat { densityMode == .detailed ? 18 : 14 }
+    var topViewportPadding: CGFloat { densityMode == .detailed ? 16 : 12 }
+    var bottomViewportPadding: CGFloat { densityMode == .detailed ? 16 : 12 }
 
     var collapsedBranchLimit: Int {
         switch densityMode {
@@ -133,8 +133,8 @@ struct StructureTreePreviewMetrics {
 
     var expandedBranchLimit: Int {
         switch densityMode {
-        case .detailed: return 6
-        case .compact: return 4
+        case .detailed: return 5
+        case .compact: return 3
         }
     }
 
@@ -148,41 +148,41 @@ struct StructureTreePreviewMetrics {
     var renderPadding: CGSize {
         switch densityMode {
         case .detailed:
-            return CGSize(width: 220, height: 180)
-        case .compact:
             return CGSize(width: 180, height: 136)
+        case .compact:
+            return CGSize(width: 132, height: 96)
         }
     }
 
     func paragraphRingRadius(for count: Int) -> CGFloat {
-        let base: CGFloat = densityMode == .detailed ? 260 : 220
-        let incremental: CGFloat = densityMode == .detailed ? 22 : 18
+        let base: CGFloat = densityMode == .detailed ? 236 : 182
+        let incremental: CGFloat = densityMode == .detailed ? 18 : 14
         return base + CGFloat(max(count - 4, 0)) * incremental
     }
 
     var childRingGap: CGFloat {
-        densityMode == .detailed ? 176 : 144
+        densityMode == .detailed ? 152 : 118
     }
 
     func paragraphSectorAngle(for count: Int) -> CGFloat {
         guard count > 0 else { return .pi / 2 }
-        return min((2 * .pi / CGFloat(count)) * 0.72, densityMode == .detailed ? 0.92 : 0.76)
+        return min((2 * .pi / CGFloat(count)) * 0.68, densityMode == .detailed ? 0.84 : 0.64)
     }
 
     func cardSize(for role: StructureTreePreviewNodeRole) -> CGSize {
         switch (densityMode, role) {
         case (.detailed, .focus):
-            return CGSize(width: 304, height: 150)
+            return CGSize(width: 282, height: 132)
         case (.detailed, .mainPath):
-            return CGSize(width: 228, height: 112)
+            return CGSize(width: 214, height: 98)
         case (.detailed, .branch):
-            return CGSize(width: 194, height: 96)
+            return CGSize(width: 178, height: 84)
         case (.compact, .focus):
-            return CGSize(width: 248, height: 82)
+            return CGSize(width: 220, height: 74)
         case (.compact, .mainPath):
-            return CGSize(width: 194, height: 68)
+            return CGSize(width: 172, height: 62)
         case (.compact, .branch):
-            return CGSize(width: 168, height: 62)
+            return CGSize(width: 148, height: 54)
         }
     }
 
@@ -226,11 +226,11 @@ struct StructureTreePreviewMetrics {
     func summaryCharacterLimit(for role: StructureTreePreviewNodeRole) -> Int {
         switch (densityMode, role) {
         case (.detailed, .focus):
-            return 62
+            return 52
         case (.detailed, .mainPath):
-            return 46
+            return 38
         case (.detailed, .branch):
-            return 34
+            return 28
         case (.compact, _):
             return 0
         }

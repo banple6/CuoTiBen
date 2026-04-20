@@ -1,5 +1,120 @@
 import Foundation
 
+enum AIEndpointService: String {
+    case sentenceExplain
+    case professorAnalysis
+
+    var displayName: String {
+        switch self {
+        case .sentenceExplain:
+            return "AI 句子讲解服务"
+        case .professorAnalysis:
+            return "AI 全文教授分析服务"
+        }
+    }
+}
+
+enum AIServiceAvailabilityPolicy {
+    static func cooldown(for statusCode: Int) -> TimeInterval? {
+        switch statusCode {
+        case 503, 504:
+            return 90
+        case 500, 502:
+            return 45
+        case 429:
+            return 30
+        default:
+            return nil
+        }
+    }
+
+    static func cooldown(for error: URLError) -> TimeInterval? {
+        switch error.code {
+        case .timedOut,
+             .cannotFindHost,
+             .cannotConnectToHost,
+             .dnsLookupFailed:
+            return 90
+        case .networkConnectionLost,
+             .notConnectedToInternet,
+             .internationalRoamingOff,
+             .callIsActive,
+             .dataNotAllowed:
+            return 45
+        default:
+            return nil
+        }
+    }
+
+    static func userFacingMessage(
+        for service: AIEndpointService,
+        technicalReason: String?
+    ) -> String {
+        let normalizedReason = technicalReason?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+
+        if normalizedReason.contains("503") ||
+            normalizedReason.contains("502") ||
+            normalizedReason.contains("timed out") ||
+            normalizedReason.contains("could not connect") ||
+            normalizedReason.contains("cannot connect") {
+            return "\(service.displayName)暂时不可用，请稍后重试。"
+        }
+
+        if let technicalReason,
+           !technicalReason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return technicalReason.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        return "\(service.displayName)暂时不可用，请稍后重试。"
+    }
+}
+
+actor AIServiceAvailabilityGate {
+    private struct State {
+        var blockedUntil: Date?
+        var lastReason: String?
+    }
+
+    private var states: [AIEndpointService: State] = [:]
+
+    func blockingMessage(for service: AIEndpointService) -> String? {
+        let now = Date()
+        guard let state = states[service], let blockedUntil = state.blockedUntil else {
+            return nil
+        }
+
+        guard blockedUntil > now else {
+            states[service] = State(blockedUntil: nil, lastReason: nil)
+            return nil
+        }
+
+        return AIServiceAvailabilityPolicy.userFacingMessage(
+            for: service,
+            technicalReason: state.lastReason
+        )
+    }
+
+    func recordSuccess(for service: AIEndpointService) {
+        states[service] = State(blockedUntil: nil, lastReason: nil)
+    }
+
+    func recordFailure(
+        for service: AIEndpointService,
+        technicalReason: String,
+        cooldown: TimeInterval?
+    ) {
+        guard let cooldown, cooldown > 0 else { return }
+        states[service] = State(
+            blockedUntil: Date().addingTimeInterval(cooldown),
+            lastReason: technicalReason
+        )
+    }
+}
+
+let aiServiceAvailabilityGate = AIServiceAvailabilityGate()
+
 struct ExplainSentenceContext: Equatable {
     let title: String
     let sentenceID: String?
@@ -237,18 +352,30 @@ struct AIExplainSentenceResult: Codable, Equatable {
             in: dictionary,
             keys: ["simpler_rewrite_translation", "rewrite_translation"]
         ) ?? ""
+        let parsedCoreSkeleton = Self.coreSkeleton(in: dictionary, fallbackSentenceCore: sentenceCore)
+        let parsedChunkLayers = Self.chunkLayers(in: dictionary, fallbackChunks: chunkBreakdown)
+        let parsedGrammarFocus = Self.grammarFocus(in: dictionary, fallbackGrammarPoints: grammarPoints)
+        let resolvedFaithfulTranslation = Self.localizeChineseExplanation(faithfulTranslation)
+        let resolvedTeachingInterpretation = Self.resolvedTeachingInterpretation(
+            candidate: teachingInterpretation,
+            legacyMeaning: naturalChineseMeaning,
+            faithfulTranslation: resolvedFaithfulTranslation,
+            sentenceFunction: sentenceFunction,
+            coreSkeleton: parsedCoreSkeleton,
+            chunkLayers: parsedChunkLayers
+        )
 
         self.init(
             originalSentence: Self.firstString(in: dictionary, keys: ["original_sentence", "originalSentence", "sentence"]) ?? sourceSentence,
             evidenceType: evidenceType,
             analysisIdentity: nil,
             sentenceFunction: sentenceFunction,
-            coreSkeleton: Self.coreSkeleton(in: dictionary, fallbackSentenceCore: sentenceCore),
-            chunkLayers: Self.chunkLayers(in: dictionary, fallbackChunks: chunkBreakdown),
-            grammarFocus: Self.grammarFocus(in: dictionary, fallbackGrammarPoints: grammarPoints),
-            faithfulTranslation: Self.nonEmpty(faithfulTranslation) ?? "",
-            teachingInterpretation: Self.nonEmpty(teachingInterpretation) ?? naturalChineseMeaning,
-            naturalChineseMeaning: naturalChineseMeaning,
+            coreSkeleton: parsedCoreSkeleton,
+            chunkLayers: parsedChunkLayers,
+            grammarFocus: parsedGrammarFocus,
+            faithfulTranslation: Self.nonEmpty(resolvedFaithfulTranslation) ?? "",
+            teachingInterpretation: resolvedTeachingInterpretation,
+            naturalChineseMeaning: Self.nonEmpty(naturalChineseMeaning) ?? resolvedTeachingInterpretation,
             sentenceCore: sentenceCore,
             chunkBreakdown: chunkBreakdown,
             grammarPoints: grammarPoints,
@@ -259,7 +386,13 @@ struct AIExplainSentenceResult: Codable, Equatable {
             examParaphraseRoutes: examParaphraseRoutes.isEmpty ? explicitExamRewritePoints : examParaphraseRoutes,
             simplifiedEnglish: simplerRewrite,
             simplerRewrite: simplerRewrite,
-            simplerRewriteTranslation: simplerRewriteTranslation,
+            simplerRewriteTranslation: Self.resolvedRewriteTranslation(
+                candidate: simplerRewriteTranslation,
+                rewrite: simplerRewrite,
+                faithfulTranslation: resolvedFaithfulTranslation,
+                coreSkeleton: parsedCoreSkeleton,
+                chunkLayers: parsedChunkLayers
+            ),
             miniExercise: Self.firstString(in: dictionary, keys: ["mini_exercise"]),
             miniCheck: Self.firstString(in: dictionary, keys: ["mini_check", "mini_exercise"]),
             hierarchyRebuild: Self.stringArray(in: dictionary, keys: ["hierarchy_rebuild"]),
@@ -916,6 +1049,125 @@ struct AIExplainSentenceResult: Codable, Equatable {
         return recovered.joined(separator: "。")
     }
 
+    private static func resolvedTeachingInterpretation(
+        candidate: String,
+        legacyMeaning: String,
+        faithfulTranslation: String,
+        sentenceFunction: String,
+        coreSkeleton: CoreSkeleton?,
+        chunkLayers: [ChunkLayer]
+    ) -> String {
+        let normalizedFaithful = normalizedChineseComparisonKey(faithfulTranslation)
+        let normalizedCandidate = localizeChineseExplanation(candidate)
+        if !normalizedCandidate.isEmpty, normalizedChineseComparisonKey(normalizedCandidate) != normalizedFaithful {
+            return normalizedCandidate
+        }
+
+        let normalizedLegacy = localizeChineseExplanation(legacyMeaning)
+        if !normalizedLegacy.isEmpty, normalizedChineseComparisonKey(normalizedLegacy) != normalizedFaithful {
+            return normalizedLegacy
+        }
+
+        return buildTeachingInterpretationFallback(
+            sentenceFunction: sentenceFunction,
+            coreSkeleton: coreSkeleton,
+            chunkLayers: chunkLayers,
+            faithfulTranslation: faithfulTranslation
+        )
+    }
+
+    private static func resolvedRewriteTranslation(
+        candidate: String,
+        rewrite: String,
+        faithfulTranslation: String,
+        coreSkeleton: CoreSkeleton?,
+        chunkLayers: [ChunkLayer]
+    ) -> String {
+        let normalizedCandidate = localizeChineseExplanation(candidate)
+        if !normalizedCandidate.isEmpty,
+           normalizedChineseComparisonKey(normalizedCandidate) != normalizedChineseComparisonKey(faithfulTranslation) {
+            return normalizedCandidate
+        }
+
+        guard !rewrite.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "" }
+
+        var parts: [String] = []
+        let normalizedFaithful = localizeChineseExplanation(faithfulTranslation)
+        if !normalizedFaithful.isEmpty {
+            parts.append("这条改写仍在说：\(normalizedFaithful)")
+        }
+
+        let roles = chunkLayers.map { normalizeMixedGrammarChinese($0.role) }
+        if roles.contains(where: { $0.contains("前置") || $0.contains("条件") || $0.contains("让步") || $0.contains("后置") }) {
+            parts.append("它保留了原句主干判断，把外围框架和修饰层压缩成更直接的主句表达。")
+        } else {
+            parts.append("它保留原意，只把句法改成更直接的主谓表达。")
+        }
+
+        if let coreSkeleton, coreSkeleton.isMeaningful {
+            let stableCore = [
+                coreSkeleton.subject.isEmpty ? nil : "主语：\(coreSkeleton.subject)",
+                coreSkeleton.predicate.isEmpty ? nil : "谓语：\(coreSkeleton.predicate)",
+                coreSkeleton.complementOrObject.isEmpty ? nil : "核心补足：\(coreSkeleton.complementOrObject)"
+            ]
+            .compactMap { $0 }
+            .joined(separator: "｜")
+            if !stableCore.isEmpty {
+                parts.append("主干没有变，抓住“\(stableCore)”就能看出改写没有换义。")
+            }
+        }
+
+        return parts.joined(separator: " ")
+    }
+
+    private static func buildTeachingInterpretationFallback(
+        sentenceFunction: String,
+        coreSkeleton: CoreSkeleton?,
+        chunkLayers: [ChunkLayer],
+        faithfulTranslation: String
+    ) -> String {
+        var parts: [String] = []
+        let functionHead = localizeChineseDisplayText(sentenceFunction)
+        if !functionHead.isEmpty {
+            parts.append("老师先会把这句当成“\(functionHead)”来看。")
+        }
+
+        if let coreSkeleton, coreSkeleton.isMeaningful {
+            let stableCore = [
+                coreSkeleton.subject.isEmpty ? nil : "主语“\(coreSkeleton.subject)”",
+                coreSkeleton.predicate.isEmpty ? nil : "谓语“\(coreSkeleton.predicate)”",
+                coreSkeleton.complementOrObject.isEmpty ? nil : "核心补足“\(coreSkeleton.complementOrObject)”"
+            ]
+            .compactMap { $0 }
+            .joined(separator: "、")
+            if !stableCore.isEmpty {
+                parts.append("板书时先锁定 \(stableCore)，其余成分都往这个主干上挂。")
+            }
+        }
+
+        let roleHints = chunkLayers
+            .map { normalizeMixedGrammarChinese($0.role) }
+            .filter { !$0.isEmpty }
+        if roleHints.contains(where: { $0.contains("前置") || $0.contains("条件") || $0.contains("让步") }) {
+            parts.append("读的时候不要被句首框架带走，真正判断一般落在后面的主句主干。")
+        } else if roleHints.contains(where: { $0.contains("后置") || $0.contains("补充") }) {
+            parts.append("其余语块主要是在补限定范围和修饰关系，不要把枝叶误抬成主干。")
+        }
+
+        let faithful = localizeChineseExplanation(faithfulTranslation)
+        if !faithful.isEmpty {
+            parts.append("先把“\(faithful)”这个基本意思抓稳，再回头分层看修饰关系。")
+        }
+
+        return parts.joined(separator: " ")
+    }
+
+    private static func normalizedChineseComparisonKey(_ text: String) -> String {
+        localizeChineseExplanation(text)
+            .lowercased()
+            .replacingOccurrences(of: #"[^\p{Han}a-z0-9]+"#, with: "", options: .regularExpression)
+    }
+
     private static func normalizedString(from value: Any) -> String? {
         if let string = value as? String {
             let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -966,9 +1218,15 @@ enum AIExplainSentenceServiceError: LocalizedError {
         case .invalidServerResponse:
             return "服务器返回的数据格式不正确。"
         case .requestFailed(let message):
-            return message
+            return AIServiceAvailabilityPolicy.userFacingMessage(
+                for: .sentenceExplain,
+                technicalReason: message
+            )
         case .transport(let message):
-            return message
+            return AIServiceAvailabilityPolicy.userFacingMessage(
+                for: .sentenceExplain,
+                technicalReason: message
+            )
         }
     }
 }
@@ -1029,7 +1287,7 @@ enum AIExplainSentenceService {
 
     static func shouldRetrySameEndpoint(statusCode: Int) -> Bool {
         switch statusCode {
-        case 408, 421, 425, 429, 500, 502, 503, 504:
+        case 408, 421, 425, 429:
             return true
         default:
             return false
@@ -1055,10 +1313,7 @@ enum AIExplainSentenceService {
 
     static func shouldRetrySameEndpoint(for error: URLError) -> Bool {
         switch error.code {
-        case .cannotConnectToHost,
-             .networkConnectionLost,
-             .dnsLookupFailed,
-             .notConnectedToInternet:
+        case .networkConnectionLost:
             return true
         default:
             return false
@@ -1245,6 +1500,15 @@ enum AIExplainSentenceService {
         for context: ExplainSentenceContext,
         baseURL overrideBaseURL: String?
     ) async throws -> AIExplainSentenceResult {
+        if let blockingMessage = await aiServiceAvailabilityGate.blockingMessage(for: .sentenceExplain) {
+            TextPipelineDiagnostics.log(
+                "AI",
+                "[AI][SentenceExplain] service gate open",
+                severity: .warning
+            )
+            throw AIExplainSentenceServiceError.requestFailed(blockingMessage)
+        }
+
         let endpointURLs = endpointCandidates(
             path: "ai/explain-sentence",
             overrideBaseURL: overrideBaseURL
@@ -1306,6 +1570,11 @@ enum AIExplainSentenceService {
                     guard (200 ..< 300).contains(httpResponse.statusCode) else {
                         let bodySnippet = String(data: data.prefix(500), encoding: .utf8)?
                             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                        await aiServiceAvailabilityGate.recordFailure(
+                            for: .sentenceExplain,
+                            technicalReason: bodySnippet.isEmpty ? "HTTP \(httpResponse.statusCode)" : "HTTP \(httpResponse.statusCode): \(bodySnippet)",
+                            cooldown: AIServiceAvailabilityPolicy.cooldown(for: httpResponse.statusCode)
+                        )
 
                         if shouldRetryEndpoint(statusCode: httpResponse.statusCode), index < endpointURLs.count - 1 {
                             let nextURL = endpointURLs[index + 1].absoluteString
@@ -1356,6 +1625,7 @@ enum AIExplainSentenceService {
                     }
 
                     if decoded.success, let result = decoded.data {
+                        await aiServiceAvailabilityGate.recordSuccess(for: .sentenceExplain)
                         return result
                     }
 
@@ -1370,6 +1640,11 @@ enum AIExplainSentenceService {
                     if error.code == .cancelled || Task.isCancelled {
                         throw CancellationError()
                     }
+                    await aiServiceAvailabilityGate.recordFailure(
+                        for: .sentenceExplain,
+                        technicalReason: error.localizedDescription,
+                        cooldown: AIServiceAvailabilityPolicy.cooldown(for: error)
+                    )
                     if shouldRetrySameEndpoint(for: error), attempt == 0 {
                         TextPipelineDiagnostics.log(
                             "句子分析",

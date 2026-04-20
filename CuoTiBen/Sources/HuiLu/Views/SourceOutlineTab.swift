@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct TeachingTreeCanvasView: View {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
     let nodes: [OutlineNode]
     let highlightedNodeID: String?
     let jumpTargetNodeID: String?
@@ -38,7 +40,7 @@ struct TeachingTreeCanvasView: View {
             onClose: onClose,
             fillsAvailableHeight: false,
             showsToolbar: true,
-            initialDensityMode: .detailed
+            initialDensityMode: horizontalSizeClass == .compact ? .compact : .detailed
         )
     }
 }

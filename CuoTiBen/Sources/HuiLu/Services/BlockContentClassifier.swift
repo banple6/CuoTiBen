@@ -31,6 +31,17 @@ enum BlockContentType: String, CaseIterable {
         }
     }
 
+    /// 该类型是否允许进入正文主链（rawText / anchor / 段落候选池）
+    var isPrimaryPassageCandidate: Bool {
+        switch self {
+        case .title, .heading, .subheading, .englishBody:
+            return true
+        case .chineseExplanation, .bilingualNote, .questionStem, .optionList, .glossaryNote,
+             .pageHeader, .pageFooter, .reference, .noise:
+            return false
+        }
+    }
+
     /// 该类型是否为英语主体内容
     var isEnglishPrimary: Bool {
         switch self {
@@ -101,6 +112,10 @@ struct BlockClassification {
     var isTreeNodeEligible: Bool {
         contentType.isTreeNodeEligible && confidence >= 0.35
     }
+
+    var isPrimaryPassageEligible: Bool {
+        contentType.isPrimaryPassageCandidate && confidence >= 0.35
+    }
 }
 
 // MARK: - 块内容分类器
@@ -126,17 +141,23 @@ enum BlockContentClassifier {
             )
         }
 
-        let langProfile = analyzeLanguage(cleaned)
         var reasons: [String] = []
+        let repaired = TextPipelineValidator.validateAndRepairIfReversed(cleaned)
+        let analysisText = repaired.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if repaired.wasRepaired {
+            reasons.append("块级反转修复")
+        }
+
+        let langProfile = analyzeLanguage(analysisText)
 
         // 第一步：检测噪声/页眉页脚
-        if let noiseResult = detectNoise(cleaned, langProfile: langProfile, reasons: &reasons) {
+        if let noiseResult = detectNoise(analysisText, langProfile: langProfile, reasons: &reasons) {
             return noiseResult
         }
 
         // 第二步：基于 layoutType 和语言做分类
         let contentType = classifyContentType(
-            text: cleaned,
+            text: analysisText,
             layoutType: layoutType,
             langProfile: langProfile,
             layoutConfidence: confidence,
@@ -192,6 +213,31 @@ enum BlockContentClassifier {
                     severity: .warning
                 )
                 // 仍然允许参与但记录警告
+            }
+
+            return true
+        }
+    }
+
+    static func filterPrimaryPassageBlocks(
+        _ classified: [(block: LayoutBlock, classification: BlockClassification)]
+    ) -> [(block: LayoutBlock, classification: BlockClassification)] {
+        classified.filter { pair in
+            guard pair.classification.isPrimaryPassageEligible else {
+                TextPipelineDiagnostics.log(
+                    "块分类",
+                    "排除非正文主链块: \"\(String(pair.block.text.prefix(40)))...\" 类型=\(pair.classification.contentType.displayName) 置信度=\(String(format: "%.2f", pair.classification.confidence)) 原因=\(pair.classification.reasons.joined(separator: ","))",
+                    severity: .info
+                )
+                return false
+            }
+
+            if pair.classification.languageProfile.isContaminated {
+                TextPipelineDiagnostics.log(
+                    "块分类",
+                    "正文主链候选存在混合污染: \"\(String(pair.block.text.prefix(40)))...\" 混合度=\(String(format: "%.2f", pair.classification.languageProfile.mixedScore))",
+                    severity: .warning
+                )
             }
 
             return true
@@ -335,8 +381,14 @@ enum BlockContentClassifier {
             return .glossaryNote
         }
 
+        let looksLikeTeachingExplanation = isPedagogicalChineseExplanation(text)
+
         // ── 标题层级 ──
         if layoutType == .heading {
+            if looksLikeTeachingExplanation {
+                reasons.append("标题布局但内容像中文说明")
+                return langProfile.dominantLanguage == .mixed ? .bilingualNote : .chineseExplanation
+            }
             if layoutConfidence > 0.7 {
                 reasons.append("高置信标题(layout)")
                 return .title
@@ -349,6 +401,10 @@ enum BlockContentClassifier {
         // ── 语言驱动分类 ──
         switch langProfile.dominantLanguage {
         case .english:
+            if looksLikeTeachingExplanation {
+                reasons.append("英语比例高，但内容像中文教学说明")
+                return .chineseExplanation
+            }
             reasons.append("英语主导(比例=\(String(format: "%.0f%%", langProfile.englishRatio * 100)))")
             return .englishBody
 
@@ -361,6 +417,10 @@ enum BlockContentClassifier {
             return .chineseExplanation
 
         case .mixed:
+            if looksLikeTeachingExplanation {
+                reasons.append("混合文本，但主体是教学说明")
+                return .bilingualNote
+            }
             if langProfile.isChineseExplanatory {
                 reasons.append("双语注释(中文辅助)")
                 return .bilingualNote
@@ -416,7 +476,7 @@ enum BlockContentClassifier {
 
     /// 检测中文说明/标注性文本
     private static func detectMetaText(_ text: String, chineseRatio: Double, englishRatio: Double) -> Bool {
-        guard chineseRatio > 0.3 else { return false }
+        guard chineseRatio > 0.16 || isPedagogicalChineseExplanation(text) else { return false }
 
         let metaKeywords = ["注意", "提示", "说明", "备注", "注解", "翻译", "解释", "参考",
                            "答案", "解析", "要点", "知识点", "考点", "技巧", "总结",
@@ -430,13 +490,54 @@ enum BlockContentClassifier {
         return hasMetaKeyword || hasBracketedChinese
     }
 
+    private static func isPedagogicalChineseExplanation(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+
+        let strongPatterns = [
+            #"第[一二三四五六七八九十0-9]+段在讲"#,
+            #"第[一二三四五六七八九十0-9]+遍"#,
+            #"对照答案"#,
+            #"标题匹配题"#,
+            #"找主语"#,
+            #"找谓语"#,
+            #"找宾语"#,
+            #"按语块切"#,
+            #"不要只背中文"#,
+            #"每道题"#,
+            #"选出.*最合适"#,
+            #"博物馆可?以带来"#,
+            #"环保学者担心"#,
+            #"反对者担心"#,
+            #"游客"#,
+            #"原句"#,
+            #"修饰成分"#
+        ]
+
+        if strongPatterns.contains(where: { trimmed.range(of: $0, options: .regularExpression) != nil }) {
+            return true
+        }
+
+        let chinesePunctuationCount = trimmed.filter { "。；：，".contains($0) }.count
+        let chineseCueCount = ["讲", "题", "答案", "主语", "谓语", "宾语", "段", "遍", "中文", "原句"]
+            .reduce(0) { partial, cue in
+                partial + (trimmed.contains(cue) ? 1 : 0)
+            }
+
+        return chinesePunctuationCount >= 2 && chineseCueCount >= 3
+    }
+
     /// 题干检测
     private static func isQuestionStem(_ text: String) -> Bool {
         let patterns = [
             #"^\d+[\.\)．）]\s+"#,                        // 1. 或 1) 开头
             #"^(Question|问题|第\s*\d+\s*题)"#,           // "Question" 或 "第X题"
             #"^(What|Which|How|Why|When|Where|Who)\s+"#,  // 英文疑问词开头
-            #"^\(?\d+\)?\s*[A-D][\.\)．）]"#              // 选择题序号
+            #"^\(?\d+\)?\s*[A-D][\.\)．）]"#,             // 选择题序号
+            #"^(True|False|Not Given)\b"#,               // 判断题
+            #"\b(True|False|Not Given)\b.{0,40}\b(residents|tourism|plan|community|museum|visitors)\b"#, // 单行判断题陈述
+            #"标题匹配题"#,
+            #"Headings"#                                  // heading matching
         ]
         return patterns.contains { text.range(of: $0, options: .regularExpression) != nil }
     }
@@ -444,6 +545,11 @@ enum BlockContentClassifier {
     /// 选项列表检测
     private static func isOptionList(_ text: String) -> Bool {
         let lines = text.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        let inlineOptionPattern = #"(?:^|\s)[A-Da-d][\.\)．）:：]\s+.{1,80}(?:\s+[A-Da-d][\.\)．）:：]\s+.{1,80}){1,}"#
+        if text.range(of: inlineOptionPattern, options: .regularExpression) != nil {
+            return true
+        }
+
         guard lines.count >= 2 else { return false }
 
         let optionPattern = #"^\s*[A-Da-d][\.\)．）:：]\s+"#
