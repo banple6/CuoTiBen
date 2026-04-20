@@ -10,7 +10,9 @@
   "scripts": {
     "dev": "node --watch server.js",
     "start": "node server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "test:ai-gateway": "node --test tests/models/modelRegistry.test.js tests/models/aiClient.test.js tests/models/retryPolicy.test.js tests/models/circuitBreaker.test.js tests/models/responseCache.test.js tests/integration/aiGateway.preflight.test.js tests/integration/aiGateway.retry503.test.js",
+    "check:ai-gateway": "node --check src/models/modelRegistry.js src/models/providers/claudeProvider.js src/models/aiClient.js src/models/retryPolicy.js src/models/circuitBreaker.js src/models/responseCache.js src/models/errors.js src/routes/ai.js src/middleware/errorHandler.js src/config/env.js"
   },
   "dependencies": {
     "cors": "^2.8.6",
