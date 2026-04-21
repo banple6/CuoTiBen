@@ -19,7 +19,7 @@ actor ProfessorAnalysisCacheStore {
         let source: CacheSource
     }
 
-    static let analysisSchemaVersion = "professor-analysis.v1"
+    static let analysisSchemaVersion = "professor-analysis.v2"
 
     private let fileManager: FileManager
     private let encoder: JSONEncoder

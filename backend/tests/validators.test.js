@@ -21,7 +21,12 @@ test("validateExplainSentenceRequest trims strings and preserves optional defaul
     context: "Context here.",
     paragraph_theme: "Theme",
     paragraph_role: "support",
-    question_prompt: "Why is this important?"
+    question_prompt: "Why is this important?",
+    sentence_id: "",
+    sentence_text_hash: "",
+    anchor_label: "",
+    segment_id: "",
+    client_request_id: ""
   });
 });
 

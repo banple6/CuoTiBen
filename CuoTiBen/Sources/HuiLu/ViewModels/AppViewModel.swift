@@ -705,6 +705,20 @@ final class AppViewModel: ObservableObject {
             structuredSourceStages[document.id] = .ready
         } catch is CancellationError {
             structuredSourceStages[document.id] = fallbackStage
+        } catch let error as ProfessorAnalysisService.AnalysisError {
+            structuredSourceStages[document.id] = fallbackStage
+            if case .requestFailed(let failure) = error {
+                TextPipelineDiagnostics.log(
+                    "AI",
+                    "[AI][ProfessorAnalysis] request_id=\(failure.requestID ?? "nil") error_code=\(failure.errorCode ?? "UNKNOWN") retry_count=\(failure.retryCount) used_cache=\(failure.usedCache) used_fallback=\(failure.usedFallback || failure.fallbackAvailable)",
+                    severity: .warning
+                )
+            }
+            TextPipelineDiagnostics.log(
+                "AI",
+                "[AI][ProfessorAnalysis] failed doc=\(document.id): \(error.localizedDescription)",
+                severity: .warning
+            )
         } catch {
             structuredSourceStages[document.id] = fallbackStage
             TextPipelineDiagnostics.log(
@@ -938,6 +952,7 @@ final class AppViewModel: ObservableObject {
             return ExplainSentenceContext(
                 title: document.title,
                 sentenceID: sentence.id,
+                segmentID: sentence.segmentID,
                 anchorLabel: sentence.anchorLabel,
                 sentence: sentence.text,
                 context: sentence.text,
@@ -959,6 +974,7 @@ final class AppViewModel: ObservableObject {
         return ExplainSentenceContext(
             title: document.title,
             sentenceID: sentence.id,
+            segmentID: sentence.segmentID,
             anchorLabel: sentence.anchorLabel,
             sentence: sentence.text,
             context: context.isEmpty ? segment.text : context,
@@ -1529,6 +1545,7 @@ final class AppViewModel: ObservableObject {
         return ExplainSentenceContext(
             title: sourceTitle,
             sentenceID: nil,
+            segmentID: nil,
             anchorLabel: nil,
             sentence: sentence,
             context: context,
@@ -1923,6 +1940,8 @@ final class AppViewModel: ObservableObject {
             return "教学重点"
         case .supportingSentence:
             return "支撑句"
+        case .misreadingTrap:
+            return "易错点"
         case .questionLink:
             return "题目联动"
         case .vocabularySupport:

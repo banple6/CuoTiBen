@@ -6,6 +6,7 @@ const MAX_CONTEXT_LENGTH = 12000;
 const MAX_PARAGRAPH_THEME_LENGTH = 800;
 const MAX_PARAGRAPH_ROLE_LENGTH = 120;
 const MAX_QUESTION_PROMPT_LENGTH = 1200;
+const MAX_ID_LENGTH = 200;
 
 function ensureObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -48,6 +49,11 @@ export function validateExplainSentenceRequest(body) {
   const paragraphTheme = normalizeOptionalString(body.paragraph_theme, "paragraph_theme", MAX_PARAGRAPH_THEME_LENGTH);
   const paragraphRole = normalizeOptionalString(body.paragraph_role, "paragraph_role", MAX_PARAGRAPH_ROLE_LENGTH);
   const questionPrompt = normalizeOptionalString(body.question_prompt, "question_prompt", MAX_QUESTION_PROMPT_LENGTH);
+  const sentenceID = normalizeOptionalString(body.sentence_id, "sentence_id", MAX_ID_LENGTH);
+  const sentenceTextHash = normalizeOptionalString(body.sentence_text_hash, "sentence_text_hash", MAX_ID_LENGTH);
+  const anchorLabel = normalizeOptionalString(body.anchor_label, "anchor_label", MAX_ID_LENGTH);
+  const segmentID = normalizeOptionalString(body.segment_id, "segment_id", MAX_ID_LENGTH);
+  const clientRequestID = normalizeOptionalString(body.client_request_id, "client_request_id", MAX_ID_LENGTH);
 
   if (!sentence) {
     throw new AppError("sentence 不能为空。", {
@@ -62,6 +68,11 @@ export function validateExplainSentenceRequest(body) {
     context,
     paragraph_theme: paragraphTheme,
     paragraph_role: paragraphRole,
-    question_prompt: questionPrompt
+    question_prompt: questionPrompt,
+    sentence_id: sentenceID,
+    sentence_text_hash: sentenceTextHash,
+    anchor_label: anchorLabel,
+    segment_id: segmentID,
+    client_request_id: clientRequestID
   };
 }

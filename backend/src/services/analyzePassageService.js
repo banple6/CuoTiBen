@@ -1,15 +1,17 @@
 import { getDashScopeConfig } from "../config/env.js";
 import { AppError } from "../lib/appError.js";
 import { getDashScopeClient } from "../lib/dashscope.js";
+import { aiResponseCache } from "./AIResponseCache.js";
+import { requestGeminiCompletion } from "./GeminiRetryClient.js";
 
 // ─────────────────────────────────────────────
 // 教授级全文教学分析服务
-// 一次 LLM 调用：文章总览 + 段落教学卡 + 关键句详析
+// 一次 LLM 调用：文章总览 + 段落教学卡 + 关键句引用
 // ─────────────────────────────────────────────
 
-const MAX_PARAGRAPHS = 20;
-const MAX_KEY_SENTENCES = 8;
-const MAX_PARAGRAPH_CHARS = 900;
+const MAX_PARAGRAPHS = 4;
+const MAX_KEY_SENTENCES = 6;
+const MAX_PARAGRAPH_CHARS = 700;
 const COMMON_ENGLISH_LEXICON = new Set([
   "allow", "balance", "contact", "corporation", "cultural", "debate", "evidence", "growth",
   "heading", "logical", "museum", "peaceful", "prosperity", "question", "reading", "sustainable",
@@ -31,7 +33,7 @@ function buildAnalyzePassagePrompt({ title, paragraphs, keySentences }) {
   return [
     "你是一位顶级英语教授，正在为一个重要学生逐段逐句拆解一篇英语阅读材料。",
     "你不是摘要器或翻译器。",
-    "你的目标是：让学生看完你的分析后，能真正读懂每一句。",
+    "你的目标是：先产出可靠的全文教学地图，而不是逐句深讲。",
     "你必须只输出一个合法 JSON 对象。不要输出 Markdown、注释或额外文字。",
     "",
     "═══════════════════════",
@@ -41,14 +43,14 @@ function buildAnalyzePassagePrompt({ title, paragraphs, keySentences }) {
     "正文段落：",
     paragraphBlock,
     "",
-    "关键句子（需逐句精析）：",
+    "关键句子（仅用于标记后续深讲入口）：",
     sentenceBlock,
     "",
     "═══════════════════════",
     "输出规则（严格执行）：",
     "═══════════════════════",
     "",
-    "JSON 必须包含三个顶层字段：passage_overview、paragraph_cards、sentence_analyses。",
+    "JSON 必须包含三个顶层字段：passage_overview、paragraph_cards、key_sentence_refs。",
     "",
     "一、passage_overview 对象：",
     "  article_theme：像课堂讲义里的总标题说明，用中文一段话点明文章真正讨论的问题，不要写成'文章主要讲了什么'。",
@@ -72,36 +74,18 @@ function buildAnalyzePassagePrompt({ title, paragraphs, keySentences }) {
     "  teaching_focuses：字符串数组，2-3个具体教学动作。每条都必须体现“先读哪层 / 为什么重要 / 学生会怎么错”，像老师课堂提示，而且必须能在本段文本里找到支点。",
     "  student_blind_spot：中文一句话，学生最容易在本段读偏的点。要写成能直接提醒学生的讲义批注。",
     "",
-    "三、sentence_analyses 数组（每个关键句一项）：",
-    "  sentence_ref：对应输入的 [S_X_Y] 编号。",
-    "  evidence_type：本句在论证中是什么角色：core_claim / supporting_evidence / background_info / counter_argument / transition_signal / conclusion_marker。",
-    "  sentence_function：用中文说明这句在论证里到底在做什么，如“核心判断句：作者真正要成立的判断在这里”。",
-    "  core_skeleton：对象，字段固定为 subject、predicate、complement_or_object。必须明确主干。",
-    "  chunk_layers：数组，每项是对象，字段固定为 text、role、attaches_to、gloss。要说明每个语块是核心信息、框架、后置修饰还是补充说明。",
-    "  grammar_focus：数组，每项包含 phenomenon、function、why_it_matters、title_zh、explanation_zh、why_it_matters_zh、example_en。只保留真正帮助理解的 1-3 个。",
-    "  faithful_translation：忠实翻译。中文自然，但要尽量贴住原句真实意思，不要偷换成教学评论。",
-    "  teaching_interpretation：教学解读。说明这句话真正承担什么功能、该先抓哪一层、学生最可能错在哪。绝不能只是把 faithful_translation 换个说法重复一遍。",
-    "  vocabulary_in_context：数组，每项包含 term 和 meaning。meaning 是本句中的具体含义，不要给通用词典义。",
-    "  misreading_traps：字符串数组，学生最容易在这句话上犯的 1-3 个误读。必须具体说明会把哪一层挂错。",
-    "  exam_paraphrase_routes：字符串数组，1-3 条，这句话在阅读理解题中可能怎么被改写出题。必须给出具体改写路线。",
-    "  simpler_rewrite：用更简单的英语重写这句话，保持原意。",
-    "  simpler_rewrite_translation：中文说明这条简化改写在说什么、保留了原句哪层意思、主要简化了哪层结构。",
-    "  mini_check：一个针对性微练习，测试学生是否真的理解了本句。",
+    "三、key_sentence_refs 数组：",
+    "  每项必须直接复用输入里的 [S_X_Y] 编号。",
+    "  这里不要返回任何句子级 core_skeleton / chunk_layers / grammar_focus / faithful_translation / teaching_interpretation。",
     "",
     "═══════════════════════",
     "质量底线（违反任何一条都视为失败）：",
     "═══════════════════════",
-    "1. core_skeleton 绝不能是'本句主要讲了...'或'本句说的是...'，必须指出具体的主语+谓语+宾语。",
-    "2. faithful_translation 必须像可靠译文，teaching_interpretation 才负责老师口吻的解释，两者不能混写，也不能互相抄写。",
-    "3. evidence_type 不能空缺，也不能乱给；它决定了学生先把这句当背景、转折还是核心判断。",
-    "4. misreading_traps 绝不能是泛泛的'注意理解'，必须说清学生具体会怎么误读。",
-    "5. exam_paraphrase_routes 绝不能只说'可能考同义替换'，必须给出具体的替换示例。",
-    "6. chunk_layers 不能只按逗号切，要按语义关系切，而且至少有一项标为“核心信息”。",
-    "7. grammar_focus 的解释不能只给术语名称，必须说清在本句中的具体作用；title_zh、explanation_zh、why_it_matters_zh 必须是中文主导的可展示文本。",
-    "8. teaching_focuses 不能是抽象建议（如'注意语法'），必须是具体的教学行动。",
-    "9. passage_overview 和 paragraph_cards 的口吻必须像课堂讲义，不像摘要器或题解答案。",
-    "10. 所有中文解释口吻：严谨但平易的英语教授。",
-    "11. 如果信息不足，返回空字符串或空数组，不能删字段。"
+    "1. 全文阶段只做粗粒度教学地图，不做逐句句法精析。",
+    "2. teaching_focuses 不能是抽象建议（如'注意语法'），必须是具体的教学行动。",
+    "3. passage_overview 和 paragraph_cards 的口吻必须像课堂讲义，不像摘要器或题解答案。",
+    "4. 所有中文解释口吻：严谨但平易的英语教授。",
+    "5. 如果信息不足，返回空字符串或空数组，不能删字段。"
   ].join("\n");
 }
 
@@ -933,48 +917,8 @@ function validateAnalysisQuality(result) {
     }
   }
 
-  if (result.sentence_analyses) {
-    for (const sa of result.sentence_analyses) {
-      if (!sa.sentence_function || sa.sentence_function.length < 10) {
-        warnings.push(`[${sa.sentence_ref}] sentence_function 太弱`);
-      }
-      if (!sa.faithful_translation || sa.faithful_translation.includes("真正要") || sa.faithful_translation.includes("重点在")) {
-        warnings.push(`[${sa.sentence_ref}] faithful_translation 不像忠实翻译`);
-      }
-      if (sa.faithful_translation && !isChineseDominantText(sa.faithful_translation)) {
-        warnings.push(`[${sa.sentence_ref}] faithful_translation 中文纯度不足`);
-      }
-      if (!sa.teaching_interpretation || sa.teaching_interpretation.length < 10) {
-        warnings.push(`[${sa.sentence_ref}] teaching_interpretation 太弱`);
-      }
-      if (sa.teaching_interpretation && !isChineseDominantText(sa.teaching_interpretation)) {
-        warnings.push(`[${sa.sentence_ref}] teaching_interpretation 中文纯度不足`);
-      }
-      if (isShallowSentenceCore(sa.sentence_core)) {
-        warnings.push(`[${sa.sentence_ref}] sentence_core 太浅: "${sa.sentence_core?.slice(0, 40)}"`);
-      }
-      if (!sa.core_skeleton || (!sa.core_skeleton.subject && !sa.core_skeleton.predicate)) {
-        warnings.push(`[${sa.sentence_ref}] core_skeleton 缺失`);
-      }
-      if (!sa.evidence_type) {
-        warnings.push(`[${sa.sentence_ref}] evidence_type 缺失`);
-      }
-      if (sa.misreading_traps?.every(isShallowMisreadPoint)) {
-        warnings.push(`[${sa.sentence_ref}] misreading_traps 全部太泛`);
-      }
-      if (sa.chunk_layers?.length <= 1 && sa.original_sentence?.length > 40) {
-        warnings.push(`[${sa.sentence_ref}] chunk_layers 不足`);
-      }
-      if ((sa.chunk_layers || []).length > 0 && !(sa.chunk_layers || []).some((item) => String(item?.role || "").includes("核心信息"))) {
-        warnings.push(`[${sa.sentence_ref}] chunk_layers 没有标出核心信息`);
-      }
-      if ((sa.grammar_focus || []).length === 0 && sa.original_sentence?.length > 35) {
-        warnings.push(`[${sa.sentence_ref}] grammar_focus 缺失`);
-      }
-      if ((sa.grammar_focus || []).some((item) => !item.title_zh || !item.explanation_zh || !item.why_it_matters_zh)) {
-        warnings.push(`[${sa.sentence_ref}] grammar_focus 中文展示字段不完整`);
-      }
-    }
+  if (!Array.isArray(result.key_sentence_refs) || result.key_sentence_refs.length === 0) {
+    warnings.push("key_sentence_refs 缺失");
   }
 
   return warnings;
@@ -992,9 +936,7 @@ function buildAnalyzePassageRepairPrompt({ title, paragraphs, keySentences, prev
     "2. relation_to_previous 和 exam_value 必须具体到逻辑推进和考试题型，不能只写泛泛判断。",
     "3. teaching_focuses 必须写成具体教学动作，而不是抽象建议。",
     "4. passage_overview 必须像老师带读整篇文章，而不是做摘要；progression_path 要像讲义里的推进图，likely_question_types 和 logic_pitfalls 不能空。",
-    "5. faithful_translation 必须是忠实翻译，不能混入“真正要你抓”这类教学评论；teaching_interpretation 才负责老师口吻。",
-    "6. sentence_function 必须明确说明这句在论证中做什么；core_skeleton 必须指出主语、谓语、核心宾补。",
-    "7. evidence_type 不能漏；chunk_layers 至少有一项 role 是“核心信息”，并说明 attaches_to。",
+    "5. key_sentence_refs 只保留最值得点开深讲的关键句编号，不要返回逐句解析字段。",
     "",
     "你上一次的 JSON 为：",
     JSON.stringify(previousResult)
@@ -1058,30 +1000,45 @@ function parseModelJson(content) {
 
 // ─── 主函数 ───
 
-export async function analyzePassage({ title = "", paragraphs = [], keySentences = [] }) {
+export async function analyzePassage({ requestID, title = "", paragraphs = [], keySentences = [] }) {
   const client = getDashScopeClient();
   const { modelName } = getDashScopeConfig();
 
   if (!client) {
     throw new AppError("DASHSCOPE_API_KEY 或 DASHSCOPE_BASE_URL 未配置。", {
       statusCode: 500,
-      code: "MODEL_CONFIG_MISSING"
+      code: "MODEL_CONFIG_MISSING",
+      requestID,
+      fallbackAvailable: true
     });
   }
 
   const sanitizedInputs = sanitizePassageInputs(paragraphs, keySentences);
   const effectiveParagraphs = sanitizedInputs.paragraphs;
   const effectiveKeySentences = sanitizedInputs.keySentences;
-
-  const sentenceTextIndex = Object.fromEntries(
-    effectiveKeySentences.map((s) => [s.ref, s.text])
-  );
+  const cacheKey = aiResponseCache.makeKey([
+    "analyze-passage.v2",
+    title,
+    ...effectiveParagraphs.map((item) => `${item.index}:${item.text}`),
+    ...effectiveKeySentences.map((item) => item.ref)
+  ]);
+  const cached = aiResponseCache.get(cacheKey);
+  if (cached) {
+    return {
+      ...cached,
+      request_id: requestID,
+      used_cache: true,
+      used_fallback: false,
+      retry_count: 0
+    };
+  }
 
   console.log("[ai/analyze-passage] calling model", {
     modelName,
     paragraphCount: effectiveParagraphs.length,
     keySentenceCount: effectiveKeySentences.length,
-    titleLength: title.length
+    titleLength: title.length,
+    requestID
   });
 
   const requestModel = async (prompt) => {
@@ -1104,17 +1061,32 @@ export async function analyzePassage({ title = "", paragraphs = [], keySentences
 
   const startTime = Date.now();
   let completion;
+  let retryCount = 0;
 
   try {
-    completion = await requestModel(buildAnalyzePassagePrompt({
-      title,
-      paragraphs: effectiveParagraphs,
-      keySentences: effectiveKeySentences
-    }));
+    const response = await requestGeminiCompletion({
+      requestID,
+      breakerKey: "analyze-passage",
+      timeoutMs: 45_000,
+      invoke: () => requestModel(buildAnalyzePassagePrompt({
+        title,
+        paragraphs: effectiveParagraphs,
+        keySentences: effectiveKeySentences
+      }))
+    });
+    completion = response.completion;
+    retryCount = response.retryCount;
   } catch (error) {
-    const status = typeof error?.status === "number" ? error.status : undefined;
-    console.error("[ai/analyze-passage] model request failed", { status, message: error?.message });
-    throw new AppError("调用大模型接口失败。", { statusCode: 502, code: "MODEL_REQUEST_FAILED" });
+    if (cached) {
+      return {
+        ...cached,
+        request_id: requestID,
+        used_cache: true,
+        used_fallback: false,
+        retry_count: 0
+      };
+    }
+    throw error;
   }
 
   const elapsed = Date.now() - startTime;
@@ -1123,14 +1095,15 @@ export async function analyzePassage({ title = "", paragraphs = [], keySentences
     const paragraphCards = normalizeArray(parsed.paragraph_cards)
       .map(normalizeParagraphCard)
       .filter(Boolean);
-    const sentenceAnalyses = normalizeArray(parsed.sentence_analyses)
-      .map((sa) => normalizeSentenceAnalysis(sa, sentenceTextIndex[sa?.sentence_ref]))
-      .filter(Boolean);
+    const keySentenceRefs = normalizeArray(parsed.key_sentence_refs)
+      .map((item) => normalizeString(item))
+      .filter(Boolean)
+      .slice(0, MAX_KEY_SENTENCES);
 
     return {
       passage_overview: overview,
       paragraph_cards: paragraphCards,
-      sentence_analyses: sentenceAnalyses
+      key_sentence_refs: keySentenceRefs
     };
   };
 
@@ -1139,8 +1112,7 @@ export async function analyzePassage({ title = "", paragraphs = [], keySentences
 
   if (
     qualityWarnings.length >= 2 ||
-    normalized.paragraph_cards.length < Math.min(effectiveParagraphs.length, MAX_PARAGRAPHS) ||
-    normalized.sentence_analyses.length < Math.min(effectiveKeySentences.length, MAX_KEY_SENTENCES)
+    normalized.paragraph_cards.length < Math.min(effectiveParagraphs.length, MAX_PARAGRAPHS)
   ) {
     console.warn("[ai/analyze-passage] quality warnings after first pass:", qualityWarnings);
 
@@ -1171,16 +1143,24 @@ export async function analyzePassage({ title = "", paragraphs = [], keySentences
   console.log("[ai/analyze-passage] done", {
     elapsed: `${elapsed}ms`,
     paragraphCards: normalized.paragraph_cards.length,
-    sentenceAnalyses: normalized.sentence_analyses.length,
+    keySentenceRefs: normalized.key_sentence_refs.length,
     qualityWarnings: qualityWarnings.length
   });
 
-  return {
+  const response = {
     passage_overview: normalized.passage_overview,
     paragraph_cards: normalized.paragraph_cards,
-    sentence_analyses: normalized.sentence_analyses,
+    key_sentence_refs: normalized.key_sentence_refs.length > 0
+      ? normalized.key_sentence_refs
+      : effectiveKeySentences.map((item) => item.ref).slice(0, MAX_KEY_SENTENCES),
     quality_warnings: qualityWarnings,
     model_name: modelName,
-    elapsed_ms: elapsed
+    elapsed_ms: elapsed,
+    request_id: requestID,
+    used_cache: false,
+    used_fallback: false,
+    retry_count: retryCount
   };
+  aiResponseCache.set(cacheKey, response);
+  return response;
 }

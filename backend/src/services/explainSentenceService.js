@@ -1,6 +1,8 @@
 import { getDashScopeConfig } from "../config/env.js";
 import { AppError } from "../lib/appError.js";
 import { getDashScopeClient } from "../lib/dashscope.js";
+import { aiResponseCache } from "./AIResponseCache.js";
+import { requestGeminiCompletion } from "./GeminiRetryClient.js";
 
 export function buildExplainSentencePrompt({ title, sentence, context, paragraph_theme, paragraph_role, question_prompt }) {
   const safeTitle = title?.trim() || "未提供";
@@ -1467,7 +1469,11 @@ function buildExplainSentenceRepairPrompt({
 function enrichExplainResult(result, {
   sentence,
   paragraph_theme,
-  paragraph_role
+  paragraph_role,
+  sentence_id,
+  sentence_text_hash,
+  anchor_label,
+  segment_id
 }) {
   const rawChunkTexts = Array.isArray(result.chunk_layers) && result.chunk_layers.length > 0
     ? result.chunk_layers.map((item) => item.text || "").filter(Boolean)
@@ -1527,6 +1533,12 @@ function enrichExplainResult(result, {
 
   return {
     ...result,
+    analysis_identity: {
+      source_sentence_id: sentence_id || "",
+      source_sentence_text_hash: sentence_text_hash || "",
+      source_anchor_label: anchor_label || "",
+      source_segment_id: segment_id || ""
+    },
     evidence_type: evidenceType,
     sentence_function: sentenceFunction,
     core_skeleton: coreSkeleton,
@@ -1598,12 +1610,17 @@ function parseModelJson(content) {
 }
 
 export async function explainSentence({
+  requestID,
   title = "",
   sentence,
   context = "",
   paragraph_theme = "",
   paragraph_role = "",
-  question_prompt = ""
+  question_prompt = "",
+  sentence_id = "",
+  sentence_text_hash = "",
+  anchor_label = "",
+  segment_id = ""
 }) {
   const client = getDashScopeClient();
   const { modelName } = getDashScopeConfig();
@@ -1611,14 +1628,35 @@ export async function explainSentence({
   if (!client) {
     throw new AppError("DASHSCOPE_API_KEY 或 DASHSCOPE_BASE_URL 未配置。", {
       statusCode: 500,
-      code: "MODEL_CONFIG_MISSING"
+      code: "MODEL_CONFIG_MISSING",
+      requestID,
+      fallbackAvailable: true
     });
+  }
+
+  const cacheKey = aiResponseCache.makeKey([
+    "explain-sentence.v2",
+    sentence_id,
+    sentence_text_hash,
+    anchor_label,
+    segment_id
+  ]);
+  const cached = aiResponseCache.get(cacheKey);
+  if (cached) {
+    return {
+      ...cached,
+      request_id: requestID,
+      used_cache: true,
+      used_fallback: false,
+      retry_count: 0
+    };
   }
 
   console.log("[ai/explain-sentence] calling model", {
     modelName,
     sentenceLength: sentence.length,
-    hasContext: Boolean(context.trim())
+    hasContext: Boolean(context.trim()),
+    requestID
   });
 
   const requestModel = async (prompt) => {
@@ -1641,33 +1679,22 @@ export async function explainSentence({
     });
   };
 
-  let completion;
-
   try {
-    completion = await requestModel(buildExplainSentencePrompt({
-      title,
-      sentence,
-      context,
-      paragraph_theme,
-      paragraph_role,
-      question_prompt
-    }));
-  } catch (error) {
-    const status = typeof error?.status === "number" ? error.status : undefined;
-    const upstreamMessage = typeof error?.message === "string" ? error.message : "";
-
-    console.error("[ai/explain-sentence] model request failed", {
-      status,
-      upstreamMessage
+    const { completion, retryCount } = await requestGeminiCompletion({
+      requestID,
+      breakerKey: "explain-sentence",
+      timeoutMs: 20_000,
+      invoke: () => requestModel(buildExplainSentencePrompt({
+        title,
+        sentence,
+        context,
+        paragraph_theme,
+        paragraph_role,
+        question_prompt
+      }))
     });
 
-    throw new AppError("调用大模型接口失败。", {
-      statusCode: 502,
-      code: "MODEL_REQUEST_FAILED"
-    });
-  }
-
-  const content = completion.choices?.[0]?.message?.content;
+    const content = completion.choices?.[0]?.message?.content;
   let normalized = normalizeExplainResult(parseModelJson(content), sentence, paragraph_role);
   let qualityWarnings = validateExplainResultQuality(normalized, sentence);
   let consistency = validateExplainResultConsistency(normalized, sentence);
@@ -1717,11 +1744,37 @@ export async function explainSentence({
     console.warn("[ai/explain-sentence] final quality warnings", qualityWarnings);
   }
 
-  return enrichExplainResult(normalized, {
-    sentence,
-    paragraph_theme,
-    paragraph_role
-  });
+    const result = enrichExplainResult(normalized, {
+      sentence,
+      paragraph_theme,
+      paragraph_role,
+      sentence_id,
+      sentence_text_hash,
+      anchor_label,
+      segment_id
+    });
+
+    const response = {
+      ...result,
+      request_id: requestID,
+      used_cache: false,
+      used_fallback: false,
+      retry_count: retryCount
+    };
+    aiResponseCache.set(cacheKey, response);
+    return response;
+  } catch (error) {
+    if (cached) {
+      return {
+        ...cached,
+        request_id: requestID,
+        used_cache: true,
+        used_fallback: false,
+        retry_count: 0
+      };
+    }
+    throw error;
+  }
 }
 
 export const __testables = {

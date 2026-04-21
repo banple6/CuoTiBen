@@ -6,13 +6,13 @@ import Foundation
 
 enum ProfessorAnalysisService {
 
-    private static let maxProfessorParagraphs = 20
-    private static let preferredParagraphChars = 560
-    private static let minimumParagraphChars = 220
-    private static let hardParagraphChars = 920
+    private static let maxProfessorParagraphs = 4
+    private static let preferredParagraphChars = 460
+    private static let minimumParagraphChars = 180
+    private static let hardParagraphChars = 700
     private static let maxParagraphSentences = 4
-    private static let maxProfessorKeySentences = 8
-    private static let analyzePassageTimeout: TimeInterval = 150
+    private static let maxProfessorKeySentences = 6
+    private static let analyzePassageTimeout: TimeInterval = 45
 
     private struct ParagraphAnalysisGroup {
         let requestIndex: Int
@@ -81,19 +81,32 @@ enum ProfessorAnalysisService {
         let title: String
         let paragraphs: [ParagraphInput]
         let key_sentences: [KeySentenceInput]
+        let client_request_id: String
     }
 
     struct AnalyzePassageResponse: Decodable {
         let success: Bool?
         let data: AnalyzePassageData?
+        let error_code: String?
+        let message: String?
+        let request_id: String?
+        let retryable: Bool?
+        let fallback_available: Bool?
+        let used_cache: Bool?
+        let used_fallback: Bool?
+        let retry_count: Int?
     }
 
     struct AnalyzePassageData: Decodable {
         let passage_overview: PassageOverviewDTO?
         let paragraph_cards: [ParagraphCardDTO]?
-        let sentence_analyses: [SentenceAnalysisDTO]?
+        let key_sentence_refs: [String]?
         let quality_warnings: [String]?
         let elapsed_ms: Int?
+        let request_id: String?
+        let used_cache: Bool?
+        let used_fallback: Bool?
+        let retry_count: Int?
     }
 
     struct PassageOverviewDTO: Decodable {
@@ -120,32 +133,6 @@ enum ProfessorAnalysisService {
         let student_blind_spot: String?
     }
 
-    struct SentenceAnalysisDTO: Decodable {
-        let sentence_ref: String?
-        let sentence_function: String?
-        let core_skeleton: ProfessorCoreSkeleton?
-        let chunk_layers: [ProfessorChunkLayer]?
-        let grammar_focus: [ProfessorGrammarFocus]?
-        let faithful_translation: String?
-        let teaching_interpretation: String?
-        let natural_chinese_meaning: String?
-        let sentence_core: String?
-        let chunk_breakdown: [String]?
-        let grammar_points: [GrammarPointDTO]?
-        let vocabulary_in_context: [VocabularyDTO]?
-        let misread_points: [String]?
-        let exam_rewrite_points: [String]?
-        let misreading_traps: [String]?
-        let exam_paraphrase_routes: [String]?
-        let simplified_english: String?
-        let simpler_rewrite: String?
-        let mini_exercise: String?
-        let mini_check: String?
-        let hierarchy_rebuild: [String]?
-        let syntactic_variation: String?
-        let evidence_type: String?
-    }
-
     struct GrammarPointDTO: Decodable {
         let name: String?
         let explanation: String?
@@ -162,7 +149,7 @@ enum ProfessorAnalysisService {
         case missingBaseURL
         case invalidBaseURL
         case invalidServerResponse
-        case requestFailed(String)
+        case requestFailed(AIServiceFailureContext)
         case noContent
 
         var errorDescription: String? {
@@ -170,11 +157,8 @@ enum ProfessorAnalysisService {
             case .missingBaseURL: return "未配置后端地址"
             case .invalidBaseURL: return "后端地址格式错误"
             case .invalidServerResponse: return "服务器响应格式异常"
-            case .requestFailed(let msg):
-                return AIServiceAvailabilityPolicy.userFacingMessage(
-                    for: .professorAnalysis,
-                    technicalReason: msg
-                )
+            case .requestFailed(let failure):
+                return failure.userFacingMessage
             case .noContent: return "后端未返回分析内容"
             }
         }
@@ -194,7 +178,18 @@ enum ProfessorAnalysisService {
                 "[AI][ProfessorAnalysis] service gate open",
                 severity: .warning
             )
-            throw AnalysisError.requestFailed(blockingMessage)
+            throw AnalysisError.requestFailed(
+                AIServiceFailureContext(
+                    message: blockingMessage,
+                    errorCode: "GEMINI_UPSTREAM_503",
+                    requestID: nil,
+                    retryable: true,
+                    fallbackAvailable: true,
+                    usedCache: false,
+                    usedFallback: true,
+                    retryCount: 0
+                )
+            )
         }
 
         let endpointURLs = AIExplainSentenceService.endpointCandidates(
@@ -218,10 +213,12 @@ enum ProfessorAnalysisService {
             severity: .info
         )
 
+        let clientRequestID = "ios-passage-\(UUID().uuidString.lowercased())"
         let requestBody = AnalyzePassageRequest(
             title: title,
             paragraphs: paragraphInputs,
-            key_sentences: keySentenceInputs
+            key_sentences: keySentenceInputs,
+            client_request_id: clientRequestID
         )
 
         let requestData = try JSONEncoder().encode(requestBody)
@@ -244,7 +241,18 @@ enum ProfessorAnalysisService {
                     }
 
                     if !(200 ..< 300).contains(http.statusCode) {
+                        let errorEnvelope = try? JSONDecoder().decode(AnalyzePassageResponse.self, from: data)
                         let bodySnippet = String(data: data.prefix(500), encoding: .utf8) ?? ""
+                        let failure = AIServiceFailureContext(
+                            message: errorEnvelope?.message ?? "AI 服务暂时繁忙，已展示本地教授式骨架，可稍后重试。",
+                            errorCode: errorEnvelope?.error_code ?? "GEMINI_UPSTREAM_503",
+                            requestID: errorEnvelope?.request_id,
+                            retryable: errorEnvelope?.retryable ?? AIExplainSentenceService.shouldRetryEndpoint(statusCode: http.statusCode),
+                            fallbackAvailable: errorEnvelope?.fallback_available ?? true,
+                            usedCache: errorEnvelope?.used_cache ?? false,
+                            usedFallback: errorEnvelope?.used_fallback ?? true,
+                            retryCount: errorEnvelope?.retry_count ?? attempt
+                        )
                         await aiServiceAvailabilityGate.recordFailure(
                             for: .professorAnalysis,
                             technicalReason: bodySnippet.isEmpty ? "HTTP \(http.statusCode)" : "HTTP \(http.statusCode): \(bodySnippet)",
@@ -259,7 +267,7 @@ enum ProfessorAnalysisService {
                         if AIExplainSentenceService.shouldRetrySameEndpoint(statusCode: http.statusCode), attempt == 0 {
                             TextPipelineDiagnostics.log(
                                 "AI",
-                                "[AI][ProfessorAnalysis] 端点瞬时失败，准备重试: \(url.absoluteString) status=\(http.statusCode)",
+                                "[AI][ProfessorAnalysis] 端点瞬时失败，准备重试: \(url.absoluteString) status=\(http.statusCode) request_id=\(failure.requestID ?? "nil")",
                                 severity: .warning
                             )
                             try await Task.sleep(nanoseconds: AIExplainSentenceService.retryDelayNanoseconds(for: attempt))
@@ -270,19 +278,33 @@ enum ProfessorAnalysisService {
                             let nextURL = endpointURLs[index + 1].absoluteString
                             TextPipelineDiagnostics.log(
                                 "AI",
-                                "[AI][ProfessorAnalysis] 切换候选地址: \(url.absoluteString) -> \(nextURL) status=\(http.statusCode)",
+                                "[AI][ProfessorAnalysis] 切换候选地址: \(url.absoluteString) -> \(nextURL) status=\(http.statusCode) request_id=\(failure.requestID ?? "nil")",
                                 severity: .warning
                             )
-                            lastError = AnalysisError.requestFailed("HTTP \(http.statusCode)")
+                            lastError = AnalysisError.requestFailed(failure)
                             break
                         }
 
-                        throw AnalysisError.requestFailed("HTTP \(http.statusCode)")
+                        throw AnalysisError.requestFailed(failure)
                     }
 
                     let response = try JSONDecoder().decode(AnalyzePassageResponse.self, from: data)
 
                     guard let data = response.data else {
+                        if let message = response.message {
+                            throw AnalysisError.requestFailed(
+                                AIServiceFailureContext(
+                                    message: message,
+                                    errorCode: response.error_code,
+                                    requestID: response.request_id,
+                                    retryable: response.retryable ?? false,
+                                    fallbackAvailable: response.fallback_available ?? true,
+                                    usedCache: response.used_cache ?? false,
+                                    usedFallback: response.used_fallback ?? false,
+                                    retryCount: response.retry_count ?? attempt
+                                )
+                            )
+                        }
                         throw AnalysisError.noContent
                     }
 
@@ -316,10 +338,38 @@ enum ProfessorAnalysisService {
                             "[AI][ProfessorAnalysis] 端点连接失败，切换候选地址: \(url.absoluteString) -> \(nextURL) error=\(error.localizedDescription)",
                             severity: .warning
                         )
-                        lastError = AnalysisError.requestFailed(error.localizedDescription)
+                        lastError = AnalysisError.requestFailed(
+                            AIServiceFailureContext(
+                                message: AIServiceAvailabilityPolicy.userFacingMessage(
+                                    for: .professorAnalysis,
+                                    technicalReason: error.localizedDescription
+                                ),
+                                errorCode: error.code == .timedOut ? "GEMINI_TIMEOUT" : "BACKEND_ROUTE_ERROR",
+                                requestID: nil,
+                                retryable: true,
+                                fallbackAvailable: true,
+                                usedCache: false,
+                                usedFallback: true,
+                                retryCount: attempt
+                            )
+                        )
                         break
                     }
-                    throw AnalysisError.requestFailed(error.localizedDescription)
+                    throw AnalysisError.requestFailed(
+                        AIServiceFailureContext(
+                            message: AIServiceAvailabilityPolicy.userFacingMessage(
+                                for: .professorAnalysis,
+                                technicalReason: error.localizedDescription
+                            ),
+                            errorCode: error.code == .timedOut ? "GEMINI_TIMEOUT" : "BACKEND_ROUTE_ERROR",
+                            requestID: nil,
+                            retryable: true,
+                            fallbackAvailable: true,
+                            usedCache: false,
+                            usedFallback: true,
+                            retryCount: attempt
+                        )
+                    )
                 } catch let error as AnalysisError {
                     if case .invalidServerResponse = error, index < endpointURLs.count - 1 {
                         let nextURL = endpointURLs[index + 1].absoluteString
@@ -363,7 +413,7 @@ enum ProfessorAnalysisService {
 
         TextPipelineDiagnostics.log(
             "AI",
-            "[AI][ProfessorAnalysis] 分析完成: paragraphCards=\(payload.paragraph_cards?.count ?? 0) sentenceAnalyses=\(payload.sentence_analyses?.count ?? 0) elapsed=\(payload.elapsed_ms ?? 0)ms",
+            "[AI][ProfessorAnalysis] 分析完成: paragraphCards=\(payload.paragraph_cards?.count ?? 0) keySentenceRefs=\(payload.key_sentence_refs?.count ?? 0) elapsed=\(payload.elapsed_ms ?? 0)ms request_id=\(payload.request_id ?? "nil") retry_count=\(payload.retry_count ?? 0) used_cache=\(payload.used_cache ?? false) used_fallback=\(payload.used_fallback ?? false) client_request_id=\(clientRequestID)",
             severity: .info
         )
 
@@ -375,17 +425,10 @@ enum ProfessorAnalysisService {
             segments: bundle.segments,
             sentences: bundle.sentences
         )
-        let aiSentenceCards = convertSentenceCards(
-            payload.sentence_analyses ?? [],
-            existingCards: bundle.professorSentenceCards,
-            sentences: bundle.sentences,
-            segments: bundle.segments
-        )
-
         return bundle.enrichedWithAIAnalysis(
             overview: aiOverview,
             paragraphCards: aiParagraphCards,
-            sentenceCards: aiSentenceCards
+            sentenceCards: []
         )
     }
 
@@ -577,67 +620,4 @@ enum ProfessorAnalysisService {
         }
     }
 
-    private static func convertSentenceCards(
-        _ dtos: [SentenceAnalysisDTO],
-        existingCards: [ProfessorSentenceCard],
-        sentences: [Sentence],
-        segments: [Segment]
-    ) -> [ProfessorSentenceCard] {
-        let sentencesBySegment = Dictionary(grouping: sentences, by: { $0.segmentID })
-
-        var refToSentences: [String: Sentence] = [:]
-        for (segIdx, segment) in segments.enumerated() {
-            let segmentID = segment.id
-            for sentence in sentencesBySegment[segmentID] ?? [] {
-                let ref = "S_\(segIdx)_\(sentence.localIndex)"
-                refToSentences[ref] = sentence
-            }
-        }
-
-        return dtos.compactMap { dto in
-            guard let ref = dto.sentence_ref,
-                  let sentence = refToSentences[ref] else { return nil }
-
-            let analysis = ProfessorSentenceAnalysis(
-                originalSentence: sentence.text,
-                sentenceFunction: dto.sentence_function ?? "",
-                coreSkeleton: dto.core_skeleton,
-                chunkLayers: dto.chunk_layers ?? [],
-                grammarFocus: dto.grammar_focus ?? [],
-                faithfulTranslation: dto.faithful_translation ?? "",
-                teachingInterpretation: dto.teaching_interpretation ?? dto.natural_chinese_meaning ?? "",
-                naturalChineseMeaning: dto.natural_chinese_meaning ?? "",
-                sentenceCore: dto.sentence_core ?? "",
-                chunkBreakdown: dto.chunk_breakdown ?? [],
-                grammarPoints: (dto.grammar_points ?? []).map {
-                    ProfessorGrammarPoint(name: $0.name ?? "", explanation: $0.explanation ?? "")
-                },
-                vocabularyInContext: (dto.vocabulary_in_context ?? []).map {
-                    ProfessorVocabularyItem(term: $0.term ?? "", meaning: $0.meaning ?? "")
-                },
-                misreadPoints: dto.misread_points ?? [],
-                examRewritePoints: dto.exam_rewrite_points ?? [],
-                misreadingTraps: dto.misreading_traps ?? [],
-                examParaphraseRoutes: dto.exam_paraphrase_routes ?? [],
-                simplifiedEnglish: dto.simplified_english ?? "",
-                simplerRewrite: dto.simpler_rewrite ?? "",
-                miniExercise: dto.mini_exercise,
-                miniCheck: dto.mini_check,
-                hierarchyRebuild: dto.hierarchy_rebuild ?? [],
-                syntacticVariation: dto.syntactic_variation,
-                evidenceType: dto.evidence_type,
-                isAIGenerated: true
-            )
-
-            let existingCard = existingCards.first { $0.sentenceID == sentence.id }
-
-            return ProfessorSentenceCard(
-                id: sentence.id,
-                sentenceID: sentence.id,
-                segmentID: sentence.segmentID,
-                isKeySentence: existingCard?.isKeySentence ?? true,
-                analysis: analysis
-            )
-        }
-    }
 }

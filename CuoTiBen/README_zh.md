@@ -525,3 +525,4 @@ python -m app.main
 - 设计与迁移文档索引：[README_INDEX.md](README_INDEX.md)
 
 如果后续继续开发，建议优先参考当前真实活跃路径，而不是旧日志中的历史分支设想。
+{"_type":"newapi_channel_conn","key":"sk-2xyTxgN587gcFXEOylcOB3I0ykPKYqMbrS9b7A8yuEP79xgj","url":"https://once.novai.su"}

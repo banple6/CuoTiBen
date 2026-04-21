@@ -329,7 +329,7 @@ struct SentenceExplainDetailSheet: View {
                 } else if let errorMessage, result == nil {
                     SentenceExplainBlock(
                         title: "提示",
-                        content: "当前展示的是本地教学卡骨架；远端教授式精讲获取失败：\(errorMessage)",
+                        content: errorMessage,
                         tone: .neutral
                     )
                 }
@@ -381,7 +381,7 @@ struct SentenceExplainDetailSheet: View {
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(Color.black.opacity(0.62))
 
-                Button("重新获取") {
+                Button("重新获取 AI 精讲") {
                     scheduleExplanationLoad(force: true)
                 }
                 .font(.system(size: 14, weight: .semibold))
@@ -487,7 +487,18 @@ struct SentenceExplainDetailSheet: View {
             try Task.checkCancellation()
 
             guard isResultVisible(fetched, for: sentence) else {
-                throw AIExplainSentenceServiceError.requestFailed("返回结果与当前句不一致")
+                throw AIExplainSentenceServiceError.requestFailed(
+                    AIServiceFailureContext(
+                        message: "返回结果与当前句不一致",
+                        errorCode: "GEMINI_INVALID_RESPONSE",
+                        requestID: nil,
+                        retryable: false,
+                        fallbackAvailable: false,
+                        usedCache: false,
+                        usedFallback: false,
+                        retryCount: 0
+                    )
+                )
             }
 
             await MainActor.run {

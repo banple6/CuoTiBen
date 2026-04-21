@@ -182,7 +182,8 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
         let targetIdentity = SentenceAnalysisIdentity(
             sentenceID: sentence.id,
             sentenceText: sentence.text,
-            anchorLabel: sentence.anchorLabel
+            anchorLabel: sentence.anchorLabel,
+            segmentID: sentence.segmentID
         )
         currentAnalysisIdentity = targetIdentity
         let currentDocument = document
@@ -245,9 +246,28 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
                 self.analysisError = nil
             } catch is CancellationError {
                 // 被取消，不更新状态
+            } catch let error as AIExplainSentenceServiceError {
+                guard let self, self.matchesCurrentSelection(identity: targetIdentity) else { return }
+                let message = error.errorDescription ?? "AI 服务暂时繁忙，已展示本地解析骨架，可稍后重试。"
+                self.analysisError = message
+                self.analysisResult = nil
+                let failure: AIServiceFailureContext?
+                switch error {
+                case .requestFailed(let value), .transport(let value):
+                    failure = value
+                default:
+                    failure = nil
+                }
+                if let failure {
+                    TextPipelineDiagnostics.log(
+                        "AI",
+                        "[AI][SentenceExplain] request_id=\(failure.requestID ?? "nil") error_code=\(failure.errorCode ?? "UNKNOWN") retry_count=\(failure.retryCount) used_cache=\(failure.usedCache) used_fallback=\(failure.usedFallback || failure.fallbackAvailable)",
+                        severity: .warning
+                    )
+                }
             } catch {
                 guard let self, self.matchesCurrentSelection(identity: targetIdentity) else { return }
-                self.analysisError = "解析失败：\(error.localizedDescription)"
+                self.analysisError = "AI 服务暂时繁忙，已展示本地解析骨架，可稍后重试。"
                 self.analysisResult = nil
             }
         }
@@ -267,7 +287,8 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
             currentAnalysisIdentity = SentenceAnalysisIdentity(
                 sentenceID: sentence.id,
                 sentenceText: sentence.text,
-                anchorLabel: sentence.anchorLabel
+                anchorLabel: sentence.anchorLabel,
+                segmentID: sentence.segmentID
             )
         } else {
             currentAnalysisIdentity = nil
@@ -279,7 +300,8 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
         let currentIdentity = SentenceAnalysisIdentity(
             sentenceID: sentence.id,
             sentenceText: sentence.text,
-            anchorLabel: sentence.anchorLabel
+            anchorLabel: sentence.anchorLabel,
+            segmentID: sentence.segmentID
         )
         return currentIdentity == identity
     }
@@ -289,7 +311,8 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
         let expectedIdentity = SentenceAnalysisIdentity(
             sentenceID: sentence.id,
             sentenceText: sentence.text,
-            anchorLabel: sentence.anchorLabel
+            anchorLabel: sentence.anchorLabel,
+            segmentID: sentence.segmentID
         )
         return identity == expectedIdentity &&
             AnalysisConsistencyGuard.warnings(

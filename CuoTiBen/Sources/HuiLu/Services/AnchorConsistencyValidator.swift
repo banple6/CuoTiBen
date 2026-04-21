@@ -1,19 +1,32 @@
 import Foundation
 
+enum OutlineNodeAdmission {
+    case mainline
+    case auxiliary
+    case rejected
+}
+
 struct ValidatedParagraphNodeContent {
     let anchorSentenceID: String?
     let title: String
     let summary: String
     let consistencyScore: Double
+    let admission: OutlineNodeAdmission
+    let rejectedReason: String?
 }
 
 struct ValidatedSentenceNodeContent {
     let title: String
     let summary: String
     let consistencyScore: Double
+    let admission: OutlineNodeAdmission
+    let rejectedReason: String?
 }
 
 enum AnchorConsistencyValidator {
+    private static let mainlineThreshold = 0.75
+    private static let auxiliaryThreshold = 0.45
+
     static func validatedCoreSentenceID(
         preferred: String?,
         sentences: [Sentence]
@@ -28,13 +41,14 @@ enum AnchorConsistencyValidator {
     static func validatedParagraphNodeContent(
         card: ParagraphTeachingCard,
         sentences: [Sentence],
+        sourceKind: SourceContentKind,
         proposedTitle: String,
         proposedSummary: String
     ) -> ValidatedParagraphNodeContent {
         let anchorSentenceID = validatedCoreSentenceID(preferred: card.coreSentenceID, sentences: sentences)
         let fallbackTitle = fallbackParagraphTitle(card: card)
         let fallbackSummary = fallbackParagraphSummary(card: card)
-        let consistencyScore = paragraphConsistencyScore(
+        let rawScore = paragraphConsistencyScore(
             card: card,
             sentences: sentences,
             proposedTitle: proposedTitle,
@@ -42,32 +56,56 @@ enum AnchorConsistencyValidator {
             fallbackTitle: fallbackTitle,
             fallbackSummary: fallbackSummary
         )
-
-        let title = consistencyScore >= 0.62 && isReadableMindMapTitle(proposedTitle)
+        let title = rawScore >= mainlineThreshold && isReadableMindMapTitle(proposedTitle)
             ? proposedTitle
             : fallbackTitle
-        let summary = consistencyScore >= 0.62 && isReadableMindMapSummary(proposedSummary)
+        let summary = rawScore >= mainlineThreshold && isReadableMindMapSummary(proposedSummary)
             ? proposedSummary
             : fallbackSummary
+
+        let admission: OutlineNodeAdmission
+        let rejectedReason: String?
+        if !sourceKind.isMainlinePassageBody {
+            admission = .auxiliary
+            rejectedReason = "source_kind_\(sourceKind.rawValue)"
+        } else if anchorSentenceID == nil {
+            admission = .rejected
+            rejectedReason = "missing_anchor_sentence"
+        } else {
+            admission = .mainline
+            rejectedReason = rawScore < mainlineThreshold ? "used_local_fallback" : nil
+        }
+
+        logDecision(
+            nodeID: "para_\(card.segmentID)",
+            nodeType: .paragraphTheme,
+            sourceSegmentID: card.segmentID,
+            sourceSentenceID: anchorSentenceID,
+            consistencyScore: rawScore,
+            rejectedReason: rejectedReason
+        )
 
         return ValidatedParagraphNodeContent(
             anchorSentenceID: anchorSentenceID,
             title: title,
             summary: summary,
-            consistencyScore: consistencyScore
+            consistencyScore: rawScore,
+            admission: admission,
+            rejectedReason: rejectedReason
         )
     }
 
     static func validatedFocusNodeContent(
         card: ParagraphTeachingCard,
         sentences: [Sentence],
+        sourceKind: SourceContentKind,
         proposedTitle: String,
         proposedSummary: String
     ) -> ValidatedParagraphNodeContent {
         let anchorSentenceID = validatedCoreSentenceID(preferred: card.coreSentenceID, sentences: sentences)
         let fallbackTitle = fallbackFocusTitle(card: card)
         let fallbackSummary = fallbackFocusSummary(card: card)
-        let consistencyScore = paragraphConsistencyScore(
+        let rawScore = paragraphConsistencyScore(
             card: card,
             sentences: sentences,
             proposedTitle: proposedTitle,
@@ -76,18 +114,48 @@ enum AnchorConsistencyValidator {
             fallbackSummary: fallbackSummary
         )
 
-        let title = consistencyScore >= 0.6 && isReadableMindMapTitle(proposedTitle)
+        let title = rawScore >= mainlineThreshold && isReadableMindMapTitle(proposedTitle)
             ? proposedTitle
             : fallbackTitle
-        let summary = consistencyScore >= 0.6 && isReadableMindMapSummary(proposedSummary)
+        let summary = rawScore >= mainlineThreshold && isReadableMindMapSummary(proposedSummary)
             ? proposedSummary
             : fallbackSummary
+
+        let admission: OutlineNodeAdmission
+        let rejectedReason: String?
+        if !sourceKind.isMainlinePassageBody {
+            admission = .auxiliary
+            rejectedReason = "source_kind_\(sourceKind.rawValue)"
+        } else if anchorSentenceID == nil {
+            admission = .rejected
+            rejectedReason = "missing_anchor_sentence"
+        } else if rawScore >= mainlineThreshold {
+            admission = .mainline
+            rejectedReason = nil
+        } else if rawScore >= auxiliaryThreshold {
+            admission = .auxiliary
+            rejectedReason = "weak_consistency"
+        } else {
+            admission = .rejected
+            rejectedReason = "low_consistency"
+        }
+
+        logDecision(
+            nodeID: "focus_\(card.segmentID)",
+            nodeType: .teachingFocus,
+            sourceSegmentID: card.segmentID,
+            sourceSentenceID: anchorSentenceID,
+            consistencyScore: rawScore,
+            rejectedReason: rejectedReason
+        )
 
         return ValidatedParagraphNodeContent(
             anchorSentenceID: anchorSentenceID,
             title: title,
             summary: summary,
-            consistencyScore: consistencyScore
+            consistencyScore: rawScore,
+            admission: admission,
+            rejectedReason: rejectedReason
         )
     }
 
@@ -100,7 +168,7 @@ enum AnchorConsistencyValidator {
         let analysisIsReliable = isReliableAnalysis(analysis, for: sentence)
         let fallbackTitle = fallbackSentenceTitle(sentence: sentence, analysis: analysisIsReliable ? analysis : nil)
         let fallbackSummary = fallbackSentenceSummary(sentence: sentence, analysis: analysisIsReliable ? analysis : nil)
-        let consistencyScore = sentenceConsistencyScore(
+        let rawScore = sentenceConsistencyScore(
             sentence: sentence,
             analysis: analysis,
             proposedTitle: proposedTitle,
@@ -109,17 +177,75 @@ enum AnchorConsistencyValidator {
             fallbackSummary: fallbackSummary
         )
 
-        let title = consistencyScore >= 0.62 && isReadableMindMapTitle(proposedTitle)
+        let title = rawScore >= mainlineThreshold && isReadableMindMapTitle(proposedTitle)
             ? proposedTitle
             : fallbackTitle
-        let summary = consistencyScore >= 0.62 && isReadableMindMapSummary(proposedSummary)
+        let summary = rawScore >= mainlineThreshold && isReadableMindMapSummary(proposedSummary)
             ? proposedSummary
             : fallbackSummary
+
+        let admission: OutlineNodeAdmission
+        let rejectedReason: String?
+        if !sentence.provenance.sourceKind.isMainlinePassageBody {
+            admission = .auxiliary
+            rejectedReason = "source_kind_\(sentence.provenance.sourceKind.rawValue)"
+        } else if rawScore >= mainlineThreshold {
+            admission = .mainline
+            rejectedReason = nil
+        } else if rawScore >= auxiliaryThreshold {
+            admission = .auxiliary
+            rejectedReason = "weak_consistency"
+        } else {
+            admission = .rejected
+            rejectedReason = "low_consistency"
+        }
+
+        logDecision(
+            nodeID: "support_\(sentence.id)",
+            nodeType: .supportingSentence,
+            sourceSegmentID: sentence.segmentID,
+            sourceSentenceID: sentence.id,
+            consistencyScore: rawScore,
+            rejectedReason: rejectedReason
+        )
 
         return ValidatedSentenceNodeContent(
             title: title,
             summary: summary,
-            consistencyScore: consistencyScore
+            consistencyScore: rawScore,
+            admission: admission,
+            rejectedReason: rejectedReason
+        )
+    }
+
+    static func validatedMisreadingNodeContent(
+        card: ParagraphTeachingCard,
+        sourceKind: SourceContentKind
+    ) -> ValidatedParagraphNodeContent? {
+        let title = fallbackMisreadingTitle(card: card)
+        let summary = fallbackMisreadingSummary(card: card)
+        guard !trimmed(summary).isEmpty else { return nil }
+
+        let score = sourceKind.isMainlinePassageBody ? 0.78 : 0.38
+        let admission: OutlineNodeAdmission = sourceKind.isMainlinePassageBody ? .mainline : .auxiliary
+        let rejectedReason: String? = sourceKind.isMainlinePassageBody ? nil : "source_kind_\(sourceKind.rawValue)"
+
+        logDecision(
+            nodeID: "trap_\(card.segmentID)",
+            nodeType: .misreadingTrap,
+            sourceSegmentID: card.segmentID,
+            sourceSentenceID: card.coreSentenceID,
+            consistencyScore: score,
+            rejectedReason: rejectedReason
+        )
+
+        return ValidatedParagraphNodeContent(
+            anchorSentenceID: card.coreSentenceID,
+            title: title,
+            summary: summary,
+            consistencyScore: score,
+            admission: admission,
+            rejectedReason: rejectedReason
         )
     }
 
@@ -140,7 +266,7 @@ enum AnchorConsistencyValidator {
 
         var score = 0.0
         if anchorSentenceID != nil {
-            score += 0.28
+            score += 0.22
         }
         if avgHygiene >= 0.78 {
             score += 0.2
@@ -152,39 +278,36 @@ enum AnchorConsistencyValidator {
         if pollutedSentenceCount > 0 {
             score -= min(Double(pollutedSentenceCount) * 0.1, 0.22)
         }
-        if !card.displayedTheme.isEmpty && isChineseDominant(card.displayedTheme) {
-            score += 0.12
-        }
 
         let titleOverlap = max(
             textTokenOverlap(lhs: proposedTitle, rhs: fallbackTitle),
             textTokenOverlap(lhs: proposedTitle, rhs: card.displayedTheme),
-            textTokenOverlap(lhs: proposedTitle, rhs: card.displayedTeachingFocuses.first ?? "")
+            englishTokenOverlap(lhs: proposedTitle, rhs: paragraphText)
         )
-        if titleOverlap >= 0.42 || sameSentenceLead(lhs: proposedTitle, rhs: fallbackTitle) {
-            score += 0.16
-        } else if titleOverlap >= 0.22 {
+        if titleOverlap >= 0.38 || sameSentenceLead(lhs: proposedTitle, rhs: fallbackTitle) {
+            score += 0.18
+        } else if titleOverlap >= 0.2 {
             score += 0.08
         }
 
         let summaryOverlap = max(
             textTokenOverlap(lhs: proposedSummary, rhs: fallbackSummary),
+            textTokenOverlap(lhs: proposedSummary, rhs: card.displayedRelationToPrevious),
             textTokenOverlap(lhs: proposedSummary, rhs: card.displayedTeachingFocuses.first ?? ""),
-            textTokenOverlap(lhs: proposedSummary, rhs: card.displayedExamValue),
             textTokenOverlap(lhs: proposedSummary, rhs: card.displayedStudentBlindSpot ?? "")
         )
-        if summaryOverlap >= 0.34 {
-            score += 0.16
-        } else if summaryOverlap >= 0.18 {
+        if summaryOverlap >= 0.3 {
+            score += 0.18
+        } else if summaryOverlap >= 0.16 {
             score += 0.08
         }
 
-        let keywordScore = englishTokenOverlap(
-            lhs: card.keywords.joined(separator: " "),
-            rhs: paragraphText
+        let paragraphOverlap = max(
+            englishTokenOverlap(lhs: proposedTitle, rhs: paragraphText),
+            englishTokenOverlap(lhs: proposedSummary, rhs: paragraphText)
         )
-        if keywordScore >= 0.16 || card.keywords.isEmpty {
-            score += 0.08
+        if paragraphOverlap >= 0.14 {
+            score += 0.1
         }
 
         return min(max(score, 0.12), 0.98)
@@ -199,7 +322,7 @@ enum AnchorConsistencyValidator {
         fallbackSummary: String
     ) -> Double {
         let reliableAnalysis = isReliableAnalysis(analysis, for: sentence)
-        var score = reliableAnalysis ? 0.48 : 0.18
+        var score = reliableAnalysis ? 0.42 : 0.18
 
         if sentence.hygiene.score >= 0.78 {
             score += 0.18
@@ -213,8 +336,11 @@ enum AnchorConsistencyValidator {
             score -= 0.18
         }
 
-        let titleOverlap = textTokenOverlap(lhs: proposedTitle, rhs: fallbackTitle)
-        if titleOverlap >= 0.35 || sameSentenceLead(lhs: proposedTitle, rhs: fallbackTitle) {
+        let titleOverlap = max(
+            textTokenOverlap(lhs: proposedTitle, rhs: fallbackTitle),
+            englishTokenOverlap(lhs: proposedTitle, rhs: sentence.text)
+        )
+        if titleOverlap >= 0.28 || sameSentenceLead(lhs: proposedTitle, rhs: fallbackTitle) {
             score += 0.12
         } else if isReadableMindMapTitle(proposedTitle) {
             score += 0.06
@@ -222,12 +348,13 @@ enum AnchorConsistencyValidator {
 
         let summaryOverlap = max(
             textTokenOverlap(lhs: proposedSummary, rhs: fallbackSummary),
+            englishTokenOverlap(lhs: proposedSummary, rhs: sentence.text),
             textTokenOverlap(lhs: proposedSummary, rhs: analysis?.renderedFaithfulTranslation ?? ""),
             textTokenOverlap(lhs: proposedSummary, rhs: analysis?.renderedTeachingInterpretation ?? "")
         )
-        if summaryOverlap >= 0.3 {
+        if summaryOverlap >= 0.24 {
             score += 0.12
-        } else if summaryOverlap >= 0.16 {
+        } else if summaryOverlap >= 0.12 {
             score += 0.06
         }
 
@@ -257,49 +384,56 @@ enum AnchorConsistencyValidator {
     }
 
     private static func isPollutedSourceKind(_ kind: SourceContentKind) -> Bool {
-        switch kind {
-        case .chineseExplanation, .bilingualAnnotation, .questionSupport, .answerSupport, .polluted:
-            return true
-        case .passageBody, .passageHeading, .synthetic, .unknown:
-            return false
-        }
+        kind.isAuxiliaryOnly
     }
 
     private static func fallbackParagraphTitle(card: ParagraphTeachingCard) -> String {
-        let theme = trimmed(card.displayedTheme)
+        let role = card.argumentRole.displayName
+        let theme = truncate(trimmed(card.displayedTheme), limit: 10)
         if !theme.isEmpty {
-            return "第\(card.paragraphIndex + 1)段｜\(truncate(theme, limit: 16))"
+            return "第\(card.paragraphIndex + 1)段｜\(role)｜\(theme)"
         }
-        return "第\(card.paragraphIndex + 1)段｜\(card.argumentRole.displayName)"
+        return "第\(card.paragraphIndex + 1)段｜\(role)"
     }
 
     private static func fallbackParagraphSummary(card: ParagraphTeachingCard) -> String {
-        if let firstFocus = card.displayedTeachingFocuses.first {
-            return truncate(firstFocus, limit: 30)
+        let relation = trimmed(card.displayedRelationToPrevious)
+        if !relation.isEmpty {
+            return truncate(relation, limit: 50)
         }
-        let examValue = trimmed(card.displayedExamValue)
-        if !examValue.isEmpty {
-            return truncate(examValue, limit: 30)
-        }
-        return truncate(card.argumentRole.teachingDescription, limit: 30)
+        return truncate(card.argumentRole.teachingDescription, limit: 50)
     }
 
     private static func fallbackFocusTitle(card: ParagraphTeachingCard) -> String {
-        if let firstFocus = card.displayedTeachingFocuses.first {
-            return "教学重点｜\(truncate(firstFocus, limit: 16))"
+        if let firstFocus = card.displayedTeachingFocuses.first, !trimmed(firstFocus).isEmpty {
+            return "教学重点｜\(truncate(firstFocus, limit: 12))"
         }
-        return "教学重点｜\(card.argumentRole.displayName)"
+        return "教学重点｜\(truncate(card.argumentRole.displayName, limit: 10))"
     }
 
     private static func fallbackFocusSummary(card: ParagraphTeachingCard) -> String {
+        if let firstFocus = card.displayedTeachingFocuses.first, !trimmed(firstFocus).isEmpty {
+            return truncate(firstFocus, limit: 40)
+        }
+        return truncate(card.argumentRole.teachingDescription, limit: 40)
+    }
+
+    private static func fallbackMisreadingTitle(card: ParagraphTeachingCard) -> String {
         if let blindSpot = trimmed(card.displayedStudentBlindSpot ?? "").nonEmpty {
-            return truncate("别读偏：\(blindSpot)", limit: 26)
+            return "易错点｜\(truncate(blindSpot, limit: 12))"
+        }
+        return "易错点｜\(truncate(card.argumentRole.displayName, limit: 10))"
+    }
+
+    private static func fallbackMisreadingSummary(card: ParagraphTeachingCard) -> String {
+        if let blindSpot = trimmed(card.displayedStudentBlindSpot ?? "").nonEmpty {
+            return truncate(blindSpot, limit: 40)
         }
         let examValue = trimmed(card.displayedExamValue)
         if !examValue.isEmpty {
-            return truncate(examValue, limit: 26)
+            return truncate(examValue, limit: 40)
         }
-        return truncate(card.argumentRole.teachingDescription, limit: 26)
+        return ""
     }
 
     private static func fallbackSentenceTitle(
@@ -309,19 +443,9 @@ enum AnchorConsistencyValidator {
         if let analysis,
            let roleLabel = professorSentenceRolePresentation(for: analysis.evidenceType)?.label,
            !trimmed(roleLabel).isEmpty {
-            return "第\(sentence.localIndex + 1)句｜\(truncate(roleLabel, limit: 8))"
+            return "核心句｜第\(sentence.localIndex + 1)句"
         }
-
-        let sentenceFunctionHead = analysis?.renderedSentenceFunction
-            .split(separator: "：", maxSplits: 1)
-            .first
-            .map(String.init)
-            .map { trimmed($0) } ?? ""
-        if !sentenceFunctionHead.isEmpty {
-            return "第\(sentence.localIndex + 1)句｜\(truncate(sentenceFunctionHead, limit: 8))"
-        }
-
-        return "第\(sentence.localIndex + 1)句关键句"
+        return "核心句｜第\(sentence.localIndex + 1)句"
     }
 
     private static func fallbackSentenceSummary(
@@ -329,26 +453,28 @@ enum AnchorConsistencyValidator {
         analysis: ProfessorSentenceAnalysis?
     ) -> String {
         if let analysis {
-            let faithful = trimmed(analysis.renderedFaithfulTranslation)
-            if !faithful.isEmpty {
-                return truncate(faithful, limit: 30)
+            let function = trimmed(analysis.renderedSentenceFunction)
+            if !function.isEmpty {
+                return truncate(function, limit: 36)
             }
-
             let teaching = trimmed(analysis.renderedTeachingInterpretation)
             if !teaching.isEmpty {
-                return truncate(teaching, limit: 30)
+                return truncate(teaching, limit: 36)
             }
         }
 
-        return truncate(trimmed(sentence.text), limit: 36)
+        return truncate(sentence.text, limit: 36)
     }
 
     private static func isReadableMindMapTitle(_ value: String) -> Bool {
         let normalized = trimmed(value)
         guard !normalized.isEmpty else { return false }
-        if normalized.count > 26 { return false }
+        if normalized.count > 22 { return false }
         if containsDenseSeparators(normalized) { return false }
         if normalized.contains("本段主要讲") || normalized.contains("文章主要讲") {
+            return false
+        }
+        if normalized.range(of: #"[A-Za-z]{8,}"#, options: .regularExpression) != nil {
             return false
         }
         return true
@@ -357,7 +483,7 @@ enum AnchorConsistencyValidator {
     private static func isReadableMindMapSummary(_ value: String) -> Bool {
         let normalized = trimmed(value)
         guard !normalized.isEmpty else { return false }
-        if normalized.count > 40 { return false }
+        if normalized.count > 50 { return false }
         if containsDenseSeparators(normalized) { return false }
         if normalized.contains("本段主要讲") || normalized.contains("文章主要讲") {
             return false
@@ -436,19 +562,20 @@ enum AnchorConsistencyValidator {
         return left == right
     }
 
-    private static func isChineseDominant(_ value: String) -> Bool {
-        let normalized = trimmed(value)
-        guard !normalized.isEmpty else { return false }
-
-        let chineseCount = normalized.unicodeScalars.filter { scalar in
-            scalar.value >= 0x4E00 && scalar.value <= 0x9FFF
-        }.count
-        let latinCount = normalized.unicodeScalars.filter { scalar in
-            (scalar.value >= 0x41 && scalar.value <= 0x5A) ||
-            (scalar.value >= 0x61 && scalar.value <= 0x7A)
-        }.count
-
-        return chineseCount >= max(6, latinCount * 2)
+    private static func logDecision(
+        nodeID: String,
+        nodeType: PedagogicalNodeType,
+        sourceSegmentID: String?,
+        sourceSentenceID: String?,
+        consistencyScore: Double,
+        rejectedReason: String?
+    ) {
+        let reason = rejectedReason ?? "accepted"
+        TextPipelineDiagnostics.log(
+            "AI",
+            "[AI][AnchorConsistency] nodeID=\(nodeID) nodeType=\(nodeType.rawValue) sourceSegmentID=\(sourceSegmentID ?? "nil") sourceSentenceID=\(sourceSentenceID ?? "nil") consistencyScore=\(String(format: "%.2f", consistencyScore)) rejectedReason=\(reason)",
+            severity: rejectedReason == nil ? .info : .warning
+        )
     }
 }
 

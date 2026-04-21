@@ -1600,7 +1600,18 @@ private struct ReviewWorkbenchSentencePanel: View {
             try Task.checkCancellation()
 
             guard isResultVisible(fetched, for: currentSentence) else {
-                throw AIExplainSentenceServiceError.requestFailed("返回结果与当前句不一致")
+                throw AIExplainSentenceServiceError.requestFailed(
+                    AIServiceFailureContext(
+                        message: "返回结果与当前句不一致",
+                        errorCode: "GEMINI_INVALID_RESPONSE",
+                        requestID: nil,
+                        retryable: false,
+                        fallbackAvailable: false,
+                        usedCache: false,
+                        usedFallback: false,
+                        retryCount: 0
+                    )
+                )
             }
 
             await MainActor.run {

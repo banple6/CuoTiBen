@@ -118,6 +118,7 @@ let aiServiceAvailabilityGate = AIServiceAvailabilityGate()
 struct ExplainSentenceContext: Equatable {
     let title: String
     let sentenceID: String?
+    let segmentID: String?
     let anchorLabel: String?
     let sentence: String
     let context: String
@@ -130,14 +131,28 @@ struct SentenceAnalysisIdentity: Codable, Equatable, Hashable {
     let sourceSentenceID: String
     let sourceSentenceTextHash: String
     let sourceAnchorLabel: String
+    let sourceSegmentID: String?
 
-    init(sentenceID: String, sentenceText: String, anchorLabel: String) {
+    init(sentenceID: String, sentenceText: String, anchorLabel: String, segmentID: String? = nil) {
         self.sourceSentenceID = sentenceID
         self.sourceSentenceTextHash = Self.hash(sentenceText)
         self.sourceAnchorLabel = anchorLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.sourceSegmentID = segmentID?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static func hash(_ text: String) -> String {
+    init(
+        sentenceID: String,
+        sentenceTextHash: String,
+        anchorLabel: String,
+        segmentID: String? = nil
+    ) {
+        self.sourceSentenceID = sentenceID
+        self.sourceSentenceTextHash = sentenceTextHash.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.sourceAnchorLabel = anchorLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.sourceSegmentID = segmentID?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func hash(_ text: String) -> String {
         let normalized = text
             .lowercased()
             .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
@@ -185,12 +200,18 @@ enum AnalysisConsistencyGuard {
             if payloadIdentity.sourceSentenceTextHash != SentenceAnalysisIdentity(
                 sentenceID: identity.sourceSentenceID,
                 sentenceText: sentenceText,
-                anchorLabel: identity.sourceAnchorLabel
+                anchorLabel: identity.sourceAnchorLabel,
+                segmentID: identity.sourceSegmentID
             ).sourceSentenceTextHash {
                 warnings.append("sourceSentenceTextHash 不匹配")
             }
             if payloadIdentity.sourceAnchorLabel != identity.sourceAnchorLabel.trimmingCharacters(in: .whitespacesAndNewlines) {
                 warnings.append("sourceAnchorLabel 不匹配")
+            }
+            if let expectedSegmentID = identity.sourceSegmentID,
+               let actualSegmentID = payloadIdentity.sourceSegmentID,
+               actualSegmentID != expectedSegmentID {
+                warnings.append("sourceSegmentID 不匹配")
             }
         }
 
@@ -364,11 +385,27 @@ struct AIExplainSentenceResult: Codable, Equatable {
             coreSkeleton: parsedCoreSkeleton,
             chunkLayers: parsedChunkLayers
         )
+        let parsedIdentity: SentenceAnalysisIdentity? = {
+            if let identityPayload = dictionary["analysis_identity"] as? [String: Any] {
+                let sentenceID = Self.firstString(in: identityPayload, keys: ["source_sentence_id"]) ?? ""
+                let textHash = Self.firstString(in: identityPayload, keys: ["source_sentence_text_hash"]) ?? ""
+                let anchorLabel = Self.firstString(in: identityPayload, keys: ["source_anchor_label"]) ?? ""
+                let segmentID = Self.firstString(in: identityPayload, keys: ["source_segment_id"])
+                guard !sentenceID.isEmpty, !textHash.isEmpty, !anchorLabel.isEmpty else { return nil }
+                return SentenceAnalysisIdentity(
+                    sentenceID: sentenceID,
+                    sentenceTextHash: textHash,
+                    anchorLabel: anchorLabel,
+                    segmentID: segmentID
+                )
+            }
+            return nil
+        }()
 
         self.init(
             originalSentence: Self.firstString(in: dictionary, keys: ["original_sentence", "originalSentence", "sentence"]) ?? sourceSentence,
             evidenceType: evidenceType,
-            analysisIdentity: nil,
+            analysisIdentity: parsedIdentity,
             sentenceFunction: sentenceFunction,
             coreSkeleton: parsedCoreSkeleton,
             chunkLayers: parsedChunkLayers,
@@ -1187,12 +1224,22 @@ private struct ExplainSentenceRequest: Encodable {
     let paragraphTheme: String
     let paragraphRole: String
     let questionPrompt: String
+    let sentenceID: String?
+    let sentenceTextHash: String
+    let anchorLabel: String?
+    let segmentID: String?
+    let clientRequestID: String
 
     private enum CodingKeys: String, CodingKey {
         case title, sentence, context
         case paragraphTheme = "paragraph_theme"
         case paragraphRole = "paragraph_role"
         case questionPrompt = "question_prompt"
+        case sentenceID = "sentence_id"
+        case sentenceTextHash = "sentence_text_hash"
+        case anchorLabel = "anchor_label"
+        case segmentID = "segment_id"
+        case clientRequestID = "client_request_id"
     }
 }
 
@@ -1200,14 +1247,43 @@ private struct ExplainSentenceResponseEnvelope {
     let success: Bool
     let data: AIExplainSentenceResult?
     let error: String?
+    let errorCode: String?
+    let requestID: String?
+    let retryable: Bool
+    let fallbackAvailable: Bool
+    let usedCache: Bool
+    let usedFallback: Bool
+    let retryCount: Int
+}
+
+struct AIServiceFailureContext: Equatable {
+    let message: String
+    let errorCode: String?
+    let requestID: String?
+    let retryable: Bool
+    let fallbackAvailable: Bool
+    let usedCache: Bool
+    let usedFallback: Bool
+    let retryCount: Int
+
+    var userFacingMessage: String {
+        let normalized = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !normalized.isEmpty {
+            return normalized
+        }
+        if fallbackAvailable {
+            return "AI 服务暂时繁忙，已展示本地解析骨架，可稍后重试。"
+        }
+        return "AI 服务暂时不可用，请稍后重试。"
+    }
 }
 
 enum AIExplainSentenceServiceError: LocalizedError {
     case missingBaseURL
     case invalidBaseURL
     case invalidServerResponse
-    case requestFailed(String)
-    case transport(String)
+    case requestFailed(AIServiceFailureContext)
+    case transport(AIServiceFailureContext)
 
     var errorDescription: String? {
         switch self {
@@ -1217,16 +1293,10 @@ enum AIExplainSentenceServiceError: LocalizedError {
             return "AI 服务地址格式不正确。"
         case .invalidServerResponse:
             return "服务器返回的数据格式不正确。"
-        case .requestFailed(let message):
-            return AIServiceAvailabilityPolicy.userFacingMessage(
-                for: .sentenceExplain,
-                technicalReason: message
-            )
-        case .transport(let message):
-            return AIServiceAvailabilityPolicy.userFacingMessage(
-                for: .sentenceExplain,
-                technicalReason: message
-            )
+        case .requestFailed(let failure):
+            return failure.userFacingMessage
+        case .transport(let failure):
+            return failure.userFacingMessage
         }
     }
 }
@@ -1371,6 +1441,7 @@ enum AIExplainSentenceService {
         return ExplainSentenceContext(
             title: context.title,
             sentenceID: context.sentenceID,
+            segmentID: context.segmentID,
             anchorLabel: context.anchorLabel,
             sentence: validatedSentence,
             context: validatedContext,
@@ -1410,14 +1481,32 @@ enum AIExplainSentenceService {
         }
 
         let success = dictionary["success"] as? Bool ?? AIExplainSentenceResult.looksLikePayload(dictionary)
+        let errorDictionary = dictionary["error"] as? [String: Any]
         let error = (dictionary["error"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? (errorDictionary?["message"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
             ?? (dictionary["message"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let errorCode = (dictionary["error_code"] as? String)
+            ?? (errorDictionary?["code"] as? String)
+        let requestID = (dictionary["request_id"] as? String)
+            ?? (dictionary["requestId"] as? String)
+        let retryable = dictionary["retryable"] as? Bool ?? false
+        let fallbackAvailable = dictionary["fallback_available"] as? Bool ?? false
+        let usedCache = dictionary["used_cache"] as? Bool ?? false
+        let usedFallback = dictionary["used_fallback"] as? Bool ?? false
+        let retryCount = dictionary["retry_count"] as? Int ?? 0
 
         if let payload = dictionary["data"] as? [String: Any], AIExplainSentenceResult.looksLikePayload(payload) {
             return ExplainSentenceResponseEnvelope(
                 success: success,
                 data: AIExplainSentenceResult(sourceSentence: sourceSentence, dictionary: payload),
-                error: error
+                error: error,
+                errorCode: errorCode,
+                requestID: requestID,
+                retryable: retryable,
+                fallbackAvailable: fallbackAvailable,
+                usedCache: usedCache,
+                usedFallback: usedFallback,
+                retryCount: retryCount
             )
         }
 
@@ -1425,11 +1514,51 @@ enum AIExplainSentenceService {
             return ExplainSentenceResponseEnvelope(
                 success: success,
                 data: AIExplainSentenceResult(sourceSentence: sourceSentence, dictionary: dictionary),
-                error: error
+                error: error,
+                errorCode: errorCode,
+                requestID: requestID,
+                retryable: retryable,
+                fallbackAvailable: fallbackAvailable,
+                usedCache: usedCache,
+                usedFallback: usedFallback,
+                retryCount: retryCount
             )
         }
 
-        return ExplainSentenceResponseEnvelope(success: success, data: nil, error: error)
+        return ExplainSentenceResponseEnvelope(
+            success: success,
+            data: nil,
+            error: error,
+            errorCode: errorCode,
+            requestID: requestID,
+            retryable: retryable,
+            fallbackAvailable: fallbackAvailable,
+            usedCache: usedCache,
+            usedFallback: usedFallback,
+            retryCount: retryCount
+        )
+    }
+
+    private static func failureContext(
+        message: String,
+        errorCode: String? = nil,
+        requestID: String? = nil,
+        retryable: Bool = false,
+        fallbackAvailable: Bool = false,
+        usedCache: Bool = false,
+        usedFallback: Bool = false,
+        retryCount: Int = 0
+    ) -> AIServiceFailureContext {
+        AIServiceFailureContext(
+            message: message,
+            errorCode: errorCode,
+            requestID: requestID,
+            retryable: retryable,
+            fallbackAvailable: fallbackAvailable,
+            usedCache: usedCache,
+            usedFallback: usedFallback,
+            retryCount: retryCount
+        )
     }
 
     static func fetchExplanation(
@@ -1481,18 +1610,33 @@ enum AIExplainSentenceService {
                ) {
                 logSentenceExplainCacheHit(cacheHit.source)
                 return cacheHit.result
-            }
+                }
 
-            let result = try await performFetchExplanationRequest(
-                for: validatedExplainContext,
-                baseURL: overrideBaseURL
-            )
-            await sentenceAnalysisCacheStore.store(
-                result,
-                forKey: requestKey,
-                persistToDisk: allowDiskCache
-            )
-            return result
+                do {
+                    let result = try await performFetchExplanationRequest(
+                        for: validatedExplainContext,
+                        baseURL: overrideBaseURL
+                    )
+                    await sentenceAnalysisCacheStore.store(
+                        result,
+                        forKey: requestKey,
+                        persistToDisk: allowDiskCache
+                    )
+                    return result
+                } catch {
+                    if let cacheHit = await sentenceAnalysisCacheStore.lookup(
+                        forKey: requestKey,
+                        allowDisk: allowDiskCache
+                    ) {
+                        TextPipelineDiagnostics.log(
+                            "AI",
+                            "[AI][SentenceExplain] request failed, fallback to cache",
+                            severity: .warning
+                        )
+                        return cacheHit.result
+                    }
+                    throw error
+                }
         }
     }
 
@@ -1506,7 +1650,18 @@ enum AIExplainSentenceService {
                 "[AI][SentenceExplain] service gate open",
                 severity: .warning
             )
-            throw AIExplainSentenceServiceError.requestFailed(blockingMessage)
+            throw AIExplainSentenceServiceError.requestFailed(
+                failureContext(
+                    message: blockingMessage,
+                    errorCode: "GEMINI_UPSTREAM_503",
+                    requestID: nil,
+                    retryable: true,
+                    fallbackAvailable: true,
+                    usedCache: false,
+                    usedFallback: true,
+                    retryCount: 0
+                )
+            )
         }
 
         let endpointURLs = endpointCandidates(
@@ -1517,6 +1672,9 @@ enum AIExplainSentenceService {
             throw AIExplainSentenceServiceError.missingBaseURL
         }
 
+        let identity = currentIdentity(for: context)
+        let clientRequestID = "ios-explain-\(UUID().uuidString.lowercased())"
+
         let requestData = try JSONEncoder().encode(
             ExplainSentenceRequest(
                 title: context.title,
@@ -1524,21 +1682,28 @@ enum AIExplainSentenceService {
                 context: context.context,
                 paragraphTheme: context.paragraphTheme,
                 paragraphRole: context.paragraphRole,
-                questionPrompt: context.questionPrompt
+                questionPrompt: context.questionPrompt,
+                sentenceID: identity?.sourceSentenceID ?? context.sentenceID,
+                sentenceTextHash: identity?.sourceSentenceTextHash ?? SentenceAnalysisIdentity.hash(context.sentence),
+                anchorLabel: identity?.sourceAnchorLabel ?? context.anchorLabel,
+                segmentID: identity?.sourceSegmentID ?? context.segmentID,
+                clientRequestID: clientRequestID
             )
         )
 
         return try await performFetchExplanation(
             for: context,
             requestData: requestData,
-            endpointURLs: endpointURLs
+            endpointURLs: endpointURLs,
+            clientRequestID: clientRequestID
         )
     }
 
     private static func performFetchExplanation(
         for context: ExplainSentenceContext,
         requestData: Data,
-        endpointURLs: [URL]
+        endpointURLs: [URL],
+        clientRequestID: String
     ) async throws -> AIExplainSentenceResult {
         var lastError: Error?
 
@@ -1557,19 +1722,37 @@ enum AIExplainSentenceService {
                         throw AIExplainSentenceServiceError.invalidServerResponse
                     }
 
+                    let decoded = try? decodeResponseEnvelope(
+                        from: data,
+                        sourceSentence: context.sentence
+                    )
+
                     if shouldRetrySameEndpoint(statusCode: httpResponse.statusCode), attempt == 0 {
                         TextPipelineDiagnostics.log(
                             "句子分析",
-                            "AI 端点瞬时失败，准备重试: \(endpointURL.absoluteString) status=\(httpResponse.statusCode)",
+                            "AI 端点瞬时失败，准备重试: \(endpointURL.absoluteString) status=\(httpResponse.statusCode) client_request_id=\(clientRequestID) request_id=\(decoded?.requestID ?? "nil")",
                             severity: .warning
                         )
-                            try await Task.sleep(nanoseconds: retryDelayNanoseconds(for: attempt))
-                            continue
-                        }
+                        try await Task.sleep(nanoseconds: retryDelayNanoseconds(for: attempt))
+                        continue
+                    }
 
                     guard (200 ..< 300).contains(httpResponse.statusCode) else {
                         let bodySnippet = String(data: data.prefix(500), encoding: .utf8)?
                             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                        let failure = failureContext(
+                            message: decoded?.error ?? AIServiceAvailabilityPolicy.userFacingMessage(
+                                for: .sentenceExplain,
+                                technicalReason: bodySnippet.isEmpty ? "HTTP \(httpResponse.statusCode)" : "HTTP \(httpResponse.statusCode): \(bodySnippet)"
+                            ),
+                            errorCode: decoded?.errorCode,
+                            requestID: decoded?.requestID,
+                            retryable: decoded?.retryable ?? shouldRetryEndpoint(statusCode: httpResponse.statusCode),
+                            fallbackAvailable: decoded?.fallbackAvailable ?? true,
+                            usedCache: decoded?.usedCache ?? false,
+                            usedFallback: decoded?.usedFallback ?? false,
+                            retryCount: decoded?.retryCount ?? attempt
+                        )
                         await aiServiceAvailabilityGate.recordFailure(
                             for: .sentenceExplain,
                             technicalReason: bodySnippet.isEmpty ? "HTTP \(httpResponse.statusCode)" : "HTTP \(httpResponse.statusCode): \(bodySnippet)",
@@ -1580,27 +1763,23 @@ enum AIExplainSentenceService {
                             let nextURL = endpointURLs[index + 1].absoluteString
                             TextPipelineDiagnostics.log(
                                 "句子分析",
-                                "AI 端点不可用，切换候选地址: \(endpointURL.absoluteString) -> \(nextURL) status=\(httpResponse.statusCode)",
+                                "AI 端点不可用，切换候选地址: \(endpointURL.absoluteString) -> \(nextURL) status=\(httpResponse.statusCode) client_request_id=\(clientRequestID) request_id=\(failure.requestID ?? "nil")",
                                 severity: .warning
                             )
-                            lastError = AIExplainSentenceServiceError.requestFailed(
-                                bodySnippet.isEmpty ? "HTTP \(httpResponse.statusCode)" : "HTTP \(httpResponse.statusCode): \(bodySnippet)"
-                            )
+                            lastError = AIExplainSentenceServiceError.requestFailed(failure)
                             break
                         }
 
-                        throw AIExplainSentenceServiceError.requestFailed(
-                            bodySnippet.isEmpty ? "HTTP \(httpResponse.statusCode)" : "HTTP \(httpResponse.statusCode): \(bodySnippet)"
-                        )
+                        throw AIExplainSentenceServiceError.requestFailed(failure)
                     }
 
-                    var decoded = try decodeResponseEnvelope(
+                    var responseEnvelope = try decodeResponseEnvelope(
                         from: data,
                         sourceSentence: context.sentence
                     )
 
                     if let identity = currentIdentity(for: context),
-                       let payload = decoded.data {
+                       let payload = responseEnvelope.data {
                         let attached = payload.attachingIdentity(identity)
                         let warnings = AnalysisConsistencyGuard.warnings(
                             identity: identity,
@@ -1614,23 +1793,57 @@ enum AIExplainSentenceService {
                                 "丢弃不一致分析结果：\(warnings.joined(separator: "；")) sentence=\(identity.sourceSentenceID)",
                                 severity: .warning
                             )
-                            throw AIExplainSentenceServiceError.requestFailed("返回结果与当前句不一致")
+                            throw AIExplainSentenceServiceError.requestFailed(
+                                failureContext(
+                                    message: "AI 返回结果与当前句不一致，已回退到本地解析骨架。",
+                                    errorCode: "GEMINI_INVALID_RESPONSE",
+                                    requestID: responseEnvelope.requestID,
+                                    retryable: false,
+                                    fallbackAvailable: true,
+                                    usedCache: responseEnvelope.usedCache,
+                                    usedFallback: true,
+                                    retryCount: responseEnvelope.retryCount
+                                )
+                            )
                         }
 
-                        decoded = ExplainSentenceResponseEnvelope(
-                            success: decoded.success,
+                        responseEnvelope = ExplainSentenceResponseEnvelope(
+                            success: responseEnvelope.success,
                             data: attached,
-                            error: decoded.error
+                            error: responseEnvelope.error,
+                            errorCode: responseEnvelope.errorCode,
+                            requestID: responseEnvelope.requestID,
+                            retryable: responseEnvelope.retryable,
+                            fallbackAvailable: responseEnvelope.fallbackAvailable,
+                            usedCache: responseEnvelope.usedCache,
+                            usedFallback: responseEnvelope.usedFallback,
+                            retryCount: responseEnvelope.retryCount
                         )
                     }
 
-                    if decoded.success, let result = decoded.data {
+                    if responseEnvelope.success, let result = responseEnvelope.data {
                         await aiServiceAvailabilityGate.recordSuccess(for: .sentenceExplain)
+                        TextPipelineDiagnostics.log(
+                            "AI",
+                            "[AI][SentenceExplain] request_id=\(responseEnvelope.requestID ?? "nil") client_request_id=\(clientRequestID) retry_count=\(responseEnvelope.retryCount) used_cache=\(responseEnvelope.usedCache) used_fallback=\(responseEnvelope.usedFallback)",
+                            severity: .info
+                        )
                         return result
                     }
 
-                    if let message = decoded.error, !message.isEmpty {
-                        throw AIExplainSentenceServiceError.requestFailed(message)
+                    if let message = responseEnvelope.error, !message.isEmpty {
+                        throw AIExplainSentenceServiceError.requestFailed(
+                            failureContext(
+                                message: message,
+                                errorCode: responseEnvelope.errorCode,
+                                requestID: responseEnvelope.requestID,
+                                retryable: responseEnvelope.retryable,
+                                fallbackAvailable: responseEnvelope.fallbackAvailable,
+                                usedCache: responseEnvelope.usedCache,
+                                usedFallback: responseEnvelope.usedFallback,
+                                retryCount: responseEnvelope.retryCount
+                            )
+                        )
                     }
 
                     throw AIExplainSentenceServiceError.invalidServerResponse
@@ -1645,10 +1858,23 @@ enum AIExplainSentenceService {
                         technicalReason: error.localizedDescription,
                         cooldown: AIServiceAvailabilityPolicy.cooldown(for: error)
                     )
+                    let failure = failureContext(
+                        message: AIServiceAvailabilityPolicy.userFacingMessage(
+                            for: .sentenceExplain,
+                            technicalReason: error.localizedDescription
+                        ),
+                        errorCode: error.code == .timedOut ? "GEMINI_TIMEOUT" : "BACKEND_ROUTE_ERROR",
+                        requestID: nil,
+                        retryable: shouldRetryEndpoint(for: error),
+                        fallbackAvailable: true,
+                        usedCache: false,
+                        usedFallback: true,
+                        retryCount: attempt
+                    )
                     if shouldRetrySameEndpoint(for: error), attempt == 0 {
                         TextPipelineDiagnostics.log(
                             "句子分析",
-                            "AI 端点连接瞬断，准备重试: \(endpointURL.absoluteString) error=\(error.localizedDescription)",
+                            "AI 端点连接瞬断，准备重试: \(endpointURL.absoluteString) error=\(error.localizedDescription) client_request_id=\(clientRequestID)",
                             severity: .warning
                         )
                         try await Task.sleep(nanoseconds: retryDelayNanoseconds(for: attempt))
@@ -1658,19 +1884,19 @@ enum AIExplainSentenceService {
                         let nextURL = endpointURLs[index + 1].absoluteString
                         TextPipelineDiagnostics.log(
                             "句子分析",
-                            "AI 端点连接失败，切换候选地址: \(endpointURL.absoluteString) -> \(nextURL) error=\(error.localizedDescription)",
+                            "AI 端点连接失败，切换候选地址: \(endpointURL.absoluteString) -> \(nextURL) error=\(error.localizedDescription) client_request_id=\(clientRequestID)",
                             severity: .warning
                         )
-                        lastError = AIExplainSentenceServiceError.transport(error.localizedDescription)
+                        lastError = AIExplainSentenceServiceError.transport(failure)
                         break
                     }
-                    throw AIExplainSentenceServiceError.transport(error.localizedDescription)
+                    throw AIExplainSentenceServiceError.transport(failure)
                 } catch let error as AIExplainSentenceServiceError {
                     if case .invalidServerResponse = error, index < endpointURLs.count - 1 {
                         let nextURL = endpointURLs[index + 1].absoluteString
                         TextPipelineDiagnostics.log(
                             "句子分析",
-                            "AI 端点响应异常，切换候选地址: \(endpointURL.absoluteString) -> \(nextURL)",
+                            "AI 端点响应异常，切换候选地址: \(endpointURL.absoluteString) -> \(nextURL) client_request_id=\(clientRequestID)",
                             severity: .warning
                         )
                         lastError = error
@@ -1705,7 +1931,8 @@ enum AIExplainSentenceService {
         return SentenceAnalysisIdentity(
             sentenceID: sentenceID,
             sentenceText: context.sentence,
-            anchorLabel: anchorLabel
+            anchorLabel: anchorLabel,
+            segmentID: context.segmentID
         )
     }
 }
