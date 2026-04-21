@@ -143,6 +143,12 @@
 		B00000000000000000000086 /* MindMapAdmissionResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000086 /* MindMapAdmissionResult.swift */; };
 		B00000000000000000000087 /* SourceHygieneScorer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000087 /* SourceHygieneScorer.swift */; };
 		B00000000000000000000088 /* MindMapAdmissionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000088 /* MindMapAdmissionService.swift */; };
+		B00000000000000000000089 /* MindMapWorkspaceViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000089 /* MindMapWorkspaceViewModel.swift */; };
+		B0000000000000000000008A /* MindMapWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000008A /* MindMapWorkspaceView.swift */; };
+		B0000000000000000000008B /* MindMapCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000008B /* MindMapCanvasView.swift */; };
+		B0000000000000000000008C /* MindMapMiniMapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000008C /* MindMapMiniMapView.swift */; };
+		B0000000000000000000008D /* MindMapToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000008D /* MindMapToolbar.swift */; };
+		B0000000000000000000008E /* MindMapLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000008E /* MindMapLayout.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -283,6 +289,12 @@
 		C00000000000000000000086 /* MindMapAdmissionResult.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MindMapAdmissionResult.swift; sourceTree = "<group>"; };
 		C00000000000000000000087 /* SourceHygieneScorer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceHygieneScorer.swift; sourceTree = "<group>"; };
 		C00000000000000000000088 /* MindMapAdmissionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MindMapAdmissionService.swift; sourceTree = "<group>"; };
+		C00000000000000000000089 /* MindMapWorkspaceViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MindMapWorkspaceViewModel.swift; sourceTree = "<group>"; };
+		C0000000000000000000008A /* MindMapWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MindMapWorkspaceView.swift; sourceTree = "<group>"; };
+		C0000000000000000000008B /* MindMapCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MindMapCanvasView.swift; sourceTree = "<group>"; };
+		C0000000000000000000008C /* MindMapMiniMapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MindMapMiniMapView.swift; sourceTree = "<group>"; };
+		C0000000000000000000008D /* MindMapToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MindMapToolbar.swift; sourceTree = "<group>"; };
+		C0000000000000000000008E /* MindMapLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MindMapLayout.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -452,6 +464,7 @@
 			children = (
 				C00000000000000000000010 /* AppViewModel.swift */,
 				C00000000000000000000055 /* ArchivistWorkspaceViewModel.swift */,
+				C00000000000000000000089 /* MindMapWorkspaceViewModel.swift */,
 				C0000000000000000000002D /* ConceptSummaryItem.swift */,
 				C00000000000000000000039 /* InkAssistViewModel.swift */,
 				C0000000000000000000004E /* NoteDetailViewModel.swift */,
@@ -477,6 +490,7 @@
 				C0000000000000000000001C /* SourceDetailView.swift */,
 				C0000000000000000000001D /* SourceOriginalTab.swift */,
 				C0000000000000000000001E /* SourceOutlineTab.swift */,
+				D00000000000000000000017 /* MindMap */,
 				C00000000000000000000070 /* StructureTreePreviewStyle.swift */,
 				C00000000000000000000071 /* StructureTreePreviewLayout.swift */,
 				C00000000000000000000072 /* StructureTreePreviewNodeCard.swift */,
@@ -497,6 +511,18 @@
 				D00000000000000000000012 /* Workspace */,
 			);
 			path = Views;
+			sourceTree = "<group>";
+		};
+		D00000000000000000000017 /* MindMap */ = {
+			isa = PBXGroup;
+			children = (
+				C0000000000000000000008E /* MindMapLayout.swift */,
+				C0000000000000000000008B /* MindMapCanvasView.swift */,
+				C0000000000000000000008C /* MindMapMiniMapView.swift */,
+				C0000000000000000000008D /* MindMapToolbar.swift */,
+				C0000000000000000000008A /* MindMapWorkspaceView.swift */,
+			);
+			path = MindMap;
 			sourceTree = "<group>";
 		};
 		D00000000000000000000008 /* Data */ = {
@@ -725,6 +751,7 @@
 				B0000000000000000000004C /* SourceJumpCoordinator.swift in Sources */,
 				B0000000000000000000000D /* ReviewScheduler.swift in Sources */,
 				B0000000000000000000000E /* AppViewModel.swift in Sources */,
+				B00000000000000000000089 /* MindMapWorkspaceViewModel.swift in Sources */,
 				B0000000000000000000002B /* NoteSummaryItem.swift in Sources */,
 				B0000000000000000000002E /* NotesHomeViewModel.swift in Sources */,
 				B00000000000000000000039 /* InkAssistViewModel.swift in Sources */,
@@ -749,6 +776,11 @@
 				B0000000000000000000001C /* SourceDetailView.swift in Sources */,
 				B0000000000000000000001D /* SourceOriginalTab.swift in Sources */,
 				B0000000000000000000001E /* SourceOutlineTab.swift in Sources */,
+				B0000000000000000000008A /* MindMapWorkspaceView.swift in Sources */,
+				B0000000000000000000008B /* MindMapCanvasView.swift in Sources */,
+				B0000000000000000000008C /* MindMapMiniMapView.swift in Sources */,
+				B0000000000000000000008D /* MindMapToolbar.swift in Sources */,
+				B0000000000000000000008E /* MindMapLayout.swift in Sources */,
 				B00000000000000000000070 /* StructureTreePreviewStyle.swift in Sources */,
 				B00000000000000000000071 /* StructureTreePreviewLayout.swift in Sources */,
 				B00000000000000000000072 /* StructureTreePreviewNodeCard.swift in Sources */,

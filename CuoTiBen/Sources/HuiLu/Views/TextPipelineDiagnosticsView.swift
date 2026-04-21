@@ -14,6 +14,13 @@ struct TextPipelineDiagnosticsView: View {
             .flatMap(MindMapAdmissionSummary.init(event:))
     }
 
+    private var latestPassageAIStatus: PassageMapAIStatus? {
+        events
+            .filter { $0.stage == "AI" && $0.message.contains("[AI][PassageMap]") }
+            .last
+            .flatMap(PassageMapAIStatus.init(event:))
+    }
+
     private var filteredEvents: [TextPipelineDiagnostics.PipelineEvent] {
         guard let stage = filterStage else { return events }
         return events.filter { $0.stage == stage }
@@ -48,7 +55,10 @@ struct TextPipelineDiagnosticsView: View {
                 List {
                     if let summary = latestAdmissionSummary {
                         Section("导图准入概览") {
-                            MindMapAdmissionSummaryCard(summary: summary)
+                            MindMapAdmissionSummaryCard(
+                                summary: summary,
+                                aiStatus: latestPassageAIStatus
+                            )
                         }
                     }
 
@@ -143,6 +153,7 @@ private struct MindMapAdmissionSummary {
     let averageHygiene: String
     let averageConsistency: String
     let topRejectedReasons: String
+    let diagnosticsSample: String
 
     nonisolated init?(event: TextPipelineDiagnostics.PipelineEvent) {
         let pairs = event.message
@@ -168,11 +179,15 @@ private struct MindMapAdmissionSummary {
         self.topRejectedReasons = values["top_rejected_reasons"]?
             .replacingOccurrences(of: "||", with: " | ")
             ?? "none"
+        self.diagnosticsSample = self.topRejectedReasons == "none"
+            ? "暂无 rejected 样本，当前节点已通过准入。"
+            : self.topRejectedReasons
     }
 }
 
 private struct MindMapAdmissionSummaryCard: View {
     let summary: MindMapAdmissionSummary
+    let aiStatus: PassageMapAIStatus?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -201,6 +216,16 @@ private struct MindMapAdmissionSummaryCard: View {
             Text("主要拒绝原因：\(summary.topRejectedReasons)")
                 .font(.caption)
                 .foregroundColor(.secondary)
+
+            if let aiStatus {
+                Text("usingFallback：\(aiStatus.usedFallback ? "true" : "false") · request_id：\(aiStatus.requestID ?? "nil") · retry_count：\(aiStatus.retryCount)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Text("diagnostics sample：\(summary.diagnosticsSample)")
+                .font(.caption)
+                .foregroundColor(.secondary)
         }
         .padding(.vertical, 4)
     }
@@ -214,6 +239,31 @@ private struct MindMapAdmissionSummaryCard: View {
                 .font(.headline.monospacedDigit())
                 .foregroundColor(color)
         }
+    }
+}
+
+private struct PassageMapAIStatus {
+    let requestID: String?
+    let provider: String?
+    let model: String?
+    let retryCount: Int
+    let usedFallback: Bool
+
+    nonisolated init?(event: TextPipelineDiagnostics.PipelineEvent) {
+        let pairs = event.message
+            .split(separator: " ")
+            .compactMap { chunk -> (String, String)? in
+                let parts = chunk.split(separator: "=", maxSplits: 1).map(String.init)
+                guard parts.count == 2 else { return nil }
+                return (parts[0], parts[1])
+            }
+        let values = Dictionary(uniqueKeysWithValues: pairs)
+        guard values["used_fallback"] != nil else { return nil }
+        requestID = values["request_id"]
+        provider = values["provider"]
+        model = values["model"]
+        retryCount = Int(values["retry_count"] ?? "0") ?? 0
+        usedFallback = (values["used_fallback"] ?? "false") == "true"
     }
 }
 

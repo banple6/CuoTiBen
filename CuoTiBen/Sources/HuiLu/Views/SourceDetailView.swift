@@ -261,18 +261,66 @@ struct SourceDetailView: View {
                 }
 
                 if let structuredSource, selectedTab == .outline {
-                    StructureTreeWorkspaceOverlay(
-                        title: liveDocument.title,
-                        nodes: structuredSource.outline,
-                        highlightedNodeID: highlightedOutlineNodeID,
-                        jumpTargetNodeID: jumpTargetOutlineNodeID,
-                        ancestorNodeIDs: structuredOutlineAncestorNodeIDs,
-                        onNodeTap: { node in
-                            handleOutlineNodeTap(node)
-                        },
-                        onJumpHandled: handleOutlineJumpHandled,
-                        onClose: closeOutlineWorkspace
-                    )
+                    ZStack {
+                        Color.black.opacity(0.18)
+                            .ignoresSafeArea()
+
+                        VStack(alignment: .leading, spacing: 16) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("思维导图工作区")
+                                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                                    .foregroundStyle(Color.black.opacity(0.84))
+
+                                Text(liveDocument.title)
+                                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(Color.black.opacity(0.54))
+                                    .lineLimit(1)
+                            }
+
+                            MindMapWorkspaceView(
+                                documentTitle: liveDocument.title,
+                                bundle: structuredSource,
+                                focusSentenceID: highlightedSentenceID,
+                                focusSegmentIDs: highlightedSegmentIDs,
+                                displayMode: .fullScreen,
+                                onNodeTap: { node in
+                                    handleMindMapNodeTap(node, in: structuredSource)
+                                },
+                                onClose: closeOutlineWorkspace,
+                                onRegenerate: {
+                                    Task {
+                                        await viewModel.ensureProfessorAnalysis(
+                                            for: liveDocument,
+                                            trigger: .openProfessorView,
+                                            force: true
+                                        )
+                                    }
+                                }
+                            )
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                        .padding(24)
+                        .background(
+                            RoundedRectangle(cornerRadius: 34, style: .continuous)
+                                .fill(
+                                    LinearGradient(
+                                        colors: [
+                                            Color.white.opacity(0.94),
+                                            Color(red: 0.958, green: 0.968, blue: 0.988).opacity(0.98)
+                                        ],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 34, style: .continuous)
+                                        .stroke(Color.white.opacity(0.74), lineWidth: 1)
+                                )
+                                .shadow(color: Color.black.opacity(0.14), radius: 30, x: 0, y: 18)
+                        )
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 20)
+                    }
                     .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .center)))
                     .zIndex(20)
                 }
@@ -759,6 +807,28 @@ struct SourceDetailView: View {
     private func handleOutlineNodeTap(_ node: OutlineNode) {
         syncHighlight(for: node)
         selectedOutlineNode = node
+    }
+
+    private func handleMindMapNodeTap(_ node: MindMapNode, in bundle: StructuredSourceBundle) {
+        if node.kind == .anchorSentence,
+           let sentence = bundle.sentence(id: node.provenance.sourceSentenceID) {
+            syncHighlight(for: sentence, in: bundle)
+            selectedSentence = sentence
+            return
+        }
+
+        if let outlineNode = bundle.bestOutlineNode(forSentenceID: node.provenance.sourceSentenceID)
+            ?? bundle.bestOutlineNode(forSegmentID: node.provenance.sourceSegmentID) {
+            syncHighlight(for: outlineNode)
+            selectedOutlineNode = outlineNode
+            return
+        }
+
+        if let sentence = bundle.sentence(id: node.provenance.sourceSentenceID)
+            ?? bundle.sentences.first(where: { $0.segmentID == node.provenance.sourceSegmentID }) {
+            syncHighlight(for: sentence, in: bundle)
+            selectedSentence = sentence
+        }
     }
 
     private func closeOutlineWorkspace() {

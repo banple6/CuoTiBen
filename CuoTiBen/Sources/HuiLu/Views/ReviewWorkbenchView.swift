@@ -162,23 +162,28 @@ struct ReviewWorkbenchView: View {
                 .padding(.bottom, safeBottom)
 
                 if showsPadOutlineWorkspace, let structuredSource {
-                    StructureTreeWorkspaceOverlay(
-                        title: liveDocument.title,
-                        nodes: structuredSource.outline,
-                        highlightedNodeID: highlightedNodeID,
-                        jumpTargetNodeID: jumpTargetOutlineNodeID,
-                        ancestorNodeIDs: outlineAncestorNodeIDs,
+                    MindMapWorkspaceOverlay(
+                        documentTitle: liveDocument.title,
+                        bundle: structuredSource,
+                        focusSentenceID: highlightedSentenceID,
+                        focusSegmentIDs: highlightedSegmentIDs,
                         onNodeTap: { node in
-                            handleNodeSelection(
+                            handleMindMapNodeSelection(
                                 node,
-                                recordProgress: true,
-                                shouldJump: true,
                                 revealAnalysisOnPhone: false
                             )
                         },
-                        onJumpHandled: handleOutlineJumpHandled,
                         onClose: {
                             showsPadOutlineWorkspace = false
+                        },
+                        onRegenerate: {
+                            Task {
+                                await viewModel.ensureProfessorAnalysis(
+                                    for: liveDocument,
+                                    trigger: .openReviewWorkbench,
+                                    force: true
+                                )
+                            }
                         }
                     )
                     .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .center)))
@@ -558,6 +563,44 @@ struct ReviewWorkbenchView: View {
         if usesPhoneLayout, revealAnalysisOnPhone {
             phoneDrawerDetent = .large
             showsPhoneAnalysisDrawer = true
+        }
+    }
+
+    private func handleMindMapNodeSelection(
+        _ node: MindMapNode,
+        revealAnalysisOnPhone: Bool
+    ) {
+        guard let structuredSource else { return }
+
+        if node.kind == .anchorSentence,
+           let sentence = structuredSource.sentence(id: node.provenance.sourceSentenceID) {
+            handleSentenceSelection(
+                sentence,
+                recordProgress: true,
+                shouldJump: true,
+                revealAnalysisOnPhone: revealAnalysisOnPhone
+            )
+            return
+        }
+
+        if let outlineNode = structuredSource.bestOutlineNode(forSentenceID: node.provenance.sourceSentenceID)
+            ?? structuredSource.bestOutlineNode(forSegmentID: node.provenance.sourceSegmentID) {
+            handleNodeSelection(
+                outlineNode,
+                recordProgress: true,
+                shouldJump: true,
+                revealAnalysisOnPhone: revealAnalysisOnPhone
+            )
+            return
+        }
+
+        if let sentence = structuredSource.sentences.first(where: { $0.segmentID == node.provenance.sourceSegmentID }) {
+            handleSentenceSelection(
+                sentence,
+                recordProgress: true,
+                shouldJump: true,
+                revealAnalysisOnPhone: revealAnalysisOnPhone
+            )
         }
     }
 
@@ -997,7 +1040,7 @@ private struct ReviewWorkbenchAnalysisPane: View {
                         Button(action: onShowOutline) {
                             HStack(spacing: 6) {
                                 Image(systemName: "list.bullet.indent")
-                                Text("结构树")
+                                Text("思维导图")
                             }
                             .font(.system(size: 12, weight: .semibold, design: .serif))
                             .foregroundStyle(Color.blue.opacity(0.8))
@@ -1086,47 +1129,6 @@ private struct ReviewWorkbenchAnalysisPane: View {
         }
     }
 
-    private var outlineTreeCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("思维导图")
-                .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(Color.black.opacity(0.7))
-
-            ScrollViewReader { proxy in
-                ScrollView(showsIndicators: false) {
-                    SourceOutlineTab(
-                        nodes: bundle.outline,
-                        highlightedNodeID: highlightedNodeID,
-                        jumpTargetNodeID: nil,
-                        ancestorNodeIDs: ancestorNodeIDs,
-                        onNodeTap: onNodeTap,
-                        onJumpHandled: {}
-                    )
-                    .padding(.bottom, 6)
-                }
-                .frame(minHeight: outlineTreeMinHeight, maxHeight: outlineTreeMaxHeight)
-                .onAppear {
-                    scrollToOutlineTarget(with: proxy, animated: false)
-                }
-                .onChange(of: jumpTargetNodeID) { _ in
-                    scrollToOutlineTarget(with: proxy, animated: true)
-                }
-                .onChange(of: highlightedNodeID) { _ in
-                    scrollToOutlineTarget(with: proxy, animated: true)
-                }
-            }
-        }
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(Color.white.opacity(0.72))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .stroke(Color.white.opacity(0.9), lineWidth: 1)
-                )
-        )
-    }
-
     private var modeLabel: String {
         switch panelKind {
         case .empty:
@@ -1140,39 +1142,6 @@ private struct ReviewWorkbenchAnalysisPane: View {
         }
     }
 
-    private var outlineTreeMinHeight: CGFloat {
-        if usesPadLayout {
-            return panelKind == .empty ? 150 : 120
-        }
-
-        return panelKind == .empty ? 132 : 108
-    }
-
-    private var outlineTreeMaxHeight: CGFloat {
-        if usesPadLayout {
-            return panelKind == .empty ? 220 : 168
-        }
-
-        return panelKind == .empty ? 160 : 128
-    }
-
-    private func scrollToOutlineTarget(with proxy: ScrollViewProxy, animated: Bool) {
-        guard let targetID = jumpTargetNodeID ?? highlightedNodeID else { return }
-
-        let action = {
-            proxy.scrollTo(targetID, anchor: .center)
-        }
-
-        if animated {
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.88)) {
-                action()
-            }
-        } else {
-            action()
-        }
-
-        onOutlineJumpHandled()
-    }
 }
 
 private struct ReviewWorkbenchPhoneAnalysisDrawer: View {
