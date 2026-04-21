@@ -19,7 +19,7 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
 
     /// 当前分析任务，用于取消
     private var analysisTask: Task<Void, Never>?
-    private var currentAnalysisIdentity: SentenceAnalysisIdentity?
+    private var currentAnalysisIdentity: AIRequestIdentity?
 
     init(document: SourceDocument, bundle: StructuredSourceBundle) {
         self.document = document
@@ -179,11 +179,16 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
             return
         }
 
-        let targetIdentity = SentenceAnalysisIdentity(
-            sentenceID: sentence.id,
-            sentenceText: sentence.text,
-            anchorLabel: sentence.anchorLabel
-        )
+        guard let targetIdentity = appViewModel.explainSentenceRequestIdentity(for: sentence, in: document) else {
+            analysisResult = LocalSentenceFallbackBuilder.build(
+                context: appViewModel.explainSentenceContext(for: sentence, in: document),
+                requestIdentity: nil,
+                structuredError: AIStructuredError.invalidRequest(message: "缺少 sentence identity 字段。")
+            )
+            analysisError = analysisResult?.displayFallbackMessage
+            isLoadingAnalysis = false
+            return
+        }
         currentAnalysisIdentity = targetIdentity
         let currentDocument = document
 
@@ -201,7 +206,10 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
                 // 新模型响应更慢，给工作台留足等待窗口，避免未完成就被本地超时打断。
                 let result = try await withThrowingTaskGroup(of: AIExplainSentenceResult.self) { group in
                     group.addTask {
-                        try await AIExplainSentenceService.fetchExplanationWithCache(for: context)
+                        try await AIExplainSentenceService.fetchExplanationWithCache(
+                            for: context,
+                            requestIdentity: targetIdentity
+                        )
                     }
                     group.addTask {
                         try await Task.sleep(nanoseconds: 80_000_000_000)
@@ -219,21 +227,21 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
                 guard self.matchesCurrentSelection(identity: targetIdentity) else {
                     TextPipelineDiagnostics.log(
                         "句子分析",
-                        "分析结果返回时选中句已变化，静默丢弃 sentence=\(targetIdentity.sourceSentenceID)",
+                        "分析结果返回时选中句已变化，静默丢弃 sentence=\(targetIdentity.sentenceID)",
                         severity: .warning
                     )
                     return
                 }
 
                 let warnings = AnalysisConsistencyGuard.warnings(
-                    identity: targetIdentity,
+                    expectedIdentity: targetIdentity,
                     sentenceText: sentence.text,
                     analysis: result
                 )
                 guard warnings.isEmpty else {
                     TextPipelineDiagnostics.log(
                         "句子分析",
-                        "分析结果身份或内容不一致，静默丢弃：\(warnings.joined(separator: "；")) sentence=\(targetIdentity.sourceSentenceID)",
+                        "分析结果身份或内容不一致，静默丢弃：\(warnings.joined(separator: "；")) sentence=\(targetIdentity.sentenceID)",
                         severity: .warning
                     )
                     self.analysisResult = nil
@@ -242,7 +250,7 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
                 }
 
                 self.analysisResult = result
-                self.analysisError = nil
+                self.analysisError = result.shouldShowFallbackBanner ? result.displayFallbackMessage : nil
             } catch is CancellationError {
                 // 被取消，不更新状态
             } catch {
@@ -264,39 +272,33 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
         isLoadingAnalysis = false
 
         if let sentence = selectedSentence {
-            currentAnalysisIdentity = SentenceAnalysisIdentity(
-                sentenceID: sentence.id,
-                sentenceText: sentence.text,
-                anchorLabel: sentence.anchorLabel
-            )
+            currentAnalysisIdentity = AIRequestIdentity.make(document: document, sentence: sentence)
         } else {
             currentAnalysisIdentity = nil
         }
     }
 
-    private func matchesCurrentSelection(identity: SentenceAnalysisIdentity) -> Bool {
+    private func matchesCurrentSelection(identity: AIRequestIdentity) -> Bool {
         guard let sentence = selectedSentence else { return false }
-        let currentIdentity = SentenceAnalysisIdentity(
-            sentenceID: sentence.id,
-            sentenceText: sentence.text,
-            anchorLabel: sentence.anchorLabel
-        )
-        return currentIdentity == identity
+        guard let currentIdentity = AIRequestIdentity.make(document: document, sentence: sentence) else {
+            return false
+        }
+        return currentIdentity.matchesSemanticIdentity(identity)
     }
 
     private func isResultVisible(_ result: AIExplainSentenceResult, for sentence: Sentence) -> Bool {
         guard let identity = result.analysisIdentity else { return false }
-        let expectedIdentity = SentenceAnalysisIdentity(
-            sentenceID: sentence.id,
+        guard let expectedIdentity = AIRequestIdentity.make(document: document, sentence: sentence) else {
+            return false
+        }
+        return AIResponseIdentityGuard.validate(
+            expected: expectedIdentity,
+            actual: identity
+        ).isAllowed && AnalysisConsistencyGuard.warnings(
+            expectedIdentity: expectedIdentity,
             sentenceText: sentence.text,
-            anchorLabel: sentence.anchorLabel
-        )
-        return identity == expectedIdentity &&
-            AnalysisConsistencyGuard.warnings(
-                identity: expectedIdentity,
-                sentenceText: sentence.text,
-                analysis: result
-            ).isEmpty
+            analysis: result
+        ).isEmpty
     }
 }
 

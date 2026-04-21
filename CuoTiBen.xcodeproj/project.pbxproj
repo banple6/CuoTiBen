@@ -131,6 +131,11 @@
 		B0000000000000000000007A /* ProfessorAnalysisCacheStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000007A /* ProfessorAnalysisCacheStore.swift */; };
 		B0000000000000000000007B /* StructuredSourceQualityEvaluator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000007B /* StructuredSourceQualityEvaluator.swift */; };
 		B0000000000000000000007C /* AnchorConsistencyValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000007C /* AnchorConsistencyValidator.swift */; };
+		B0000000000000000000007D /* AIRequestIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000007D /* AIRequestIdentity.swift */; };
+		B0000000000000000000007E /* AIResponseIdentityGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000007E /* AIResponseIdentityGuard.swift */; };
+		B0000000000000000000007F /* AIStructuredError.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000007F /* AIStructuredError.swift */; };
+		B00000000000000000000080 /* LocalSentenceFallbackBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000080 /* LocalSentenceFallbackBuilder.swift */; };
+		B00000000000000000000081 /* LocalPassageFallbackBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000081 /* LocalPassageFallbackBuilder.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -259,6 +264,11 @@
 		C0000000000000000000007A /* ProfessorAnalysisCacheStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfessorAnalysisCacheStore.swift; sourceTree = "<group>"; };
 		C0000000000000000000007B /* StructuredSourceQualityEvaluator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StructuredSourceQualityEvaluator.swift; sourceTree = "<group>"; };
 		C0000000000000000000007C /* AnchorConsistencyValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnchorConsistencyValidator.swift; sourceTree = "<group>"; };
+		C0000000000000000000007D /* AIRequestIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIRequestIdentity.swift; sourceTree = "<group>"; };
+		C0000000000000000000007E /* AIResponseIdentityGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIResponseIdentityGuard.swift; sourceTree = "<group>"; };
+		C0000000000000000000007F /* AIStructuredError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIStructuredError.swift; sourceTree = "<group>"; };
+		C00000000000000000000080 /* LocalSentenceFallbackBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalSentenceFallbackBuilder.swift; sourceTree = "<group>"; };
+		C00000000000000000000081 /* LocalPassageFallbackBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalPassageFallbackBuilder.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -358,7 +368,10 @@
 			children = (
 				C00000000000000000000077 /* AIRequestPolicy.swift */,
 				C00000000000000000000019 /* AIExplainSentenceService.swift */,
+				C0000000000000000000007D /* AIRequestIdentity.swift */,
 				C00000000000000000000078 /* AIRequestSingleFlight.swift */,
+				C0000000000000000000007E /* AIResponseIdentityGuard.swift */,
+				C0000000000000000000007F /* AIStructuredError.swift */,
 				C0000000000000000000001B /* AISourceParsingService.swift */,
 				C0000000000000000000000C /* CardGenerationService.swift */,
 				C0000000000000000000000D /* ChunkingService.swift */,
@@ -377,6 +390,8 @@
 				C0000000000000000000006D /* DocumentParseService.swift */,
 				C0000000000000000000006E /* NormalizedDocumentConverter.swift */,
 				C0000000000000000000006F /* ProfessorAnalysisService.swift */,
+				C00000000000000000000080 /* LocalSentenceFallbackBuilder.swift */,
+				C00000000000000000000081 /* LocalPassageFallbackBuilder.swift */,
 				C0000000000000000000007A /* ProfessorAnalysisCacheStore.swift */,
 				C00000000000000000000079 /* SentenceAnalysisCacheStore.swift */,
 				C0000000000000000000007B /* StructuredSourceQualityEvaluator.swift */,
@@ -697,8 +712,11 @@
 				B00000000000000000000011 /* ImportMaterialView.swift in Sources */,
 				B00000000000000000000018 /* LibraryView.swift in Sources */,
 				B00000000000000000000019 /* AIExplainSentenceService.swift in Sources */,
+				B0000000000000000000007D /* AIRequestIdentity.swift in Sources */,
 				B00000000000000000000077 /* AIRequestPolicy.swift in Sources */,
 				B00000000000000000000078 /* AIRequestSingleFlight.swift in Sources */,
+				B0000000000000000000007E /* AIResponseIdentityGuard.swift in Sources */,
+				B0000000000000000000007F /* AIStructuredError.swift in Sources */,
 				B0000000000000000000001B /* AISourceParsingService.swift in Sources */,
 				B00000000000000000000017 /* ReviewListView.swift in Sources */,
 				B00000000000000000000012 /* ReviewSessionView.swift in Sources */,
@@ -771,6 +789,8 @@
 				B0000000000000000000006D /* DocumentParseService.swift in Sources */,
 				B0000000000000000000006E /* NormalizedDocumentConverter.swift in Sources */,
 				B0000000000000000000006F /* ProfessorAnalysisService.swift in Sources */,
+				B00000000000000000000080 /* LocalSentenceFallbackBuilder.swift in Sources */,
+				B00000000000000000000081 /* LocalPassageFallbackBuilder.swift in Sources */,
 				B0000000000000000000007A /* ProfessorAnalysisCacheStore.swift in Sources */,
 				B00000000000000000000079 /* SentenceAnalysisCacheStore.swift in Sources */,
 				B0000000000000000000007B /* StructuredSourceQualityEvaluator.swift in Sources */,

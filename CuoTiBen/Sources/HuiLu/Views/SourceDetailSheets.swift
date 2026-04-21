@@ -63,6 +63,7 @@ struct SentenceExplainDetailSheet: View {
     @State private var activeRelatedNote: Note?
     @State private var activeKnowledgePoint: KnowledgePoint?
     @State private var explanationTask: Task<Void, Never>?
+    @State private var activeExplanationRequestID: String?
 
     init(document: SourceDocument, sentence: Sentence) {
         self.document = document
@@ -226,6 +227,7 @@ struct SentenceExplainDetailSheet: View {
             result = nil
             errorMessage = nil
             isLoading = false
+            activeExplanationRequestID = nil
             maybeAutoLoadExplanation()
         }
         .onAppear {
@@ -234,6 +236,7 @@ struct SentenceExplainDetailSheet: View {
         .onDisappear {
             explanationTask?.cancel()
             explanationTask = nil
+            activeExplanationRequestID = nil
         }
     }
 
@@ -326,6 +329,13 @@ struct SentenceExplainDetailSheet: View {
                 if isLoading {
                     ProgressView("正在获取教授式精讲…")
                         .font(.system(size: 14, weight: .medium))
+                } else if let visibleResult, visibleResult.shouldShowFallbackBanner {
+                    SentenceExplainBlock(
+                        title: "提示",
+                        content: visibleResult.displayFallbackMessage,
+                        tone: .neutral
+                    )
+                    debugTransportSection(for: visibleResult)
                 } else if let errorMessage, result == nil {
                     SentenceExplainBlock(
                         title: "提示",
@@ -364,7 +374,7 @@ struct SentenceExplainDetailSheet: View {
                 }
 
                 if !isLoading, result == nil {
-                    remoteExplanationButton(title: "补充云端精讲（会消耗额度）")
+                    remoteExplanationButton(title: "重新获取 AI 精讲")
                 }
 
                 relatedContextPanel
@@ -381,7 +391,7 @@ struct SentenceExplainDetailSheet: View {
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(Color.black.opacity(0.62))
 
-                Button("重新获取") {
+                Button("重新获取 AI 精讲") {
                     scheduleExplanationLoad(force: true)
                 }
                 .font(.system(size: 14, weight: .semibold))
@@ -397,7 +407,7 @@ struct SentenceExplainDetailSheet: View {
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(Color.black.opacity(0.62))
 
-                remoteExplanationButton(title: "获取云端精讲（会消耗额度）")
+                remoteExplanationButton(title: "获取 AI 精讲")
             }
         }
     }
@@ -471,41 +481,101 @@ struct SentenceExplainDetailSheet: View {
         for sentence: Sentence,
         forceRefresh: Bool
     ) async {
+        let context = viewModel.explainSentenceContext(for: sentence, in: document)
         await MainActor.run {
             guard activeSentence.id == sentence.id else { return }
             isLoading = true
             errorMessage = nil
             result = nil
+            activeExplanationRequestID = nil
+        }
+
+        guard let requestIdentity = viewModel.explainSentenceRequestIdentity(for: sentence, in: document) else {
+            let fallback = LocalSentenceFallbackBuilder.build(
+                context: context,
+                requestIdentity: nil,
+                structuredError: AIStructuredError.invalidRequest(message: "缺少 sentence identity 字段。")
+            )
+            await MainActor.run {
+                guard activeSentence.id == sentence.id else { return }
+                result = fallback
+                errorMessage = fallback.displayFallbackMessage
+                isLoading = false
+                activeExplanationRequestID = nil
+            }
+            return
+        }
+
+        await MainActor.run {
+            guard activeSentence.id == sentence.id else { return }
+            activeExplanationRequestID = requestIdentity.clientRequestID
         }
 
         do {
-            let context = viewModel.explainSentenceContext(for: sentence, in: document)
             let fetched = try await AIExplainSentenceService.fetchExplanationWithCache(
                 for: context,
+                requestIdentity: requestIdentity,
                 forceRefresh: forceRefresh
             )
             try Task.checkCancellation()
 
             guard isResultVisible(fetched, for: sentence) else {
-                throw AIExplainSentenceServiceError.requestFailed("返回结果与当前句不一致")
+                TextPipelineDiagnostics.log(
+                    "AI",
+                    "[AI][SentenceExplain] discard stale result request_id=\(requestIdentity.clientRequestID) sentence_id=\(requestIdentity.sentenceID)",
+                    severity: .warning
+                )
+                await MainActor.run {
+                    guard activeSentence.id == sentence.id else { return }
+                    guard activeExplanationRequestID == requestIdentity.clientRequestID else { return }
+                    isLoading = false
+                }
+                return
             }
 
             await MainActor.run {
                 guard activeSentence.id == sentence.id else { return }
+                guard activeExplanationRequestID == requestIdentity.clientRequestID else {
+                    TextPipelineDiagnostics.log(
+                        "AI",
+                        "[AI][SentenceExplain] discard stale request request_id=\(requestIdentity.clientRequestID) discard_reason=requestSuperseded",
+                        severity: .warning
+                    )
+                    return
+                }
                 result = fetched
+                errorMessage = fetched.shouldShowFallbackBanner ? fetched.displayFallbackMessage : nil
                 isLoading = false
+                activeExplanationRequestID = nil
             }
         } catch is CancellationError {
             await MainActor.run {
                 guard activeSentence.id == sentence.id else { return }
                 isLoading = false
+                if activeExplanationRequestID == requestIdentity.clientRequestID {
+                    activeExplanationRequestID = nil
+                }
             }
         } catch {
+            let fallback = LocalSentenceFallbackBuilder.build(
+                context: context,
+                requestIdentity: requestIdentity,
+                structuredError: AIStructuredError.invalidModelResponse(message: error.localizedDescription)
+            )
             await MainActor.run {
                 guard activeSentence.id == sentence.id else { return }
-                result = nil
-                errorMessage = error.localizedDescription
+                guard activeExplanationRequestID == requestIdentity.clientRequestID else {
+                    TextPipelineDiagnostics.log(
+                        "AI",
+                        "[AI][SentenceExplain] discard stale fallback request_id=\(requestIdentity.clientRequestID) discard_reason=requestSuperseded",
+                        severity: .warning
+                    )
+                    return
+                }
+                result = fallback
+                errorMessage = fallback.displayFallbackMessage
                 isLoading = false
+                activeExplanationRequestID = nil
             }
         }
     }
@@ -547,18 +617,44 @@ struct SentenceExplainDetailSheet: View {
     }
 
     private func isResultVisible(_ result: AIExplainSentenceResult, for sentence: Sentence) -> Bool {
-        guard let identity = result.analysisIdentity else { return false }
-        let expectedIdentity = SentenceAnalysisIdentity(
-            sentenceID: sentence.id,
+        guard let expectedIdentity = AIRequestIdentity.make(document: document, sentence: sentence) else {
+            return false
+        }
+        return AIResponseIdentityGuard.validate(
+            expected: expectedIdentity,
+            actual: result.analysisIdentity
+        ).isAllowed && AnalysisConsistencyGuard.warnings(
+            expectedIdentity: expectedIdentity,
             sentenceText: sentence.text,
-            anchorLabel: sentence.anchorLabel
-        )
-        return identity == expectedIdentity &&
-            AnalysisConsistencyGuard.warnings(
-                identity: expectedIdentity,
-                sentenceText: sentence.text,
-                analysis: result
-            ).isEmpty
+            analysis: result
+        ).isEmpty
+    }
+
+    @ViewBuilder
+    private func debugTransportSection(for result: AIExplainSentenceResult) -> some View {
+        #if DEBUG
+        let debugLines = [
+            result.requestID.map { "request_id：\($0)" },
+            result.errorCode.map { "error_code：\($0)" },
+            "used_fallback：\(result.usedFallback ? "true" : "false")",
+            "used_cache：\(result.usedCache ? "true" : "false")",
+            "retry_count：\(result.retryCount)"
+        ].compactMap { $0 }
+
+        if !debugLines.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("DEBUG")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Color.black.opacity(0.55))
+
+                ForEach(debugLines, id: \.self) { line in
+                    Text(line)
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Color.black.opacity(0.55))
+                }
+            }
+        }
+        #endif
     }
 }
 

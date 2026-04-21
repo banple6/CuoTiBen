@@ -650,6 +650,7 @@ final class AppViewModel: ObservableObject {
             let latestBundle = structuredSource(for: document) ?? initialBundle
             structuredSources[document.id] = latestBundle.applyingProfessorAnalysis(cacheHit.delta)
             structuredSourceStages[document.id] = .ready
+            structuredSourceErrors[document.id] = nil
             return
         }
 
@@ -682,31 +683,54 @@ final class AppViewModel: ObservableObject {
                     return cacheHit.delta
                 }
 
-                let enriched = try await ProfessorAnalysisService.enrichBundle(
+                let analysisResult = try await ProfessorAnalysisService.enrichBundle(
                     initialBundle,
+                    document: document,
                     title: documentTitle
                 )
-                let delta = ProfessorAnalysisCacheStore.makeDelta(from: enriched)
-                await Self.professorAnalysisCacheStore.store(
-                    delta,
-                    forKey: requestKey,
-                    persistToDisk: allowDiskCache
-                )
+                let delta = analysisResult.delta
+                if !analysisResult.usedFallback {
+                    await Self.professorAnalysisCacheStore.store(
+                        delta,
+                        forKey: requestKey,
+                        persistToDisk: allowDiskCache
+                    )
+                }
                 TextPipelineDiagnostics.log(
                     "AI",
-                    "[AI][ProfessorAnalysis] fetched doc=\(documentID)",
+                    [
+                        "[AI][ProfessorAnalysis] fetched",
+                        "doc=\(documentID)",
+                        "request_id=\(analysisResult.requestID ?? "nil")",
+                        "provider=\(analysisResult.meta.provider ?? "nil")",
+                        "model=\(analysisResult.meta.model ?? "nil")",
+                        "retry_count=\(analysisResult.meta.retryCount)",
+                        "used_cache=\(analysisResult.meta.usedCache)",
+                        "used_fallback=\(analysisResult.meta.usedFallback)"
+                    ].joined(separator: " "),
                     severity: .info
                 )
                 return delta
             }
 
             let latestBundle = structuredSource(for: document) ?? initialBundle
-            structuredSources[document.id] = latestBundle.applyingProfessorAnalysis(delta)
-            structuredSourceStages[document.id] = .ready
+            let mergedBundle = latestBundle.applyingProfessorAnalysis(delta)
+            structuredSources[document.id] = mergedBundle
+            let hasAIGeneratedAnalysis = delta.paragraphCards.contains(where: \.isAIGenerated)
+                || delta.sentenceCards.contains(where: { $0.analysis.isAIGenerated })
+            structuredSourceStages[document.id] = hasAIGeneratedAnalysis ? .ready : fallbackStage
+            if hasAIGeneratedAnalysis {
+                structuredSourceErrors[document.id] = nil
+            } else if let overview = mergedBundle.passageOverview?.displayedAuthorCoreQuestion.nonEmpty {
+                structuredSourceErrors[document.id] = overview
+            } else {
+                structuredSourceErrors[document.id] = "AI 地图分析暂不可用，已展示本地结构骨架。"
+            }
         } catch is CancellationError {
             structuredSourceStages[document.id] = fallbackStage
         } catch {
             structuredSourceStages[document.id] = fallbackStage
+            structuredSourceErrors[document.id] = "AI 地图分析暂不可用，已展示本地结构骨架。"
             TextPipelineDiagnostics.log(
                 "AI",
                 "[AI][ProfessorAnalysis] failed doc=\(document.id): \(error.localizedDescription)",
@@ -937,7 +961,9 @@ final class AppViewModel: ObservableObject {
               let segment = bundle.segment(id: sentence.segmentID) else {
             return ExplainSentenceContext(
                 title: document.title,
+                documentID: document.id.uuidString,
                 sentenceID: sentence.id,
+                segmentID: sentence.segmentID,
                 anchorLabel: sentence.anchorLabel,
                 sentence: sentence.text,
                 context: sentence.text,
@@ -958,7 +984,9 @@ final class AppViewModel: ObservableObject {
 
         return ExplainSentenceContext(
             title: document.title,
+            documentID: document.id.uuidString,
             sentenceID: sentence.id,
+            segmentID: sentence.segmentID,
             anchorLabel: sentence.anchorLabel,
             sentence: sentence.text,
             context: context.isEmpty ? segment.text : context,
@@ -966,6 +994,10 @@ final class AppViewModel: ObservableObject {
             paragraphRole: paragraphCard?.argumentRole.displayName ?? "",
             questionPrompt: linkedQuestion
         )
+    }
+
+    func explainSentenceRequestIdentity(for sentence: Sentence, in document: SourceDocument) -> AIRequestIdentity? {
+        AIRequestIdentity.make(document: document, sentence: sentence)
     }
 
     func outlineAnchorSnippet(for node: OutlineNode, in document: SourceDocument) -> String {
@@ -1495,7 +1527,8 @@ final class AppViewModel: ObservableObject {
 
     func explainSentenceContext(for card: Card) -> ExplainSentenceContext? {
         let chunk = knowledgeChunk(for: card)
-        let sourceTitle = sourceTitle(for: card)
+        guard let document = sourceDocument(for: card) else { return nil }
+        let sourceTitle = document.title
         let sentenceCandidates = [
             card.frontContent,
             chunk?.content,
@@ -1513,10 +1546,15 @@ final class AppViewModel: ObservableObject {
             return nil
         }
 
+        let matchedSentence = matchedSentenceForCardExplanation(
+            candidates: sentenceCandidates,
+            document: document
+        )
+
         let context = [
             chunk?.content,
             card.backContent,
-            sourceDocument(for: card)?.extractedText
+            document.extractedText
         ]
         .compactMap { value in
             let normalized = (value ?? "")
@@ -1528,14 +1566,50 @@ final class AppViewModel: ObservableObject {
 
         return ExplainSentenceContext(
             title: sourceTitle,
-            sentenceID: nil,
-            anchorLabel: nil,
+            documentID: document.id.uuidString,
+            sentenceID: matchedSentence?.id,
+            segmentID: matchedSentence?.segmentID,
+            anchorLabel: matchedSentence?.anchorLabel,
             sentence: sentence,
             context: context,
             paragraphTheme: "",
             paragraphRole: "",
             questionPrompt: ""
         )
+    }
+
+    func explainSentenceRequestIdentity(for card: Card) -> AIRequestIdentity? {
+        guard let context = explainSentenceContext(for: card) else { return nil }
+        return context.makeRequestIdentity()
+    }
+
+    private func matchedSentenceForCardExplanation(
+        candidates: [String],
+        document: SourceDocument
+    ) -> Sentence? {
+        guard let bundle = structuredSource(for: document) else { return nil }
+
+        let normalizedCandidates = Set(candidates.map(Self.normalizedEnglishComparisonKey))
+        guard !normalizedCandidates.isEmpty else { return nil }
+
+        return bundle.sentences.first { sentence in
+            let normalizedSentence = Self.normalizedEnglishComparisonKey(sentence.text)
+            guard !normalizedSentence.isEmpty else { return false }
+            if normalizedCandidates.contains(normalizedSentence) {
+                return true
+            }
+            return normalizedCandidates.contains { candidate in
+                normalizedSentence.contains(candidate) || candidate.contains(normalizedSentence)
+            }
+        }
+    }
+
+    private static func normalizedEnglishComparisonKey(_ value: String) -> String {
+        value
+            .lowercased()
+            .replacingOccurrences(of: #"[^\p{Latin}0-9]+"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     func generateDraftCards(for document: SourceDocument) async throws -> Int {

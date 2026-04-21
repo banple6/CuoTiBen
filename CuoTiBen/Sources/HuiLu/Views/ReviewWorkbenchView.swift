@@ -293,6 +293,7 @@ struct ReviewWorkbenchView: View {
                 ReviewWorkbenchAnalysisPane(
                     document: liveDocument,
                     bundle: bundle,
+                    analysisStatusMessage: viewModel.structuredSourceError(for: liveDocument),
                     usesPadLayout: true,
                     showsOutlineButton: true,
                     panelKind: panelKind,
@@ -313,6 +314,15 @@ struct ReviewWorkbenchView: View {
                     onWordTap: handleWordSelection,
                     onShowOutline: {
                         showsPadOutlineWorkspace = true
+                    },
+                    onRetryPassageAnalysis: {
+                        Task {
+                            await viewModel.ensureProfessorAnalysis(
+                                for: liveDocument,
+                                trigger: .openReviewWorkbench,
+                                force: true
+                            )
+                        }
                     }
                 )
                 .frame(width: rightWidth)
@@ -952,6 +962,7 @@ private struct ReviewWorkbenchOriginalPane: View {
 private struct ReviewWorkbenchAnalysisPane: View {
     let document: SourceDocument
     let bundle: StructuredSourceBundle
+    let analysisStatusMessage: String?
     let usesPadLayout: Bool
     let showsOutlineButton: Bool
     let panelKind: ReviewWorkbenchPanelKind
@@ -967,6 +978,7 @@ private struct ReviewWorkbenchAnalysisPane: View {
     let onAnchorTap: (OutlineNodeAnchorItem) -> Void
     let onWordTap: (WordExplanationEntry) -> Void
     let onShowOutline: () -> Void
+    let onRetryPassageAnalysis: () -> Void
 
     var body: some View {
         PaperSheetCard(
@@ -1002,6 +1014,31 @@ private struct ReviewWorkbenchAnalysisPane: View {
                     Text(modeLabel)
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(AppPalette.paperMuted)
+                }
+
+                if let analysisStatusMessage = analysisStatusMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !analysisStatusMessage.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("AI 地图分析暂不可用，已展示本地结构骨架")
+                            .font(.system(size: 15, weight: .bold, design: .serif))
+                            .foregroundStyle(AppPalette.paperInk)
+
+                        Text(analysisStatusMessage)
+                            .font(.system(size: 14, weight: .medium, design: .serif))
+                            .foregroundStyle(AppPalette.paperMuted)
+
+                        Button("稍后重新生成地图") {
+                            onRetryPassageAnalysis()
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 13, weight: .semibold, design: .serif))
+                        .foregroundStyle(Color.blue.opacity(0.82))
+                    }
+                    .padding(14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(Color.white.opacity(0.68))
+                    )
                 }
 
                 ReviewWorkbenchPanelShell(contentPadding: usesPadLayout ? 18 : 14) {
@@ -1294,6 +1331,7 @@ private struct ReviewWorkbenchSentencePanel: View {
     @State private var noteSeed: NoteEditorSeed?
     @State private var actionNote: String?
     @State private var explanationTask: Task<Void, Never>?
+    @State private var activeExplanationRequestID: String?
 
     private var breadcrumb: SentenceBreadcrumb {
         viewModel.sentenceBreadcrumb(for: sentence, in: document)
@@ -1376,6 +1414,7 @@ private struct ReviewWorkbenchSentencePanel: View {
             result = nil
             errorMessage = nil
             isLoading = false
+            activeExplanationRequestID = nil
             maybeAutoLoadExplanation()
         }
         .onAppear {
@@ -1384,6 +1423,7 @@ private struct ReviewWorkbenchSentencePanel: View {
         .onDisappear {
             explanationTask?.cancel()
             explanationTask = nil
+            activeExplanationRequestID = nil
         }
     }
 
@@ -1474,6 +1514,13 @@ private struct ReviewWorkbenchSentencePanel: View {
                 if isLoading {
                     ProgressView("正在获取教授式精讲…")
                         .font(.system(size: 15, weight: .medium))
+                } else if let visibleResult, visibleResult.shouldShowFallbackBanner {
+                    SentenceExplainBlock(
+                        title: "提示",
+                        content: visibleResult.displayFallbackMessage,
+                        tone: .neutral
+                    )
+                    debugTransportSection(for: visibleResult)
                 } else if let errorMessage, result == nil {
                     SentenceExplainBlock(
                         title: "提示",
@@ -1500,7 +1547,7 @@ private struct ReviewWorkbenchSentencePanel: View {
                 )
 
                 if !isLoading, result == nil {
-                    remoteExplanationButton(title: "补充云端精讲（会消耗额度）")
+                    remoteExplanationButton(title: "重新获取 AI 精讲")
                 }
             }
         } else if isLoading {
@@ -1515,7 +1562,7 @@ private struct ReviewWorkbenchSentencePanel: View {
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(Color.black.opacity(0.62))
 
-                Button("重新获取") {
+                Button("重新获取 AI 精讲") {
                     scheduleExplanationLoad(force: true)
                 }
                 .font(.system(size: 14, weight: .semibold))
@@ -1531,7 +1578,7 @@ private struct ReviewWorkbenchSentencePanel: View {
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(Color.black.opacity(0.62))
 
-                remoteExplanationButton(title: "获取云端精讲（会消耗额度）")
+                remoteExplanationButton(title: "获取 AI 精讲")
             }
         }
     }
@@ -1584,41 +1631,101 @@ private struct ReviewWorkbenchSentencePanel: View {
         for currentSentence: Sentence,
         forceRefresh: Bool
     ) async {
+        let context = viewModel.explainSentenceContext(for: currentSentence, in: document)
         await MainActor.run {
             guard sentence.id == currentSentence.id else { return }
             isLoading = true
             errorMessage = nil
             result = nil
+            activeExplanationRequestID = nil
+        }
+
+        guard let requestIdentity = viewModel.explainSentenceRequestIdentity(for: currentSentence, in: document) else {
+            let fallback = LocalSentenceFallbackBuilder.build(
+                context: context,
+                requestIdentity: nil,
+                structuredError: AIStructuredError.invalidRequest(message: "缺少 sentence identity 字段。")
+            )
+            await MainActor.run {
+                guard sentence.id == currentSentence.id else { return }
+                result = fallback
+                errorMessage = fallback.displayFallbackMessage
+                isLoading = false
+                activeExplanationRequestID = nil
+            }
+            return
+        }
+
+        await MainActor.run {
+            guard sentence.id == currentSentence.id else { return }
+            activeExplanationRequestID = requestIdentity.clientRequestID
         }
 
         do {
-            let context = viewModel.explainSentenceContext(for: currentSentence, in: document)
             let fetched = try await AIExplainSentenceService.fetchExplanationWithCache(
                 for: context,
+                requestIdentity: requestIdentity,
                 forceRefresh: forceRefresh
             )
             try Task.checkCancellation()
 
             guard isResultVisible(fetched, for: currentSentence) else {
-                throw AIExplainSentenceServiceError.requestFailed("返回结果与当前句不一致")
+                TextPipelineDiagnostics.log(
+                    "AI",
+                    "[AI][SentenceExplain] discard stale result request_id=\(requestIdentity.clientRequestID) sentence_id=\(requestIdentity.sentenceID)",
+                    severity: .warning
+                )
+                await MainActor.run {
+                    guard sentence.id == currentSentence.id else { return }
+                    guard activeExplanationRequestID == requestIdentity.clientRequestID else { return }
+                    isLoading = false
+                }
+                return
             }
 
             await MainActor.run {
                 guard sentence.id == currentSentence.id else { return }
+                guard activeExplanationRequestID == requestIdentity.clientRequestID else {
+                    TextPipelineDiagnostics.log(
+                        "AI",
+                        "[AI][SentenceExplain] discard stale request request_id=\(requestIdentity.clientRequestID) discard_reason=requestSuperseded",
+                        severity: .warning
+                    )
+                    return
+                }
                 result = fetched
+                errorMessage = fetched.shouldShowFallbackBanner ? fetched.displayFallbackMessage : nil
                 isLoading = false
+                activeExplanationRequestID = nil
             }
         } catch is CancellationError {
             await MainActor.run {
                 guard sentence.id == currentSentence.id else { return }
                 isLoading = false
+                if activeExplanationRequestID == requestIdentity.clientRequestID {
+                    activeExplanationRequestID = nil
+                }
             }
         } catch {
+            let fallback = LocalSentenceFallbackBuilder.build(
+                context: context,
+                requestIdentity: requestIdentity,
+                structuredError: AIStructuredError.invalidModelResponse(message: error.localizedDescription)
+            )
             await MainActor.run {
                 guard sentence.id == currentSentence.id else { return }
-                result = nil
-                errorMessage = error.localizedDescription
+                guard activeExplanationRequestID == requestIdentity.clientRequestID else {
+                    TextPipelineDiagnostics.log(
+                        "AI",
+                        "[AI][SentenceExplain] discard stale fallback request_id=\(requestIdentity.clientRequestID) discard_reason=requestSuperseded",
+                        severity: .warning
+                    )
+                    return
+                }
+                result = fallback
+                errorMessage = fallback.displayFallbackMessage
                 isLoading = false
+                activeExplanationRequestID = nil
             }
         }
     }
@@ -1629,18 +1736,44 @@ private struct ReviewWorkbenchSentencePanel: View {
     }
 
     private func isResultVisible(_ result: AIExplainSentenceResult, for sentence: Sentence) -> Bool {
-        guard let identity = result.analysisIdentity else { return false }
-        let expectedIdentity = SentenceAnalysisIdentity(
-            sentenceID: sentence.id,
+        guard let expectedIdentity = AIRequestIdentity.make(document: document, sentence: sentence) else {
+            return false
+        }
+        return AIResponseIdentityGuard.validate(
+            expected: expectedIdentity,
+            actual: result.analysisIdentity
+        ).isAllowed && AnalysisConsistencyGuard.warnings(
+            expectedIdentity: expectedIdentity,
             sentenceText: sentence.text,
-            anchorLabel: sentence.anchorLabel
-        )
-        return identity == expectedIdentity &&
-            AnalysisConsistencyGuard.warnings(
-                identity: expectedIdentity,
-                sentenceText: sentence.text,
-                analysis: result
-            ).isEmpty
+            analysis: result
+        ).isEmpty
+    }
+
+    @ViewBuilder
+    private func debugTransportSection(for result: AIExplainSentenceResult) -> some View {
+        #if DEBUG
+        let debugLines = [
+            result.requestID.map { "request_id：\($0)" },
+            result.errorCode.map { "error_code：\($0)" },
+            "used_fallback：\(result.usedFallback ? "true" : "false")",
+            "used_cache：\(result.usedCache ? "true" : "false")",
+            "retry_count：\(result.retryCount)"
+        ].compactMap { $0 }
+
+        if !debugLines.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("DEBUG")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Color.black.opacity(0.55))
+
+                ForEach(debugLines, id: \.self) { line in
+                    Text(line)
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Color.black.opacity(0.55))
+                }
+            }
+        }
+        #endif
     }
 }
 

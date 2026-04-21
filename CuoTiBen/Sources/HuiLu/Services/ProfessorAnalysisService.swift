@@ -1,294 +1,299 @@
 import Foundation
 
-// MARK: - 教授级全文教学分析服务
-// 调用后端 /ai/analyze-passage 批量获取 AI 教学分析
-// 一次调用产出：文章总览 + 段落教学卡 + 关键句教授卡
+struct ProfessorAnalysisServiceResult {
+    let delta: ProfessorAnalysisDelta
+    let meta: AIServiceResponseMeta
+    let requestID: String?
+    let keySentenceIDs: [String]
+    let questionLinks: [QuestionEvidenceLink]
+    let message: String?
+    let structuredError: AIStructuredError?
+
+    var usedFallback: Bool { meta.usedFallback }
+}
 
 enum ProfessorAnalysisService {
-
-    private static let maxProfessorParagraphs = 20
-    private static let preferredParagraphChars = 560
-    private static let minimumParagraphChars = 220
-    private static let hardParagraphChars = 920
-    private static let maxParagraphSentences = 4
-    private static let maxProfessorKeySentences = 8
+    private static let maxParagraphCount = 4
+    private static let maxParagraphCharacters = 700
     private static let analyzePassageTimeout: TimeInterval = 150
 
-    private struct ParagraphAnalysisGroup {
-        let requestIndex: Int
-        let text: String
-        let segmentIDs: [String]
-        let segmentIndexes: [Int]
-        let anchorLabels: [String]
-        let sentenceIDs: [String]
-        let charCount: Int
-        let pageRange: ClosedRange<Int>?
-    }
+    private struct AnalyzePassageIdentity: Encodable {
+        let clientRequestID: String
+        let documentID: String
+        let contentHash: String
 
-    private struct MutableParagraphGroup {
-        var segments: [Segment] = []
-        var sentenceIDs: [String] = []
-        var charCount: Int = 0
-        var pages: [Int] = []
-
-        var isEmpty: Bool { segments.isEmpty }
-        var segmentIDs: [String] { segments.map(\.id) }
-        var segmentIndexes: [Int] { segments.map(\.index) }
-        var anchorLabels: [String] { segments.map(\.anchorLabel) }
-        var sentenceCount: Int { sentenceIDs.count }
-        var pageRange: ClosedRange<Int>? {
-            guard let first = pages.min(), let last = pages.max() else { return nil }
-            return first ... last
-        }
-
-        mutating func append(_ segment: Segment) {
-            segments.append(segment)
-            sentenceIDs.append(contentsOf: segment.sentenceIDs)
-            charCount += segment.text.count
-            if let page = segment.page {
-                pages.append(page)
-            }
-        }
-
-        func finalized(requestIndex: Int) -> ParagraphAnalysisGroup {
-            ParagraphAnalysisGroup(
-                requestIndex: requestIndex,
-                text: segments.map(\.text).joined(separator: "\n\n"),
-                segmentIDs: segmentIDs,
-                segmentIndexes: segmentIndexes,
-                anchorLabels: anchorLabels,
-                sentenceIDs: sentenceIDs,
-                charCount: charCount,
-                pageRange: pageRange
-            )
+        private enum CodingKeys: String, CodingKey {
+            case clientRequestID = "client_request_id"
+            case documentID = "document_id"
+            case contentHash = "content_hash"
         }
     }
 
-    // MARK: - 请求/响应模型
-
-    struct ParagraphInput: Encodable {
+    private struct ParagraphInput: Encodable {
+        let segmentID: String
         let index: Int
+        let anchorLabel: String
         let text: String
+        let sourceKind: String
+        let hygieneScore: Double
+
+        private enum CodingKeys: String, CodingKey {
+            case segmentID = "segment_id"
+            case index
+            case anchorLabel = "anchor_label"
+            case text
+            case sourceKind = "source_kind"
+            case hygieneScore = "hygiene_score"
+        }
     }
 
-    struct KeySentenceInput: Encodable {
-        let ref: String
+    private struct AuxiliaryBlock: Encodable {
+        let id: String
         let text: String
-        let paragraph_index: Int
+        let sourceKind: String
+
+        private enum CodingKeys: String, CodingKey {
+            case id
+            case text
+            case sourceKind = "source_kind"
+        }
     }
 
-    struct AnalyzePassageRequest: Encodable {
+    private struct AnalyzePassageRequest: Encodable {
+        let identity: AnalyzePassageIdentity
         let title: String
         let paragraphs: [ParagraphInput]
-        let key_sentences: [KeySentenceInput]
-    }
+        let questionBlocks: [AuxiliaryBlock]
+        let answerBlocks: [AuxiliaryBlock]
+        let vocabularyBlocks: [AuxiliaryBlock]
 
-    struct AnalyzePassageResponse: Decodable {
-        let success: Bool?
-        let data: AnalyzePassageData?
-    }
-
-    struct AnalyzePassageData: Decodable {
-        let passage_overview: PassageOverviewDTO?
-        let paragraph_cards: [ParagraphCardDTO]?
-        let sentence_analyses: [SentenceAnalysisDTO]?
-        let quality_warnings: [String]?
-        let elapsed_ms: Int?
-    }
-
-    struct PassageOverviewDTO: Decodable {
-        let article_theme: String?
-        let author_core_question: String?
-        let progression_path: String?
-        let likely_question_types: [String]?
-        let logic_pitfalls: [String]?
-        let paragraph_function_map: [String]?
-        let syntax_highlights: [String]?
-        let reading_traps: [String]?
-        let vocabulary_highlights: [String]?
-    }
-
-    struct ParagraphCardDTO: Decodable {
-        let paragraph_index: Int?
-        let theme: String?
-        let argument_role: String?
-        let core_sentence_local_index: Int?
-        let keywords: [String]?
-        let relation_to_previous: String?
-        let exam_value: String?
-        let teaching_focuses: [String]?
-        let student_blind_spot: String?
-    }
-
-    struct SentenceAnalysisDTO: Decodable {
-        let sentence_ref: String?
-        let sentence_function: String?
-        let core_skeleton: ProfessorCoreSkeleton?
-        let chunk_layers: [ProfessorChunkLayer]?
-        let grammar_focus: [ProfessorGrammarFocus]?
-        let faithful_translation: String?
-        let teaching_interpretation: String?
-        let natural_chinese_meaning: String?
-        let sentence_core: String?
-        let chunk_breakdown: [String]?
-        let grammar_points: [GrammarPointDTO]?
-        let vocabulary_in_context: [VocabularyDTO]?
-        let misread_points: [String]?
-        let exam_rewrite_points: [String]?
-        let misreading_traps: [String]?
-        let exam_paraphrase_routes: [String]?
-        let simplified_english: String?
-        let simpler_rewrite: String?
-        let mini_exercise: String?
-        let mini_check: String?
-        let hierarchy_rebuild: [String]?
-        let syntactic_variation: String?
-        let evidence_type: String?
-    }
-
-    struct GrammarPointDTO: Decodable {
-        let name: String?
-        let explanation: String?
-    }
-
-    struct VocabularyDTO: Decodable {
-        let term: String?
-        let meaning: String?
-    }
-
-    // MARK: - 错误类型
-
-    enum AnalysisError: LocalizedError {
-        case missingBaseURL
-        case invalidBaseURL
-        case invalidServerResponse
-        case requestFailed(String)
-        case noContent
-
-        var errorDescription: String? {
-            switch self {
-            case .missingBaseURL: return "未配置后端地址"
-            case .invalidBaseURL: return "后端地址格式错误"
-            case .invalidServerResponse: return "服务器响应格式异常"
-            case .requestFailed(let msg):
-                return AIServiceAvailabilityPolicy.userFacingMessage(
-                    for: .professorAnalysis,
-                    technicalReason: msg
-                )
-            case .noContent: return "后端未返回分析内容"
-            }
+        private enum CodingKeys: String, CodingKey {
+            case identity
+            case title
+            case paragraphs
+            case questionBlocks = "question_blocks"
+            case answerBlocks = "answer_blocks"
+            case vocabularyBlocks = "vocabulary_blocks"
         }
     }
 
-    // MARK: - 公开接口
+    private struct AnalyzePassageResponseEnvelope {
+        let success: Bool
+        let requestID: String?
+        let meta: AIServiceResponseMeta
+        let data: AnalyzePassagePayload?
+        let structuredError: AIStructuredError?
+    }
 
-    /// 从 StructuredSourceBundle 中提取段落和关键句，调用后端批量分析，返回增强后的 Bundle
+    private struct AnalyzePassagePayload {
+        let overview: PassageOverview?
+        let paragraphCards: [ParagraphTeachingCard]
+        let keySentenceIDs: [String]
+        let questionLinks: [QuestionEvidenceLink]
+    }
+
     static func enrichBundle(
         _ bundle: StructuredSourceBundle,
+        document: SourceDocument,
         title: String,
         overrideBaseURL: String? = nil
-    ) async throws -> StructuredSourceBundle {
-        if let blockingMessage = await aiServiceAvailabilityGate.blockingMessage(for: .professorAnalysis) {
-            TextPipelineDiagnostics.log(
-                "AI",
-                "[AI][ProfessorAnalysis] service gate open",
-                severity: .warning
+    ) async throws -> ProfessorAnalysisServiceResult {
+        let paragraphInputs = buildParagraphInputs(from: bundle)
+        guard !paragraphInputs.isEmpty else {
+            return fallbackResult(
+                document: document,
+                bundle: bundle,
+                structuredError: AIStructuredError.invalidRequest(message: "当前资料缺少可用于地图分析的正文段落。")
             )
-            throw AnalysisError.requestFailed(blockingMessage)
+        }
+
+        let contentHash = AIRequestIdentity.hash(
+            text: paragraphInputs.map(\.text).joined(separator: "\n\n")
+        )
+        let identity = AnalyzePassageIdentity(
+            clientRequestID: UUID().uuidString.lowercased(),
+            documentID: document.id.uuidString,
+            contentHash: contentHash
+        )
+
+        if let blockingMessage = await aiServiceAvailabilityGate.blockingMessage(for: .professorAnalysis) {
+            return fallbackResult(
+                document: document,
+                bundle: bundle,
+                structuredError: AIStructuredError(
+                    kind: .upstream503,
+                    requestID: identity.clientRequestID,
+                    errorCode: "UPSTREAM_503",
+                    retryable: true,
+                    fallbackAvailable: true,
+                    message: blockingMessage
+                )
+            )
         }
 
         let endpointURLs = AIExplainSentenceService.endpointCandidates(
             path: "ai/analyze-passage",
             overrideBaseURL: overrideBaseURL
         )
-        guard !endpointURLs.isEmpty else { throw AnalysisError.missingBaseURL }
-
-        // 从 bundle 构建请求
-        let paragraphGroups = buildParagraphAnalysisGroups(from: bundle)
-        let paragraphInputs = paragraphGroups.map {
-            ParagraphInput(index: $0.requestIndex, text: $0.text)
+        guard !endpointURLs.isEmpty else {
+            return fallbackResult(
+                document: document,
+                bundle: bundle,
+                structuredError: AIStructuredError(
+                    kind: .networkUnavailable,
+                    requestID: identity.clientRequestID,
+                    errorCode: "NETWORK_UNAVAILABLE",
+                    retryable: true,
+                    fallbackAvailable: true,
+                    message: "AI 地图分析服务地址未配置。"
+                )
+            )
         }
 
-        // 选取关键句（每段核心句 + 所有 isKeySentence  + 超长句）
-        let keySentenceInputs = selectKeySentences(from: bundle, paragraphGroups: paragraphGroups)
-
-        TextPipelineDiagnostics.log(
-            "AI",
-            "[AI][ProfessorAnalysis] 开始批量教学分析: paragraphs=\(paragraphInputs.count)/segments=\(bundle.segments.count) keySentences=\(keySentenceInputs.count) title=\(title)",
-            severity: .info
-        )
-
         let requestBody = AnalyzePassageRequest(
+            identity: identity,
             title: title,
             paragraphs: paragraphInputs,
-            key_sentences: keySentenceInputs
+            questionBlocks: [],
+            answerBlocks: [],
+            vocabularyBlocks: []
         )
-
         let requestData = try JSONEncoder().encode(requestBody)
-        var payload: AnalyzePassageData?
+
+        return try await performAnalyzePassage(
+            document: document,
+            bundle: bundle,
+            requestIdentity: identity,
+            endpointURLs: endpointURLs,
+            requestData: requestData,
+            paragraphInputs: paragraphInputs
+        )
+    }
+
+    private static func performAnalyzePassage(
+        document: SourceDocument,
+        bundle: StructuredSourceBundle,
+        requestIdentity: AnalyzePassageIdentity,
+        endpointURLs: [URL],
+        requestData: Data,
+        paragraphInputs: [ParagraphInput]
+    ) async throws -> ProfessorAnalysisServiceResult {
         var lastError: Error?
 
-        for (index, url) in endpointURLs.enumerated() {
+        for (endpointIndex, endpointURL) in endpointURLs.enumerated() {
             for attempt in 0..<2 {
-                var request = URLRequest(url: url, timeoutInterval: analyzePassageTimeout)
+                var request = URLRequest(url: endpointURL)
                 request.httpMethod = "POST"
-                request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+                request.timeoutInterval = analyzePassageTimeout
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                 request.httpBody = requestData
 
                 do {
                     try Task.checkCancellation()
-                    let (data, httpResponse) = try await URLSession.shared.data(for: request)
-
-                    guard let http = httpResponse as? HTTPURLResponse else {
-                        throw AnalysisError.invalidServerResponse
+                    let (data, response) = try await URLSession.shared.data(for: request)
+                    guard let httpResponse = response as? HTTPURLResponse else {
+                        throw AIExplainSentenceServiceError.invalidServerResponse
                     }
 
-                    if !(200 ..< 300).contains(http.statusCode) {
-                        let bodySnippet = String(data: data.prefix(500), encoding: .utf8) ?? ""
+                    if AIExplainSentenceService.shouldRetrySameEndpoint(statusCode: httpResponse.statusCode), attempt == 0 {
+                        try await Task.sleep(nanoseconds: AIExplainSentenceService.retryDelayNanoseconds(for: attempt))
+                        continue
+                    }
+
+                    guard (200 ..< 300).contains(httpResponse.statusCode) else {
+                        let structuredError = AIStructuredError.from(data: data, statusCode: httpResponse.statusCode)
+                        let bodySnippet = String(data: data.prefix(500), encoding: .utf8)?
+                            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                         await aiServiceAvailabilityGate.recordFailure(
                             for: .professorAnalysis,
-                            technicalReason: bodySnippet.isEmpty ? "HTTP \(http.statusCode)" : "HTTP \(http.statusCode): \(bodySnippet)",
-                            cooldown: AIServiceAvailabilityPolicy.cooldown(for: http.statusCode)
-                        )
-                        TextPipelineDiagnostics.log(
-                            "AI",
-                            "[AI][ProfessorAnalysis] 后端返回 HTTP \(http.statusCode): \(bodySnippet)",
-                            severity: .error
+                            technicalReason: bodySnippet.isEmpty ? "HTTP \(httpResponse.statusCode)" : "HTTP \(httpResponse.statusCode): \(bodySnippet)",
+                            cooldown: AIServiceAvailabilityPolicy.cooldown(for: httpResponse.statusCode)
                         )
 
-                        if AIExplainSentenceService.shouldRetrySameEndpoint(statusCode: http.statusCode), attempt == 0 {
-                            TextPipelineDiagnostics.log(
-                                "AI",
-                                "[AI][ProfessorAnalysis] 端点瞬时失败，准备重试: \(url.absoluteString) status=\(http.statusCode)",
-                                severity: .warning
-                            )
-                            try await Task.sleep(nanoseconds: AIExplainSentenceService.retryDelayNanoseconds(for: attempt))
-                            continue
-                        }
-
-                        if AIExplainSentenceService.shouldRetryEndpoint(statusCode: http.statusCode), index < endpointURLs.count - 1 {
-                            let nextURL = endpointURLs[index + 1].absoluteString
-                            TextPipelineDiagnostics.log(
-                                "AI",
-                                "[AI][ProfessorAnalysis] 切换候选地址: \(url.absoluteString) -> \(nextURL) status=\(http.statusCode)",
-                                severity: .warning
-                            )
-                            lastError = AnalysisError.requestFailed("HTTP \(http.statusCode)")
+                        if AIExplainSentenceService.shouldRetryEndpoint(statusCode: httpResponse.statusCode),
+                           endpointIndex < endpointURLs.count - 1 {
+                            lastError = structuredError.map(AIExplainSentenceServiceError.structured)
+                                ?? AIExplainSentenceServiceError.requestFailed(
+                                    bodySnippet.isEmpty ? "HTTP \(httpResponse.statusCode)" : "HTTP \(httpResponse.statusCode): \(bodySnippet)"
+                                )
                             break
                         }
 
-                        throw AnalysisError.requestFailed("HTTP \(http.statusCode)")
+                        if let structuredError, structuredError.shouldUseLocalFallback {
+                            return fallbackResult(
+                                document: document,
+                                bundle: bundle,
+                                structuredError: structuredError,
+                                meta: .localFallback()
+                            )
+                        }
+
+                        throw structuredError.map(AIExplainSentenceServiceError.structured)
+                            ?? AIExplainSentenceServiceError.requestFailed(
+                                bodySnippet.isEmpty ? "HTTP \(httpResponse.statusCode)" : "HTTP \(httpResponse.statusCode): \(bodySnippet)"
+                            )
                     }
 
-                    let response = try JSONDecoder().decode(AnalyzePassageResponse.self, from: data)
+                    let decoded = try decodeResponseEnvelope(
+                        from: data,
+                        bundle: bundle,
+                        paragraphInputs: paragraphInputs
+                    )
 
-                    guard let data = response.data else {
-                        throw AnalysisError.noContent
+                    if decoded.success, let payload = decoded.data {
+                        await aiServiceAvailabilityGate.recordSuccess(for: .professorAnalysis)
+                        let delta = ProfessorAnalysisDelta(
+                            schemaVersion: ProfessorAnalysisCacheStore.analysisSchemaVersion,
+                            storedAt: Date(),
+                            passageOverview: payload.overview,
+                            paragraphCards: payload.paragraphCards,
+                            sentenceCards: []
+                        )
+                        TextPipelineDiagnostics.log(
+                            "AI",
+                            [
+                                "[AI][PassageMap] success",
+                                "request_id=\(decoded.requestID ?? "nil")",
+                                "provider=\(decoded.meta.provider ?? "nil")",
+                                "model=\(decoded.meta.model ?? "nil")",
+                                "retry_count=\(decoded.meta.retryCount)",
+                                "used_cache=\(decoded.meta.usedCache)",
+                                "used_fallback=\(decoded.meta.usedFallback)"
+                            ].joined(separator: " "),
+                            severity: .info
+                        )
+                        return ProfessorAnalysisServiceResult(
+                            delta: delta,
+                            meta: decoded.meta,
+                            requestID: decoded.requestID,
+                            keySentenceIDs: payload.keySentenceIDs,
+                            questionLinks: payload.questionLinks,
+                            message: decoded.meta.usedFallback ? "AI 地图分析暂不可用，已展示本地结构骨架。" : nil,
+                            structuredError: decoded.structuredError
+                        )
                     }
 
-                    await aiServiceAvailabilityGate.recordSuccess(for: .professorAnalysis)
-                    payload = data
-                    break
+                    if let structuredError = decoded.structuredError {
+                        if structuredError.shouldUseLocalFallback {
+                            return fallbackResult(
+                                document: document,
+                                bundle: bundle,
+                                structuredError: structuredError,
+                                meta: fallbackMeta(from: decoded.meta)
+                            )
+                        }
+                        throw AIExplainSentenceServiceError.structured(structuredError)
+                    }
+
+                    return fallbackResult(
+                        document: document,
+                        bundle: bundle,
+                        structuredError: AIStructuredError.invalidModelResponse(
+                            message: "AI 地图分析返回内容不可解析。",
+                            requestID: decoded.requestID
+                        ),
+                        meta: fallbackMeta(from: decoded.meta)
+                    )
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch let error as URLError {
@@ -301,343 +306,295 @@ enum ProfessorAnalysisService {
                         cooldown: AIServiceAvailabilityPolicy.cooldown(for: error)
                     )
                     if AIExplainSentenceService.shouldRetrySameEndpoint(for: error), attempt == 0 {
-                        TextPipelineDiagnostics.log(
-                            "AI",
-                            "[AI][ProfessorAnalysis] 端点连接瞬断，准备重试: \(url.absoluteString) error=\(error.localizedDescription)",
-                            severity: .warning
-                        )
                         try await Task.sleep(nanoseconds: AIExplainSentenceService.retryDelayNanoseconds(for: attempt))
                         continue
                     }
-                    if AIExplainSentenceService.shouldRetryEndpoint(for: error), index < endpointURLs.count - 1 {
-                        let nextURL = endpointURLs[index + 1].absoluteString
-                        TextPipelineDiagnostics.log(
-                            "AI",
-                            "[AI][ProfessorAnalysis] 端点连接失败，切换候选地址: \(url.absoluteString) -> \(nextURL) error=\(error.localizedDescription)",
-                            severity: .warning
-                        )
-                        lastError = AnalysisError.requestFailed(error.localizedDescription)
+                    if AIExplainSentenceService.shouldRetryEndpoint(for: error),
+                       endpointIndex < endpointURLs.count - 1 {
+                        lastError = AIExplainSentenceServiceError.transport(error.localizedDescription)
                         break
                     }
-                    throw AnalysisError.requestFailed(error.localizedDescription)
-                } catch let error as AnalysisError {
-                    if case .invalidServerResponse = error, index < endpointURLs.count - 1 {
-                        let nextURL = endpointURLs[index + 1].absoluteString
-                        TextPipelineDiagnostics.log(
-                            "AI",
-                            "[AI][ProfessorAnalysis] 端点响应异常，切换候选地址: \(url.absoluteString) -> \(nextURL)",
-                            severity: .warning
+                    return fallbackResult(
+                        document: document,
+                        bundle: bundle,
+                        structuredError: AIStructuredError.from(urlError: error)
+                    )
+                } catch let error as AIExplainSentenceServiceError {
+                    if case .structured(let structuredError) = error, structuredError.shouldUseLocalFallback {
+                        return fallbackResult(
+                            document: document,
+                            bundle: bundle,
+                            structuredError: structuredError
                         )
+                    }
+                    if case .invalidServerResponse = error {
+                        return fallbackResult(
+                            document: document,
+                            bundle: bundle,
+                            structuredError: AIStructuredError.invalidModelResponse(message: "AI 地图分析返回内容不可解析。")
+                        )
+                    }
+                    if endpointIndex < endpointURLs.count - 1 {
                         lastError = error
                         break
                     }
                     throw error
                 } catch {
-                    if index < endpointURLs.count - 1 {
+                    if endpointIndex < endpointURLs.count - 1 {
                         lastError = error
                         break
                     }
-                    throw AnalysisError.invalidServerResponse
+                    return fallbackResult(
+                        document: document,
+                        bundle: bundle,
+                        structuredError: AIStructuredError.invalidModelResponse(message: "AI 地图分析返回内容不可解析。")
+                    )
                 }
             }
-
-            if payload != nil {
-                break
-            }
         }
 
-        guard let payload else {
-            if let error = lastError as? AnalysisError {
-                throw error
+        if let structuredError = (lastError as? AIExplainSentenceServiceError).flatMap({ error -> AIStructuredError? in
+            if case .structured(let value) = error {
+                return value
             }
-            throw AnalysisError.noContent
-        }
-
-        if let warnings = payload.quality_warnings, !warnings.isEmpty {
-            TextPipelineDiagnostics.log(
-                "AI",
-                "[AI][ProfessorAnalysis] 质量警告: \(warnings.joined(separator: "; "))",
-                severity: .warning
+            return nil
+        }), structuredError.shouldUseLocalFallback {
+            return fallbackResult(
+                document: document,
+                bundle: bundle,
+                structuredError: structuredError
             )
         }
+
+        if let error = lastError {
+            throw error
+        }
+
+        return fallbackResult(
+            document: document,
+            bundle: bundle,
+            structuredError: AIStructuredError.invalidModelResponse(message: "AI 地图分析返回内容不可解析。")
+        )
+    }
+
+    private static func decodeResponseEnvelope(
+        from data: Data,
+        bundle: StructuredSourceBundle,
+        paragraphInputs: [ParagraphInput]
+    ) throws -> AnalyzePassageResponseEnvelope {
+        let isWhitespaceOnly = data.allSatisfy { byte in
+            byte == 0x20 || byte == 0x09 || byte == 0x0A || byte == 0x0D
+        }
+        guard !data.isEmpty, !isWhitespaceOnly else {
+            throw AIExplainSentenceServiceError.invalidServerResponse
+        }
+
+        let object = try JSONSerialization.jsonObject(with: data)
+        guard let dictionary = object as? [String: Any] else {
+            throw AIExplainSentenceServiceError.invalidServerResponse
+        }
+
+        let requestID = normalizedString(dictionary["request_id"] as? String)
+        let meta = AIServiceResponseMeta.from(dictionary: dictionary["meta"] as? [String: Any])
+        let structuredError = AIStructuredError.from(dictionary: dictionary, statusCode: nil)
+        let success = dictionary["success"] as? Bool ?? false
+
+        guard let payloadDictionary = dictionary["data"] as? [String: Any] else {
+            return AnalyzePassageResponseEnvelope(
+                success: success,
+                requestID: requestID,
+                meta: meta,
+                data: nil,
+                structuredError: structuredError
+            )
+        }
+
+        let payload = normalizePayload(
+            from: payloadDictionary,
+            bundle: bundle,
+            paragraphInputs: paragraphInputs
+        )
+        return AnalyzePassageResponseEnvelope(
+            success: success,
+            requestID: requestID,
+            meta: meta,
+            data: payload,
+            structuredError: structuredError
+        )
+    }
+
+    private static func normalizePayload(
+        from dictionary: [String: Any],
+        bundle: StructuredSourceBundle,
+        paragraphInputs: [ParagraphInput]
+    ) -> AnalyzePassagePayload? {
+        let allowedSegmentIDs = Set(paragraphInputs.map(\.segmentID))
+        let segmentIndex = Dictionary(uniqueKeysWithValues: bundle.segments.map { ($0.id, $0) })
+        let sentencesBySegment = Dictionary(grouping: bundle.sentences, by: \.segmentID)
+
+        let overview = (dictionary["passage_overview"] as? [String: Any]).map { payload in
+            PassageOverview(
+                articleTheme: normalizedString(payload["article_theme"] as? String) ?? "",
+                authorCoreQuestion: normalizedString(payload["author_core_question"] as? String) ?? "",
+                progressionPath: normalizedString(payload["progression_path"] as? String) ?? "",
+                likelyQuestionTypes: stringArray(payload["likely_question_types"]),
+                logicPitfalls: stringArray(payload["logic_pitfalls"]),
+                paragraphFunctionMap: [],
+                syntaxHighlights: [],
+                readingTraps: [],
+                vocabularyHighlights: []
+            )
+        }
+
+        let paragraphCards = (dictionary["paragraph_cards"] as? [Any] ?? []).compactMap { item -> ParagraphTeachingCard? in
+            guard let payload = item as? [String: Any] else { return nil }
+            guard let segmentID = normalizedString(payload["segment_id"] as? String),
+                  allowedSegmentIDs.contains(segmentID),
+                  let segment = segmentIndex[segmentID]
+            else {
+                return nil
+            }
+
+            let provenance = payload["provenance"] as? [String: Any]
+            let sourceKind = normalizedString(provenance?["source_kind"] as? String) ?? segment.provenance.sourceKind.rawValue
+            guard sourceKind == SourceContentKind.passageBody.rawValue else {
+                return nil
+            }
+
+            let sentenceIDs = Set(sentencesBySegment[segmentID]?.map(\.id) ?? [])
+            let proposedCoreSentenceID = normalizedString(payload["core_sentence_id"] as? String)
+            let coreSentenceID = proposedCoreSentenceID.flatMap { sentenceIDs.contains($0) ? $0 : nil }
+                ?? sentencesBySegment[segmentID]?.first?.id
+
+            return ParagraphTeachingCard(
+                id: "ai_passage_\(segmentID)",
+                segmentID: segmentID,
+                paragraphIndex: (payload["paragraph_index"] as? Int) ?? segment.index,
+                anchorLabel: normalizedString(payload["anchor_label"] as? String) ?? segment.anchorLabel,
+                theme: normalizedString(payload["theme"] as? String) ?? truncated(segment.text, limit: 48),
+                argumentRole: ParagraphArgumentRole(rawValue: normalizedString(payload["argument_role"] as? String) ?? "") ?? .support,
+                coreSentenceID: coreSentenceID,
+                keywords: [],
+                relationToPrevious: normalizedString(payload["relation_to_previous"] as? String) ?? "",
+                examValue: normalizedString(payload["exam_value"] as? String) ?? "",
+                teachingFocuses: stringArray(payload["teaching_focuses"]),
+                studentBlindSpot: normalizedString(payload["student_blind_spot"] as? String),
+                isAIGenerated: true
+            )
+        }
+
+        guard !paragraphCards.isEmpty || overview != nil else {
+            return nil
+        }
+
+        let keySentenceIDs = Array(
+            Array(Set(stringArray(dictionary["key_sentence_ids"]))).prefix(6)
+        )
+
+        return AnalyzePassagePayload(
+            overview: overview,
+            paragraphCards: paragraphCards,
+            keySentenceIDs: keySentenceIDs,
+            questionLinks: []
+        )
+    }
+
+    private static func fallbackResult(
+        document: SourceDocument,
+        bundle: StructuredSourceBundle,
+        structuredError: AIStructuredError,
+        meta: AIServiceResponseMeta? = nil
+    ) -> ProfessorAnalysisServiceResult {
+        let fallback = LocalPassageFallbackBuilder.build(
+            document: document,
+            bundle: bundle,
+            structuredError: structuredError,
+            meta: meta ?? .localFallback()
+        )
 
         TextPipelineDiagnostics.log(
             "AI",
-            "[AI][ProfessorAnalysis] 分析完成: paragraphCards=\(payload.paragraph_cards?.count ?? 0) sentenceAnalyses=\(payload.sentence_analyses?.count ?? 0) elapsed=\(payload.elapsed_ms ?? 0)ms",
-            severity: .info
+            [
+                "[AI][PassageMap] local fallback",
+                "request_id=\(structuredError.requestID ?? "nil")",
+                "error_code=\(structuredError.errorCode)",
+                "retry_count=\(fallback.meta.retryCount)",
+                "used_cache=\(fallback.meta.usedCache)",
+                "used_fallback=\(fallback.meta.usedFallback)"
+            ].joined(separator: " "),
+            severity: .warning
         )
 
-        // 转换为本地模型并合并到 bundle
-        let aiOverview = convertOverview(payload.passage_overview)
-        let aiParagraphCards = convertParagraphCards(
-            payload.paragraph_cards ?? [],
-            paragraphGroups: paragraphGroups,
-            segments: bundle.segments,
-            sentences: bundle.sentences
-        )
-        let aiSentenceCards = convertSentenceCards(
-            payload.sentence_analyses ?? [],
-            existingCards: bundle.professorSentenceCards,
-            sentences: bundle.sentences,
-            segments: bundle.segments
-        )
-
-        return bundle.enrichedWithAIAnalysis(
-            overview: aiOverview,
-            paragraphCards: aiParagraphCards,
-            sentenceCards: aiSentenceCards
+        return ProfessorAnalysisServiceResult(
+            delta: fallback.delta,
+            meta: fallback.meta,
+            requestID: structuredError.requestID,
+            keySentenceIDs: fallback.keySentenceIDs,
+            questionLinks: [],
+            message: fallback.message,
+            structuredError: structuredError
         )
     }
 
-    // MARK: - 关键句选取
-
-    private static func selectKeySentences(
-        from bundle: StructuredSourceBundle,
-        paragraphGroups: [ParagraphAnalysisGroup]
-    ) -> [KeySentenceInput] {
-        struct Candidate {
-            let priority: Int
-            let input: KeySentenceInput
-        }
-
-        var candidates: [Candidate] = []
-        var seenIDs: Set<String> = []
-
-        let sentencesBySegment = Dictionary(grouping: bundle.sentences, by: { $0.segmentID })
-        let paragraphIndexBySegmentID = paragraphGroups.reduce(into: [String: Int]()) { partialResult, group in
-            for segmentID in group.segmentIDs {
-                partialResult[segmentID] = group.requestIndex
-            }
-        }
-
-        for (segIdx, segment) in bundle.segments.enumerated() {
-            let sentences = sentencesBySegment[segment.id] ?? []
-            let paragraphCard = bundle.paragraphCard(forSegmentID: segment.id)
-            let paragraphIndex = paragraphIndexBySegmentID[segment.id] ?? min(segIdx, maxProfessorParagraphs - 1)
-
-            for sentence in sentences {
-                let isCore = sentence.id == paragraphCard?.coreSentenceID
-                let isKey = bundle.sentenceCard(id: sentence.id)?.isKeySentence == true
-                let isLong = sentence.text.count >= 80
-
-                guard isCore || isKey || isLong else { continue }
-                guard seenIDs.insert(sentence.id).inserted else { continue }
-
-                let ref = "S_\(segIdx)_\(sentence.localIndex)"
-                let priority = isCore ? 0 : (isKey ? 1 : 2)
-                candidates.append(
-                    Candidate(
-                        priority: priority,
-                        input: KeySentenceInput(
-                            ref: ref,
-                            text: sentence.text,
-                            paragraph_index: paragraphIndex
-                        )
-                    )
-                )
-            }
-        }
-
-        let ordered = candidates.sorted { lhs, rhs in
-            if lhs.input.paragraph_index != rhs.input.paragraph_index {
-                return lhs.input.paragraph_index < rhs.input.paragraph_index
-            }
-            if lhs.priority != rhs.priority {
-                return lhs.priority < rhs.priority
-            }
-            return lhs.input.ref < rhs.input.ref
-        }
-
-        return Array(ordered.prefix(maxProfessorKeySentences).map(\.input))
-    }
-
-    private static func buildParagraphAnalysisGroups(from bundle: StructuredSourceBundle) -> [ParagraphAnalysisGroup] {
-        let orderedSegments = bundle.segments.sorted { lhs, rhs in
-            if lhs.index != rhs.index { return lhs.index < rhs.index }
-            return lhs.id < rhs.id
-        }
-
-        var groups: [MutableParagraphGroup] = []
-        var current = MutableParagraphGroup()
-
-        for segment in orderedSegments {
-            let trimmedText = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmedText.isEmpty else { continue }
-
-            if current.isEmpty {
-                current.append(segment)
-                continue
-            }
-
-            let pageChanged = current.pages.last != segment.page
-            let currentIsReady = current.charCount >= preferredParagraphChars || current.sentenceCount >= maxParagraphSentences
-            let wouldExceedHardLimit = current.charCount + trimmedText.count > hardParagraphChars
-            let shouldWrapForLargeIncoming = current.charCount >= minimumParagraphChars && trimmedText.count >= preferredParagraphChars / 2
-            let shouldStartNewGroup =
-                wouldExceedHardLimit ||
-                (currentIsReady && (pageChanged || shouldWrapForLargeIncoming))
-
-            if shouldStartNewGroup {
-                groups.append(current)
-                current = MutableParagraphGroup()
-            }
-
-            current.append(segment)
-        }
-
-        if !current.isEmpty {
-            groups.append(current)
-        }
-
-        while groups.count > maxProfessorParagraphs, groups.count >= 2 {
-            var mergeIndex = 0
-            var smallestCombinedCount = Int.max
-
-            for index in 0 ..< groups.count - 1 {
-                let combinedCount = groups[index].charCount + groups[index + 1].charCount
-                if combinedCount < smallestCombinedCount {
-                    smallestCombinedCount = combinedCount
-                    mergeIndex = index
-                }
-            }
-
-            var merged = groups[mergeIndex]
-            let next = groups[mergeIndex + 1]
-            for segment in next.segments {
-                merged.append(segment)
-            }
-            groups.replaceSubrange(mergeIndex ... mergeIndex + 1, with: [merged])
-        }
-
-        return groups.enumerated().map { index, group in
-            group.finalized(requestIndex: index)
-        }
-    }
-
-    // MARK: - DTO → 本地模型转换
-
-    private static func convertOverview(_ dto: PassageOverviewDTO?) -> PassageOverview? {
-        guard let dto else { return nil }
-        return PassageOverview(
-            articleTheme: dto.article_theme ?? "",
-            authorCoreQuestion: dto.author_core_question ?? "",
-            progressionPath: dto.progression_path ?? "",
-            likelyQuestionTypes: dto.likely_question_types ?? [],
-            logicPitfalls: dto.logic_pitfalls ?? [],
-            paragraphFunctionMap: dto.paragraph_function_map ?? [],
-            syntaxHighlights: dto.syntax_highlights ?? [],
-            readingTraps: dto.reading_traps ?? [],
-            vocabularyHighlights: dto.vocabulary_highlights ?? []
+    private static func fallbackMeta(from meta: AIServiceResponseMeta) -> AIServiceResponseMeta {
+        AIServiceResponseMeta(
+            provider: meta.provider ?? "local_fallback",
+            model: meta.model ?? "local_fallback",
+            retryCount: meta.retryCount,
+            usedCache: meta.usedCache,
+            usedFallback: true,
+            circuitState: meta.circuitState
         )
     }
 
-    private static func convertParagraphCards(
-        _ dtos: [ParagraphCardDTO],
-        paragraphGroups: [ParagraphAnalysisGroup],
-        segments: [Segment],
-        sentences: [Sentence]
-    ) -> [ParagraphTeachingCard] {
-        let segmentIndex = Dictionary(uniqueKeysWithValues: segments.map { ($0.id, $0) })
-        let sentenceIndex = Dictionary(uniqueKeysWithValues: sentences.map { ($0.id, $0) })
-
-        return dtos.flatMap { dto -> [ParagraphTeachingCard] in
-            guard let paragraphIndex = dto.paragraph_index,
-                  paragraphIndex < paragraphGroups.count else { return [] }
-
-            let group = paragraphGroups[paragraphIndex]
-            let groupSegments = group.segmentIDs.compactMap { segmentIndex[$0] }
-            let groupSentences = group.sentenceIDs.compactMap { sentenceIndex[$0] }
-            guard !groupSegments.isEmpty else { return [] }
-
-            let roleString = dto.argument_role ?? "support"
-            let role = ParagraphArgumentRole(rawValue: roleString) ?? .support
-
-            let coreLocalIndex = dto.core_sentence_local_index ?? 0
-            let coreSentenceID = groupSentences.indices.contains(coreLocalIndex)
-                ? groupSentences[coreLocalIndex].id
-                : groupSentences.first?.id
-
-            return groupSegments.map { segment in
-                ParagraphTeachingCard(
-                    id: segment.id,
-                    segmentID: segment.id,
-                    paragraphIndex: segment.index,
-                    anchorLabel: segment.anchorLabel,
-                    theme: dto.theme ?? "",
-                    argumentRole: role,
-                    coreSentenceID: coreSentenceID,
-                    keywords: dto.keywords ?? [],
-                    relationToPrevious: dto.relation_to_previous ?? "",
-                    examValue: dto.exam_value ?? "",
-                    teachingFocuses: dto.teaching_focuses ?? [],
-                    studentBlindSpot: dto.student_blind_spot,
-                    isAIGenerated: true
-                )
-            }
-        }
-    }
-
-    private static func convertSentenceCards(
-        _ dtos: [SentenceAnalysisDTO],
-        existingCards: [ProfessorSentenceCard],
-        sentences: [Sentence],
-        segments: [Segment]
-    ) -> [ProfessorSentenceCard] {
-        let sentencesBySegment = Dictionary(grouping: sentences, by: { $0.segmentID })
-
-        var refToSentences: [String: Sentence] = [:]
-        for (segIdx, segment) in segments.enumerated() {
-            let segmentID = segment.id
-            for sentence in sentencesBySegment[segmentID] ?? [] {
-                let ref = "S_\(segIdx)_\(sentence.localIndex)"
-                refToSentences[ref] = sentence
-            }
-        }
-
-        return dtos.compactMap { dto in
-            guard let ref = dto.sentence_ref,
-                  let sentence = refToSentences[ref] else { return nil }
-
-            let analysis = ProfessorSentenceAnalysis(
-                originalSentence: sentence.text,
-                sentenceFunction: dto.sentence_function ?? "",
-                coreSkeleton: dto.core_skeleton,
-                chunkLayers: dto.chunk_layers ?? [],
-                grammarFocus: dto.grammar_focus ?? [],
-                faithfulTranslation: dto.faithful_translation ?? "",
-                teachingInterpretation: dto.teaching_interpretation ?? dto.natural_chinese_meaning ?? "",
-                naturalChineseMeaning: dto.natural_chinese_meaning ?? "",
-                sentenceCore: dto.sentence_core ?? "",
-                chunkBreakdown: dto.chunk_breakdown ?? [],
-                grammarPoints: (dto.grammar_points ?? []).map {
-                    ProfessorGrammarPoint(name: $0.name ?? "", explanation: $0.explanation ?? "")
-                },
-                vocabularyInContext: (dto.vocabulary_in_context ?? []).map {
-                    ProfessorVocabularyItem(term: $0.term ?? "", meaning: $0.meaning ?? "")
-                },
-                misreadPoints: dto.misread_points ?? [],
-                examRewritePoints: dto.exam_rewrite_points ?? [],
-                misreadingTraps: dto.misreading_traps ?? [],
-                examParaphraseRoutes: dto.exam_paraphrase_routes ?? [],
-                simplifiedEnglish: dto.simplified_english ?? "",
-                simplerRewrite: dto.simpler_rewrite ?? "",
-                miniExercise: dto.mini_exercise,
-                miniCheck: dto.mini_check,
-                hierarchyRebuild: dto.hierarchy_rebuild ?? [],
-                syntacticVariation: dto.syntactic_variation,
-                evidenceType: dto.evidence_type,
-                isAIGenerated: true
-            )
-
-            let existingCard = existingCards.first { $0.sentenceID == sentence.id }
-
-            return ProfessorSentenceCard(
-                id: sentence.id,
-                sentenceID: sentence.id,
-                segmentID: sentence.segmentID,
-                isKeySentence: existingCard?.isKeySentence ?? true,
-                analysis: analysis
+    private static func buildParagraphInputs(from bundle: StructuredSourceBundle) -> [ParagraphInput] {
+        candidateSegments(in: bundle).map { segment in
+            ParagraphInput(
+                segmentID: segment.id,
+                index: segment.index,
+                anchorLabel: segment.anchorLabel,
+                text: truncated(segment.text, limit: maxParagraphCharacters),
+                sourceKind: segment.provenance.sourceKind.rawValue,
+                hygieneScore: segment.hygiene.score
             )
         }
+    }
+
+    private static func candidateSegments(in bundle: StructuredSourceBundle) -> [Segment] {
+        let primary = bundle.segments.filter { $0.provenance.sourceKind == .passageBody }
+        if !primary.isEmpty {
+            return Array(primary.prefix(maxParagraphCount))
+        }
+
+        return Array(
+            bundle.segments
+                .filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                .prefix(maxParagraphCount)
+        )
+    }
+
+    private static func stringArray(_ value: Any?) -> [String] {
+        if let array = value as? [Any] {
+            return array.compactMap { item in
+                normalizedString(item as? String)
+            }
+        }
+        if let string = normalizedString(value as? String) {
+            return [string]
+        }
+        return []
+    }
+
+    private static func normalizedString(_ value: String?) -> String? {
+        let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func truncated(_ text: String, limit: Int) -> String {
+        let normalized = text
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalized.count > limit else { return normalized }
+        return String(normalized.prefix(limit))
     }
 }
