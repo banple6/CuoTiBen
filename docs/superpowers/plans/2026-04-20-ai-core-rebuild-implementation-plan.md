@@ -6,7 +6,7 @@
 
 **Architecture:** 先重做后端 AI Gateway，再重写 `explain-sentence` 和 `analyze-passage` contract，随后在 iOS 端建立 identity loop 与 fallback，再引入 `PassageMap + MindMap admission` 作为导图新数据核心，最后替换旧结构树工作台。旧 `legacyRemote / legacyLocal / fallbackLegacy / StructureTreePreview*` 不再作为主路径继续扩展。
 
-**Tech Stack:** Node.js 20 + Express 5 + node:test + OpenAI-compatible HTTP client/provider abstraction + SwiftUI + Xcodebuild + XCTest（本计划将在 iOS 侧新增最小测试目标）
+**Tech Stack:** Node.js 20 + Express 5 + node:test + OpenAI-compatible HTTP client/provider abstraction + SwiftUI + Xcodebuild headless build verification
 
 ---
 
@@ -17,6 +17,7 @@
 - 所有实现都必须遵守 TDD：先写失败测试，再写最小实现，再验证通过
 - 在完成 `PassageMap + admission` 之前，不允许继续扩展旧结构树主路径
 - 在未获得 SSH 权限之前，不允许声称线上部署完成
+- 当前本机无法稳定运行 iOS Simulator；iOS 阶段不新增 XCTest target，不执行 `xcodebuild test`，统一通过 headless build、静态检查和真实活跃路径人工回归清单验收
 
 ## 全局不可跳过验收门
 
@@ -470,16 +471,18 @@ git clean -fd backend/src/validators/analyzePassage.js backend/tests/contracts/a
 
 ---
 
-### Phase 4: iOS request identity loop + fallback skeleton
+### Phase 4: iOS request identity loop + fallback skeleton with headless build verification
 
-**目标：** 先把客户端请求身份闭环与 mismatch discard 做稳，再建立单句与全文的本地骨架 fallback，保证 503 是产品状态而不是空白错误。
+**目标：** 先把客户端请求身份闭环与 mismatch discard 做稳，再建立单句与全文的本地骨架 fallback，保证 503 是产品状态而不是空白错误。当前机器环境不依赖 iOS Simulator，只做活跃路径改造与 headless build 验证。
 
 **真实文件：**
 - Create:
-  - `CuoTiBenTests/AIIdentityLoopTests.swift`
-  - `CuoTiBenTests/AIFallbackSkeletonTests.swift`
+  - `CuoTiBen/Sources/HuiLu/Services/AIRequestIdentity.swift`
+  - `CuoTiBen/Sources/HuiLu/Services/AIResponseIdentityGuard.swift`
+  - `CuoTiBen/Sources/HuiLu/Services/AIStructuredError.swift`
+  - `CuoTiBen/Sources/HuiLu/Services/LocalSentenceFallbackBuilder.swift`
+  - `CuoTiBen/Sources/HuiLu/Services/LocalPassageFallbackBuilder.swift`
 - Modify:
-  - `CuoTiBen.xcodeproj/project.pbxproj`
   - `CuoTiBen/Sources/HuiLu/Services/AIExplainSentenceService.swift`
   - `CuoTiBen/Sources/HuiLu/Services/ProfessorAnalysisService.swift`
   - `CuoTiBen/Sources/HuiLu/ViewModels/AppViewModel.swift`
@@ -488,23 +491,27 @@ git clean -fd backend/src/validators/analyzePassage.js backend/tests/contracts/a
   - `CuoTiBen/Sources/HuiLu/Views/ReviewWorkbenchView.swift`
   - `CuoTiBen/Sources/HuiLu/Views/ReviewSessionView.swift`
 
-- [ ] **Step 1A: 先创建最小 XCTest target 并验证空测试可跑**
+- [ ] **Step 1: 先建立 headless build gate**
 
 Run:
 ```bash
 cd /Volumes/T7/IOS app develop/CuoTiBen/.worktrees/ai-core-rebuild
-xcodebuild test \
+xcodebuild -quiet \
   -project '/Volumes/T7/IOS app develop/CuoTiBen/.worktrees/ai-core-rebuild/CuoTiBen.xcodeproj' \
   -scheme 'CuoTiBen' \
-  -destination 'platform=iOS Simulator,name=iPhone 16' \
-  -only-testing:CuoTiBenTests
+  -configuration Debug \
+  -sdk iphonesimulator \
+  -arch arm64 \
+  ONLY_ACTIVE_ARCH=YES \
+  COMPILER_INDEX_STORE_ENABLE=NO \
+  build
 ```
 
-Expected: FAIL 或 PASS 都可以，但必须确认 XCTest target 本身能被 Xcode 识别、能启动测试流程。若测试 target 创建失败或 scheme 不可测，则停止本 Phase，不继续写业务测试。
+Expected: 必须能完成 headless build。若 build 本身不稳定，则停止本 Phase，不继续写业务实现。
 
-- [ ] **Step 1B: 在 XCTest target 可运行后，再写失败测试**
+- [ ] **Step 2: 先建立失败场景清单，并按活跃路径接线**
 
-测试覆盖：
+覆盖清单：
 - `sentenceID` 不同，丢弃
 - `textHash` 不同，丢弃
 - `segmentID` 不同，丢弃
@@ -513,20 +520,9 @@ Expected: FAIL 或 PASS 都可以，但必须确认 XCTest target 本身能被 X
 - 503 时生成 sentence fallback skeleton
 - 503 时生成 passage map fallback skeleton
 
-Run:
-```bash
-cd /Volumes/T7/IOS app develop/CuoTiBen/.worktrees/ai-core-rebuild
-xcodebuild test \
-  -project '/Volumes/T7/IOS app develop/CuoTiBen/.worktrees/ai-core-rebuild/CuoTiBen.xcodeproj' \
-  -scheme 'CuoTiBen' \
-  -destination 'platform=iOS Simulator,name=iPhone 16' \
-  -only-testing:CuoTiBenTests/AIIdentityLoopTests \
-  -only-testing:CuoTiBenTests/AIFallbackSkeletonTests
-```
+Expected: 这些场景都必须在真实 ViewModel / Service 活跃路径里有对应实现和日志，不允许做死代码。
 
-Expected: FAIL，因为测试目标和 identity discard/fallback 逻辑尚不存在。
-
-- [ ] **Step 2: 重写 explain 请求 DTO 与 identity 比对逻辑**
+- [ ] **Step 3: 重写 explain 请求 DTO 与 identity 比对逻辑**
 
 实现：
 - 单句请求必须带：
@@ -539,20 +535,20 @@ Expected: FAIL，因为测试目标和 identity discard/fallback 逻辑尚不存
 - 响应落地前做严格校验
 - mismatch 一律丢弃
 
-- [ ] **Step 3: 在 ViewModel 中先做旧结果清空**
+- [ ] **Step 4: 在 ViewModel 中先做旧结果清空**
 
 实现：
 - 切换句子时清空旧远端结果
 - 正在加载状态与当前选中句强绑定
 - 过期结果不能回填到当前 UI
 
-- [ ] **Step 4: 补齐 sentence / passage fallback skeleton**
+- [ ] **Step 5: 补齐 sentence / passage fallback skeleton**
 
 实现：
 - 单句 fallback：原句、粗主干、翻译暂不可用提示、教学解读暂不可用提示、基础语块、基础易错点、重新获取按钮
 - 全文 fallback：原文段落列表、基础段落角色、PassageMap 骨架
 
-- [ ] **Step 5: 补齐 debug 日志**
+- [ ] **Step 6: 补齐 debug 日志**
 
 实现：
 - `request_id`
@@ -563,17 +559,11 @@ Expected: FAIL，因为测试目标和 identity discard/fallback 逻辑尚不存
 - `used_cache`
 - `used_fallback`
 
-- [ ] **Step 6: 跑 Phase 4 验证命令**
+- [ ] **Step 7: 跑 Phase 4 headless 验证命令**
 
 Run:
 ```bash
 cd /Volumes/T7/IOS app develop/CuoTiBen/.worktrees/ai-core-rebuild
-xcodebuild test \
-  -project '/Volumes/T7/IOS app develop/CuoTiBen/.worktrees/ai-core-rebuild/CuoTiBen.xcodeproj' \
-  -scheme 'CuoTiBen' \
-  -destination 'platform=iOS Simulator,name=iPhone 16' \
-  -only-testing:CuoTiBenTests/AIIdentityLoopTests \
-  -only-testing:CuoTiBenTests/AIFallbackSkeletonTests
 xcodebuild -quiet \
   -project '/Volumes/T7/IOS app develop/CuoTiBen/.worktrees/ai-core-rebuild/CuoTiBen.xcodeproj' \
   -scheme 'CuoTiBen' \
@@ -586,8 +576,15 @@ xcodebuild -quiet \
 ```
 
 **测试命令：**
-- 上述 `xcodebuild test`
+- `cd /Volumes/T7/IOS app develop/CuoTiBen/.worktrees/ai-core-rebuild/backend && npm test`
 - 上述 `xcodebuild build`
+- `grep -nE 'client_request_id|sentence_id|segment_id|sentence_text_hash|anchor_label|request_id|used_fallback|used_cache|error_code' CuoTiBen/Sources/HuiLu/Services/AIExplainSentenceService.swift CuoTiBen/Sources/HuiLu/Services/ProfessorAnalysisService.swift CuoTiBen/Sources/HuiLu/ViewModels/AppViewModel.swift CuoTiBen/Sources/HuiLu/ViewModels/ArchivistWorkspaceViewModel.swift CuoTiBen/Sources/HuiLu/Views/SourceDetailSheets.swift CuoTiBen/Sources/HuiLu/Views/ReviewWorkbenchView.swift CuoTiBen/Sources/HuiLu/Views/ReviewSessionView.swift`
+- `git diff -- CuoTiBen/Sources/HuiLu/Services/AIExplainSentenceService.swift CuoTiBen/Sources/HuiLu/Services/ProfessorAnalysisService.swift CuoTiBen/Sources/HuiLu/ViewModels/AppViewModel.swift CuoTiBen/Sources/HuiLu/ViewModels/ArchivistWorkspaceViewModel.swift CuoTiBen/Sources/HuiLu/Views/SourceDetailSheets.swift CuoTiBen/Sources/HuiLu/Views/ReviewWorkbenchView.swift CuoTiBen/Sources/HuiLu/Views/ReviewSessionView.swift`
+- 人工回归清单：
+  - 快速连续切换 3 个句子，只允许最后一句保留结果
+  - 模拟后端返回 identity mismatch，确认 UI 丢弃且不污染当前句
+  - 模拟 `MODEL_CONFIG_MISSING / UPSTREAM_503 / UPSTREAM_TIMEOUT / INVALID_MODEL_RESPONSE`，确认句子页和全文页都显示本地骨架且不空白
+  - DEBUG 模式确认日志包含 `request_id / error_code / used_fallback`
 
 **验收标准：**
 - `sentenceID` 不同，丢弃
@@ -603,19 +600,23 @@ xcodebuild -quiet \
 - 提交后：`git revert <phase4_commit>`
 - 未提交：
 ```bash
-git restore CuoTiBen.xcodeproj/project.pbxproj \
-  CuoTiBen/Sources/HuiLu/Services/AIExplainSentenceService.swift \
+git restore CuoTiBen/Sources/HuiLu/Services/AIExplainSentenceService.swift \
   CuoTiBen/Sources/HuiLu/Services/ProfessorAnalysisService.swift \
   CuoTiBen/Sources/HuiLu/ViewModels/AppViewModel.swift \
   CuoTiBen/Sources/HuiLu/ViewModels/ArchivistWorkspaceViewModel.swift \
   CuoTiBen/Sources/HuiLu/Views/SourceDetailSheets.swift \
   CuoTiBen/Sources/HuiLu/Views/ReviewWorkbenchView.swift \
   CuoTiBen/Sources/HuiLu/Views/ReviewSessionView.swift
-git clean -fd CuoTiBenTests
+git clean -fd \
+  CuoTiBen/Sources/HuiLu/Services/AIRequestIdentity.swift \
+  CuoTiBen/Sources/HuiLu/Services/AIResponseIdentityGuard.swift \
+  CuoTiBen/Sources/HuiLu/Services/AIStructuredError.swift \
+  CuoTiBen/Sources/HuiLu/Services/LocalSentenceFallbackBuilder.swift \
+  CuoTiBen/Sources/HuiLu/Services/LocalPassageFallbackBuilder.swift
 ```
 
 **我确认的下一步指令：**
-- 只有在 mismatch discard 和 fallback skeleton 通过测试后，才允许进入 Phase 5。
+- 只有在 mismatch discard 和 fallback skeleton 通过 headless 验证与人工回归清单后，才允许进入 Phase 5。
 
 ---
 
@@ -630,8 +631,8 @@ git clean -fd CuoTiBenTests
   - `CuoTiBen/Sources/HuiLu/Models/MindMapNode.swift`
   - `CuoTiBen/Sources/HuiLu/Models/MindMapAdmissionResult.swift`
   - `CuoTiBen/Sources/HuiLu/Services/MindMapAdmissionService.swift`
-  - `CuoTiBenTests/PassageMapDomainTests.swift`
-  - `CuoTiBenTests/MindMapAdmissionTests.swift`
+  - `docs/superpowers/fixtures/passage-map-admission-fixtures.md`
+  - `docs/superpowers/checklists/phase5-passage-map-manual-checklist.md`
 - Modify:
   - `CuoTiBen/Sources/HuiLu/Models/StructuredSourceModels.swift`
   - `CuoTiBen/Sources/HuiLu/Services/AnchorConsistencyValidator.swift`
@@ -639,7 +640,7 @@ git clean -fd CuoTiBenTests
   - `CuoTiBen/Sources/HuiLu/Services/ProfessorAnalysisService.swift`
   - `CuoTiBen/Sources/HuiLu/Views/TextPipelineDiagnosticsView.swift`
 
-- [ ] **Step 1: 先写 PassageMap / admission 失败测试**
+- [ ] **Step 1: 先写 PassageMap / admission fixture 与失败场景清单**
 
 测试覆盖：
 - 主导图只吃 `admission = mainline`
@@ -649,18 +650,7 @@ git clean -fd CuoTiBenTests
 - `question / answer / vocabulary / chinese_instruction` 不进主线
 - `coreSentenceID` 不属于当前段时，段落节点降级
 
-Run:
-```bash
-cd /Volumes/T7/IOS app develop/CuoTiBen/.worktrees/ai-core-rebuild
-xcodebuild test \
-  -project '/Volumes/T7/IOS app develop/CuoTiBen/.worktrees/ai-core-rebuild/CuoTiBen.xcodeproj' \
-  -scheme 'CuoTiBen' \
-  -destination 'platform=iOS Simulator,name=iPhone 16' \
-  -only-testing:CuoTiBenTests/PassageMapDomainTests \
-  -only-testing:CuoTiBenTests/MindMapAdmissionTests
-```
-
-Expected: FAIL，因为新域模型尚不存在。
+Expected: 先用 fixture 固化 admission 输入/输出示例和 rejected reason；主导图、辅助层、拒绝层的边界必须在实现前写清楚。
 
 - [ ] **Step 2: 创建 PassageMap 领域模型**
 
@@ -689,17 +679,11 @@ Expected: FAIL，因为新域模型尚不存在。
 - `PassageMap` -> candidate nodes -> admission -> mainline/auxiliary/rejected
 - diagnostics 收集 rejected 原因
 
-- [ ] **Step 5: 跑 Phase 5 验证命令**
+- [ ] **Step 5: 跑 Phase 5 headless 验证命令**
 
 Run:
 ```bash
 cd /Volumes/T7/IOS app develop/CuoTiBen/.worktrees/ai-core-rebuild
-xcodebuild test \
-  -project '/Volumes/T7/IOS app develop/CuoTiBen/.worktrees/ai-core-rebuild/CuoTiBen.xcodeproj' \
-  -scheme 'CuoTiBen' \
-  -destination 'platform=iOS Simulator,name=iPhone 16' \
-  -only-testing:CuoTiBenTests/PassageMapDomainTests \
-  -only-testing:CuoTiBenTests/MindMapAdmissionTests
 xcodebuild -quiet \
   -project '/Volumes/T7/IOS app develop/CuoTiBen/.worktrees/ai-core-rebuild/CuoTiBen.xcodeproj' \
   -scheme 'CuoTiBen' \
@@ -709,11 +693,18 @@ xcodebuild -quiet \
   ONLY_ACTIVE_ARCH=YES \
   COMPILER_INDEX_STORE_ENABLE=NO \
   build
+grep -nE 'consistencyScore|admissionResult|rejectedReason|sourceSegmentID|sourceSentenceID|sourceKind|hygieneScore' \
+  CuoTiBen/Sources/HuiLu/Services/AnchorConsistencyValidator.swift \
+  CuoTiBen/Sources/HuiLu/Services/MindMapAdmissionService.swift \
+  CuoTiBen/Sources/HuiLu/Models/MindMapAdmissionResult.swift
 ```
 
 **测试命令：**
-- 上述 `xcodebuild test`
 - 上述 `xcodebuild build`
+- 上述 `grep`
+- fixture/manual checklist：
+  - `docs/superpowers/fixtures/passage-map-admission-fixtures.md`
+  - `docs/superpowers/checklists/phase5-passage-map-manual-checklist.md`
 
 **验收标准：**
 - 主导图只吃 `admission = mainline`
@@ -740,12 +731,12 @@ git clean -fd \
   CuoTiBen/Sources/HuiLu/Models/MindMapNode.swift \
   CuoTiBen/Sources/HuiLu/Models/MindMapAdmissionResult.swift \
   CuoTiBen/Sources/HuiLu/Services/MindMapAdmissionService.swift \
-  CuoTiBenTests/PassageMapDomainTests.swift \
-  CuoTiBenTests/MindMapAdmissionTests.swift
+  docs/superpowers/fixtures/passage-map-admission-fixtures.md \
+  docs/superpowers/checklists/phase5-passage-map-manual-checklist.md
 ```
 
 **我确认的下一步指令：**
-- 只有在 `PassageMap` 与 admission 通过测试，并且 diagnostics 能解释 rejected 原因后，才允许进入 Phase 6。
+- 只有在 `PassageMap` 与 admission 通过 headless 验证、fixture 校对和人工清单后，并且 diagnostics 能解释 rejected 原因后，才允许进入 Phase 6。
 
 ---
 
@@ -761,7 +752,8 @@ git clean -fd \
   - `CuoTiBen/Sources/HuiLu/Views/MindMap/MindMapMiniMapView.swift`
   - `CuoTiBen/Sources/HuiLu/Views/MindMap/MindMapToolbar.swift`
   - `CuoTiBen/Sources/HuiLu/Views/MindMap/MindMapLayout.swift`
-  - `CuoTiBenTests/MindMapWorkspaceViewModelTests.swift`
+  - `docs/superpowers/fixtures/mindmap-workspace-fixtures.md`
+  - `docs/superpowers/checklists/phase6-mindmap-workspace-manual-checklist.md`
 - Modify:
   - `CuoTiBen/Sources/HuiLu/Views/SourceDetailView.swift`
   - `CuoTiBen/Sources/HuiLu/Views/SourceOutlineTab.swift`
@@ -773,7 +765,7 @@ git clean -fd \
   - `CuoTiBen/Sources/HuiLu/Views/StructureTreePreviewMiniMap.swift`
   - `CuoTiBen/Sources/HuiLu/Views/StructureTreePreviewToolbar.swift`
 
-- [ ] **Step 1: 先写 ViewModel 失败测试**
+- [ ] **Step 1: 先写 ViewModel fixture 与失败场景清单**
 
 测试覆盖：
 - 只渲染 mainline 节点到主画布
@@ -781,17 +773,7 @@ git clean -fd \
 - rejected 不进入主图
 - 503 时思维导图不空白，显示本地 passage map fallback
 
-Run:
-```bash
-cd /Volumes/T7/IOS app develop/CuoTiBen/.worktrees/ai-core-rebuild
-xcodebuild test \
-  -project '/Volumes/T7/IOS app develop/CuoTiBen/.worktrees/ai-core-rebuild/CuoTiBen.xcodeproj' \
-  -scheme 'CuoTiBen' \
-  -destination 'platform=iOS Simulator,name=iPhone 16' \
-  -only-testing:CuoTiBenTests/MindMapWorkspaceViewModelTests
-```
-
-Expected: FAIL，因为新 UI ViewModel 尚不存在。
+Expected: 先通过 fixture 固化主图、辅助层和 rejected 节点的展示预期，以及 503 fallback 时不空白的工作台状态。
 
 - [ ] **Step 2: 创建新的 MindMap workspace 文件**
 
@@ -813,16 +795,11 @@ Expected: FAIL，因为新 UI ViewModel 尚不存在。
 - `ReviewWorkbenchView` / `ArchivistWorkspaceView` 改吃 `PassageMap`
 - 旧 `StructureTreePreview*` 只保留兼容包装，不再承载主逻辑
 
-- [ ] **Step 4: 跑 Phase 6 验证命令**
+- [ ] **Step 4: 跑 Phase 6 headless 验证命令**
 
 Run:
 ```bash
 cd /Volumes/T7/IOS app develop/CuoTiBen/.worktrees/ai-core-rebuild
-xcodebuild test \
-  -project '/Volumes/T7/IOS app develop/CuoTiBen/.worktrees/ai-core-rebuild/CuoTiBen.xcodeproj' \
-  -scheme 'CuoTiBen' \
-  -destination 'platform=iOS Simulator,name=iPhone 16' \
-  -only-testing:CuoTiBenTests/MindMapWorkspaceViewModelTests
 xcodebuild -quiet \
   -project '/Volumes/T7/IOS app develop/CuoTiBen/.worktrees/ai-core-rebuild/CuoTiBen.xcodeproj' \
   -scheme 'CuoTiBen' \
@@ -832,11 +809,21 @@ xcodebuild -quiet \
   ONLY_ACTIVE_ARCH=YES \
   COMPILER_INDEX_STORE_ENABLE=NO \
   build
+grep -nE 'fitToContent|focusCurrentNode|minimap|compact|detailed|lazy|virtual' \
+  CuoTiBen/Sources/HuiLu/ViewModels/MindMapWorkspaceViewModel.swift \
+  CuoTiBen/Sources/HuiLu/Views/MindMap/MindMapWorkspaceView.swift \
+  CuoTiBen/Sources/HuiLu/Views/MindMap/MindMapCanvasView.swift \
+  CuoTiBen/Sources/HuiLu/Views/MindMap/MindMapMiniMapView.swift \
+  CuoTiBen/Sources/HuiLu/Views/MindMap/MindMapToolbar.swift \
+  CuoTiBen/Sources/HuiLu/Views/MindMap/MindMapLayout.swift
 ```
 
 **测试命令：**
-- 上述 `xcodebuild test`
 - 上述 `xcodebuild build`
+- 上述 `grep`
+- fixture/manual checklist：
+  - `docs/superpowers/fixtures/mindmap-workspace-fixtures.md`
+  - `docs/superpowers/checklists/phase6-mindmap-workspace-manual-checklist.md`
 
 **验收标准：**
 - 主导航叫“思维导图”
@@ -864,11 +851,12 @@ git restore \
 git clean -fd \
   CuoTiBen/Sources/HuiLu/ViewModels/MindMapWorkspaceViewModel.swift \
   CuoTiBen/Sources/HuiLu/Views/MindMap \
-  CuoTiBenTests/MindMapWorkspaceViewModelTests.swift
+  docs/superpowers/fixtures/mindmap-workspace-fixtures.md \
+  docs/superpowers/checklists/phase6-mindmap-workspace-manual-checklist.md
 ```
 
 **我确认的下一步指令：**
-- 只有在新工作台通过 build/test，且主图只吃 mainline 节点后，才允许进入 Phase 7。
+- 只有在新工作台通过 headless build、静态检查和人工清单，且主图只吃 mainline 节点后，才允许进入 Phase 7。
 
 ---
 
