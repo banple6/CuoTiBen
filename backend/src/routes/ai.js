@@ -12,6 +12,10 @@ const router = Router();
 const modelRegistry = createModelRegistry();
 
 function ensureRequestId(req) {
+  if (typeof req.requestId === "string" && req.requestId.trim()) {
+    return req.requestId;
+  }
+
   const candidate = typeof req.get === "function" ? req.get("x-request-id") : "";
   const requestId = candidate?.trim() || crypto.randomUUID();
   req.requestId = requestId;
@@ -42,24 +46,27 @@ function runAIPreflight(req, routeName) {
 }
 
 router.post("/explain-sentence", async (req, res) => {
-  const requestId = runAIPreflight(req, "ai/explain-sentence");
+  const requestId = ensureRequestId(req);
   const payload = validateExplainSentenceRequest(req.body);
+  runAIPreflight(req, "ai/explain-sentence");
 
   console.log("[ai/explain-sentence] request", {
     requestId,
+    sentenceId: payload.identity.sentence_id,
     title: payload.title || "",
     sentenceLength: payload.sentence.length,
     contextLength: payload.context.length
   });
 
-  const data = await explainSentence(payload);
+  const result = await explainSentence(payload, { requestId });
 
   console.log("[ai/explain-sentence] success");
 
   return res.json({
     success: true,
     request_id: requestId,
-    data
+    data: result.data,
+    meta: result.meta
   });
 });
 

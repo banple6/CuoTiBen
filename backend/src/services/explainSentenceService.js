@@ -1,6 +1,22 @@
-import { getDashScopeConfig } from "../config/env.js";
 import { AppError } from "../lib/appError.js";
-import { getDashScopeClient } from "../lib/dashscope.js";
+import { createAIClient } from "../models/aiClient.js";
+import { createModelRegistry } from "../models/modelRegistry.js";
+import { createAIError, ERROR_CODES } from "../models/errors.js";
+
+const defaultExplainSentenceAIClient = createAIClient({
+  registry: createModelRegistry()
+});
+
+const TRANSLATION_TEACHING_TONE_PATTERNS = [
+  "学生容易误读",
+  "做题时要注意",
+  "作者真正强调",
+  "本句承担",
+  "先抓主句",
+  "不要把",
+  "命题人",
+  "真正判断"
+];
 
 export function buildExplainSentencePrompt({ title, sentence, context, paragraph_theme, paragraph_role, question_prompt }) {
   const safeTitle = title?.trim() || "未提供";
@@ -56,6 +72,82 @@ export function buildExplainSentencePrompt({ title, sentence, context, paragraph
     "7. exam_paraphrase_routes 要贴近阅读理解命题，如同义替换、因果偷换、范围缩放、态度弱化，并尽量给出具体改写路线。",
     "8. mini_check 必须是一个可立即检验理解的小问题，不要空泛提问。",
     "9. 整体口吻必须像严谨但易懂的英语教授。"
+  ].join("\n");
+}
+
+function buildProfessorSentencePrompt({ title, sentence, context, paragraph_theme, paragraph_role, question_prompt }) {
+  const safeTitle = title?.trim() || "未提供";
+  const safeContext = context?.trim() || "未提供";
+  const safeParagraphTheme = paragraph_theme?.trim() || "未提供";
+  const safeParagraphRole = paragraph_role?.trim() || "未提供";
+  const safeQuestionPrompt = question_prompt?.trim() || "未提供";
+
+  return [
+    "你是一位严谨的英语句法教授，只能输出一个合法 JSON 对象。",
+    "不要输出 Markdown，不要输出代码块，不要输出额外自然语言。",
+    "请围绕 Professor Sentence Workflow 输出：破除误读、句法手术、边界测试、阅读题映射。",
+    "JSON 只服务于英语句子解析，不要输出与句法无关的摘要或作文式评论。",
+    "",
+    "只输出以下字段：",
+    "original_sentence",
+    "sentence_function",
+    "core_skeleton",
+    "faithful_translation",
+    "teaching_interpretation",
+    "chunk_layers",
+    "grammar_focus",
+    "misreading_traps",
+    "exam_paraphrase_routes",
+    "simpler_rewrite",
+    "simpler_rewrite_translation",
+    "mini_check",
+    "",
+    "字段要求：",
+    "1. original_sentence 必须回填原句。",
+    "2. sentence_function 必须是对象，字段固定为 title_zh、explanation_zh。title_zh 一律写“句子定位”。",
+    "3. core_skeleton 必须是对象，字段固定为 subject、predicate、complement_or_object、explanation_zh。",
+    "4. faithful_translation 只能做忠实翻译，不得写老师讲解口吻，不得出现“学生容易误读 / 做题时要注意 / 作者真正强调 / 本句承担”等表达。",
+    "5. teaching_interpretation 必须是教学解读，不能和 faithful_translation 相同，也不能只是翻译的简单改写。",
+    "6. chunk_layers 必须是数组，每项字段固定为 text、role_zh、attaches_to、gloss_zh。",
+    "7. grammar_focus 必须是数组，每项字段固定为 title_zh、explanation_zh、why_it_matters_zh、example_en。中文字段必须中文主导。",
+    "8. misreading_traps 必须写清学生最容易读错的层级、修饰关系或逻辑点。",
+    "9. exam_paraphrase_routes 必须写清阅读题可能怎样改写。",
+    "10. simpler_rewrite_translation 必须用中文解释简化改写在保留原意的前提下做了什么。",
+    "11. 不允许在任何字段里输出 [subject: ...] / [predicate: ...] / [object clause: ...] / [complement: ...] 这类 bracket 标记。",
+    "",
+    "阶段一：破除误读",
+    "指出学生最容易把哪一层读错，不要泛泛而谈。",
+    "阶段二：句法手术",
+    "交代主语、谓语、核心补足、语块层级、修饰对象。",
+    "阶段三：边界测试",
+    "检查否定范围、指代范围、转折/让步和修饰误挂。",
+    "阶段四：阅读题映射",
+    "指出这句在阅读题里可能如何被改写、偷换或设陷阱。",
+    "",
+    `资料标题: ${safeTitle}`,
+    `句子: ${sentence.trim()}`,
+    `上下文: ${safeContext}`,
+    `段落主旨: ${safeParagraphTheme}`,
+    `段落角色: ${safeParagraphRole}`,
+    `相关题目: ${safeQuestionPrompt}`
+  ].join("\n");
+}
+
+function buildProfessorSentenceRepairPrompt({ payload, previousText, reasons }) {
+  return [
+    buildProfessorSentencePrompt(payload),
+    "",
+    "上一次输出已经可以解析为 JSON，但不满足契约，请只修复失败字段，并继续只输出一个合法 JSON 对象。",
+    `失败原因：${reasons.join("；")}`,
+    "必须修复：",
+    "1. public contract 必须完整。",
+    "2. faithful_translation 只能做中文翻译，不能写老师点评。",
+    "3. teaching_interpretation 必须是教学解读，不能重复 faithful_translation。",
+    "4. grammar_focus 必须变成中文主字段。",
+    "5. 全部字段禁止 bracket 标记泄露。",
+    "",
+    "上一版输出为：",
+    previousText
   ].join("\n");
 }
 
@@ -1597,134 +1689,597 @@ function parseModelJson(content) {
   });
 }
 
-export async function explainSentence({
-  title = "",
-  sentence,
-  context = "",
-  paragraph_theme = "",
-  paragraph_role = "",
-  question_prompt = ""
-}) {
-  const client = getDashScopeClient();
-  const { modelName } = getDashScopeConfig();
+function buildExplainSentenceCacheIdentity(identity = {}) {
+  return {
+    sentenceID: identity.sentence_id,
+    sentenceTextHash: identity.sentence_text_hash
+  };
+}
 
-  if (!client) {
-    throw new AppError("DASHSCOPE_API_KEY 或 DASHSCOPE_BASE_URL 未配置。", {
-      statusCode: 500,
-      code: "MODEL_CONFIG_MISSING"
-    });
+function toExplainSentencePublicMeta(meta = {}, overrides = {}) {
+  return {
+    provider: String(overrides.provider ?? meta.provider ?? ""),
+    model: String(overrides.model ?? meta.model ?? ""),
+    retry_count: Number(overrides.retry_count ?? meta.retry_count ?? 0),
+    used_cache: Boolean(overrides.used_cache ?? meta.used_cache),
+    used_fallback: Boolean(overrides.used_fallback ?? meta.used_fallback),
+    circuit_state: String(overrides.circuit_state ?? meta.circuit_state ?? "closed")
+  };
+}
+
+function stripBracketMarkup(value) {
+  if (typeof value !== "string") {
+    return value;
   }
 
-  console.log("[ai/explain-sentence] calling model", {
-    modelName,
-    sentenceLength: sentence.length,
-    hasContext: Boolean(context.trim())
-  });
+  return value
+    .replace(/\[[A-Za-z_\s-]+:\s*([^\]]+)\]/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
-  const requestModel = async (prompt) => {
-    return client.chat.completions.create({
-      model: modelName,
-      temperature: 0.2,
-      response_format: {
-        type: "json_object"
-      },
-      messages: [
-        {
-          role: "system",
-          content: "你是严格输出 JSON 的英语句子讲解助手。无论任何情况都只返回 JSON 对象。"
-        },
-        {
-          role: "user",
-          content: prompt
-        }
-      ]
-    });
+function recursivelyStripBracketMarkup(value) {
+  if (typeof value === "string") {
+    return stripBracketMarkup(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => recursivelyStripBracketMarkup(item));
+  }
+
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, recursivelyStripBracketMarkup(item)])
+    );
+  }
+
+  return value;
+}
+
+function collectBracketLeaks(value, bucket = []) {
+  if (typeof value === "string") {
+    if (/\[(subject|predicate|object clause|complement)\s*:/i.test(value)) {
+      bucket.push(value);
+    }
+    return bucket;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectBracketLeaks(item, bucket);
+    }
+    return bucket;
+  }
+
+  if (value && typeof value === "object") {
+    for (const item of Object.values(value)) {
+      collectBracketLeaks(item, bucket);
+    }
+  }
+
+  return bucket;
+}
+
+function containsTeachingTone(text) {
+  const normalized = typeof text === "string" ? text.trim() : "";
+  if (!normalized) {
+    return false;
+  }
+
+  return TRANSLATION_TEACHING_TONE_PATTERNS.some((pattern) => normalized.includes(pattern));
+}
+
+function isInterpretationTooSimilar(translation, interpretation) {
+  const lhs = normalizedChineseComparisonKey(translation);
+  const rhs = normalizedChineseComparisonKey(interpretation);
+
+  if (!lhs || !rhs) {
+    return false;
+  }
+
+  if (lhs === rhs) {
+    return true;
+  }
+
+  const minLength = Math.min(lhs.length, rhs.length);
+  const maxLength = Math.max(lhs.length, rhs.length);
+  if (maxLength === 0) {
+    return false;
+  }
+
+  if ((lhs.includes(rhs) || rhs.includes(lhs)) && (minLength / maxLength) >= 0.8) {
+    return true;
+  }
+
+  return false;
+}
+
+function normalizeSentenceFunctionObject(rawSentenceFunction, evidenceType) {
+  if (rawSentenceFunction && typeof rawSentenceFunction === "object" && !Array.isArray(rawSentenceFunction)) {
+    const explanation = purifyChineseDisplayText(
+      rawSentenceFunction.explanation_zh || rawSentenceFunction.explanationZh || rawSentenceFunction.title_zh || rawSentenceFunction.titleZh || ""
+    );
+    if (explanation) {
+      return {
+        title_zh: "句子定位",
+        explanation_zh: explanation
+      };
+    }
+  }
+
+  const explanation = purifyChineseDisplayText(
+    typeof rawSentenceFunction === "string"
+      ? rawSentenceFunction
+      : buildSentenceFunctionFromEvidenceType(evidenceType)
+  ) || buildSentenceFunctionFromEvidenceType(evidenceType);
+
+  return {
+    title_zh: "句子定位",
+    explanation_zh: explanation
+  };
+}
+
+function buildCoreSkeletonExplanation(coreSkeleton) {
+  const rendered = renderCoreSkeleton(coreSkeleton);
+  if (rendered) {
+    return `先锁定“${rendered}”这一层，全句真正成立的判断就是围绕这条主干展开的。`;
+  }
+
+  return "先锁定主语、谓语和核心补足，这一层决定了全句真正成立的判断。";
+}
+
+function normalizeChunkRoleZh(role, text) {
+  const normalizedRole = String(role || "").trim();
+  const lowerRole = normalizedRole.toLowerCase();
+  const lowerText = String(text || "").trim().toLowerCase();
+
+  if (normalizedRole.includes("核心") || lowerRole.includes("core")) {
+    return "核心信息";
+  }
+  if (normalizedRole.includes("后置") || lowerRole.includes("post")) {
+    return "后置修饰";
+  }
+  if (normalizedRole.includes("条件") || lowerRole.includes("condition") || lowerText.startsWith("if ")) {
+    return "条件框架";
+  }
+  if (normalizedRole.includes("让步") || lowerRole.includes("concession") || lowerText.startsWith("although ") || lowerText.startsWith("though ")) {
+    return "让步框架";
+  }
+  if (normalizedRole.includes("前置") || normalizedRole.includes("时间") || normalizedRole.includes("框架") || lowerRole.includes("frame") || lowerRole.includes("time")) {
+    return "前置框架";
+  }
+
+  return "核心信息";
+}
+
+function normalizePublicChunkLayers(rawChunkLayers, sentence) {
+  return normalizeChunkLayers(rawChunkLayers, sentence).map((item) => {
+    const roleZh = normalizeChunkRoleZh(item.role || item.role_zh, item.text);
+    const gloss = purifyChineseExplanation(item.gloss_zh || item.gloss)
+      || (roleZh === "前置框架"
+        ? "这一块先交代阅读框架，不要把它误当成主句判断。"
+        : roleZh === "后置修饰"
+          ? "这一块回头确认它到底修饰谁。"
+          : roleZh === "条件框架"
+            ? "这一块在限定判断成立的条件范围。"
+            : roleZh === "让步框架"
+              ? "这一块先让一步，真正判断通常落在后面的主句。"
+              : "这一块承载了句子的核心判断或核心信息。");
+
+    return {
+      text: stripBracketMarkup(String(item.text || "")),
+      role_zh: roleZh,
+      attaches_to: stripBracketMarkup(String(item.attaches_to || "核心信息")),
+      gloss_zh: gloss
+    };
+  });
+}
+
+function normalizePublicGrammarFocus(rawGrammarFocus, sentence) {
+  return normalizeGrammarFocus(rawGrammarFocus, sentence).map((item) => ({
+    title_zh: purifyChineseDisplayText(item.title_zh || item.phenomenon) || "关键语法点",
+    explanation_zh: purifyChineseExplanation(item.explanation_zh || item.function) || "这是本句最值得先抓的一层结构。",
+    why_it_matters_zh: purifyChineseExplanation(item.why_it_matters_zh || item.why_it_matters) || "如果把这一层挂错，主干和修饰关系就会一起读偏。",
+    example_en: typeof item.example_en === "string" ? item.example_en.trim() : ""
+  })).slice(0, 3);
+}
+
+function normalizePublicExplainSentenceContract(raw, payload) {
+  const evidenceType = normalizeEvidenceType(
+    firstDefined(raw, ["evidence_type", "sentence_role"]),
+    inferEvidenceTypeFromParagraphRole(payload.paragraph_role)
+  );
+  const coreSkeleton = normalizeCoreSkeleton(firstDefined(raw, ["core_skeleton", "sentence_core"]), payload.sentence);
+  const chunkLayers = normalizePublicChunkLayers(firstDefined(raw, ["chunk_layers"]), payload.sentence);
+  const grammarFocus = normalizePublicGrammarFocus(firstDefined(raw, ["grammar_focus"]), payload.sentence);
+  let faithfulTranslation = purifyChineseExplanation(firstDefined(raw, ["faithful_translation", "translation"]));
+  if (!faithfulTranslation || containsTeachingTone(faithfulTranslation) || !isChineseDominantText(faithfulTranslation)) {
+    faithfulTranslation = "AI 翻译暂不可用，可稍后重试。";
+  }
+
+  let teachingInterpretation = resolveTeachingInterpretation({
+    teachingInterpretation: firstDefined(raw, ["teaching_interpretation"]),
+    naturalChineseMeaning: firstDefined(raw, ["natural_chinese_meaning"]),
+    faithfulTranslation,
+    sentenceFunction: typeof raw?.sentence_function === "string" ? raw.sentence_function : "",
+    coreSkeleton,
+    chunkLayers
+  });
+  if (!teachingInterpretation || !isChineseDominantText(teachingInterpretation) || isInterpretationTooSimilar(faithfulTranslation, teachingInterpretation)) {
+    teachingInterpretation = buildTeachingInterpretationFallback({
+      sentenceFunction: typeof raw?.sentence_function === "string" ? raw.sentence_function : buildSentenceFunctionFromEvidenceType(evidenceType),
+      coreSkeleton,
+      chunkLayers,
+      faithfulTranslation
+    }) || "AI 精讲暂不可用，当前展示本地解析骨架。";
+  }
+
+  const contract = {
+    identity: {
+      client_request_id: payload.identity.client_request_id,
+      document_id: payload.identity.document_id,
+      sentence_id: payload.identity.sentence_id,
+      segment_id: payload.identity.segment_id,
+      sentence_text_hash: payload.identity.sentence_text_hash,
+      anchor_label: payload.identity.anchor_label
+    },
+    original_sentence: payload.sentence.trim(),
+    sentence_function: normalizeSentenceFunctionObject(firstDefined(raw, ["sentence_function"]), evidenceType),
+    core_skeleton: {
+      subject: coreSkeleton.subject || "",
+      predicate: coreSkeleton.predicate || "",
+      complement_or_object: coreSkeleton.complement_or_object || "",
+      explanation_zh: purifyChineseExplanation(raw?.core_skeleton?.explanation_zh) || buildCoreSkeletonExplanation(coreSkeleton)
+    },
+    faithful_translation: faithfulTranslation,
+    teaching_interpretation: teachingInterpretation,
+    chunk_layers: chunkLayers,
+    grammar_focus: grammarFocus,
+    misreading_traps: purifyChineseList(
+      firstDefined(raw, ["misreading_traps", "misread_points", "common_misreadings"]),
+      4
+    ).length > 0
+      ? purifyChineseList(firstDefined(raw, ["misreading_traps", "misread_points", "common_misreadings"]), 4)
+      : buildFallbackMisreadPoints({
+        sentence: payload.sentence,
+        chunks: splitSentenceIntoChunks(payload.sentence),
+        coreClause: extractCoreClause(payload.sentence, splitSentenceIntoChunks(payload.sentence))
+      }),
+    exam_paraphrase_routes: purifyChineseList(
+      firstDefined(raw, ["exam_paraphrase_routes", "exam_rewrite_points", "exam_paraphrase_points"]),
+      4
+    ).length > 0
+      ? purifyChineseList(firstDefined(raw, ["exam_paraphrase_routes", "exam_rewrite_points", "exam_paraphrase_points"]), 4)
+      : buildFallbackExamRewritePoints({
+        sentence: payload.sentence,
+        paragraph_role: payload.paragraph_role
+      }),
+    simpler_rewrite: typeof firstDefined(raw, ["simpler_rewrite", "simplified_english", "syntactic_variation"]) === "string"
+      ? firstDefined(raw, ["simpler_rewrite", "simplified_english", "syntactic_variation"]).trim()
+      : buildFallbackSyntacticVariation(payload.sentence),
+    simpler_rewrite_translation: purifyChineseExplanation(firstDefined(raw, ["simpler_rewrite_translation", "rewrite_translation"]))
+      || buildRewriteTranslationExplanation({
+        simplerRewrite: typeof firstDefined(raw, ["simpler_rewrite", "simplified_english", "syntactic_variation"]) === "string"
+          ? firstDefined(raw, ["simpler_rewrite", "simplified_english", "syntactic_variation"]).trim()
+          : buildFallbackSyntacticVariation(payload.sentence),
+        faithfulTranslation,
+        coreSkeleton,
+        chunkLayers
+      }) || "当前展示的是本地简化改写说明，可在 AI 精讲恢复后查看更完整解释。",
+    mini_check: typeof firstDefined(raw, ["mini_check", "mini_exercise"]) === "string"
+      ? firstDefined(raw, ["mini_check", "mini_exercise"]).trim()
+      : buildFallbackMiniExercise({
+        chunk_breakdown: chunkLayers.map((item) => `${item.role_zh}：${item.text}`),
+        grammar_points: grammarFocus.map((item) => ({
+          name: item.title_zh,
+          explanation: `${item.explanation_zh}｜为什么重要：${item.why_it_matters_zh}`
+        }))
+      })
   };
 
-  let completion;
+  return recursivelyStripBracketMarkup(contract);
+}
+
+function validateExplainSentenceRawContract(raw) {
+  const requiredKeys = [
+    "original_sentence",
+    "sentence_function",
+    "core_skeleton",
+    "faithful_translation",
+    "teaching_interpretation",
+    "chunk_layers",
+    "grammar_focus",
+    "misreading_traps",
+    "exam_paraphrase_routes",
+    "simpler_rewrite",
+    "simpler_rewrite_translation",
+    "mini_check"
+  ];
+
+  const reasons = [];
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    reasons.push("模型结果不是对象。");
+    return reasons;
+  }
+
+  for (const key of requiredKeys) {
+    if (!(key in raw)) {
+      reasons.push(`缺少字段 ${key}`);
+    }
+  }
+
+  return reasons;
+}
+
+function validateExplainSentencePublicContract(data, payload) {
+  const reasons = [];
+
+  const identityFields = [
+    "client_request_id",
+    "document_id",
+    "sentence_id",
+    "segment_id",
+    "sentence_text_hash",
+    "anchor_label"
+  ];
+  for (const key of identityFields) {
+    if (data?.identity?.[key] !== payload.identity[key]) {
+      reasons.push(`identity.${key} 未正确回填`);
+    }
+  }
+
+  if (data?.original_sentence !== payload.sentence.trim()) {
+    reasons.push("original_sentence 未固定回填请求句子");
+  }
+
+  if (!data?.core_skeleton || typeof data.core_skeleton.explanation_zh !== "string" || !data.core_skeleton.explanation_zh.trim()) {
+    reasons.push("core_skeleton.explanation_zh 缺失");
+  }
+
+  if (!data?.faithful_translation || !isChineseDominantText(data.faithful_translation) || containsTeachingTone(data.faithful_translation)) {
+    reasons.push("faithful_translation 不是合格的中文忠实翻译");
+  }
+
+  if (!data?.teaching_interpretation || !isChineseDominantText(data.teaching_interpretation) || isInterpretationTooSimilar(data.faithful_translation, data.teaching_interpretation)) {
+    reasons.push("teaching_interpretation 不是合格的教学解读");
+  }
+
+  if (!Array.isArray(data?.chunk_layers) || data.chunk_layers.length === 0 || data.chunk_layers.some((item) => !item.text || !item.role_zh || !item.attaches_to || !item.gloss_zh)) {
+    reasons.push("chunk_layers 不满足公共契约");
+  }
+
+  if (!Array.isArray(data?.grammar_focus) || data.grammar_focus.length === 0 || data.grammar_focus.some((item) => !item.title_zh || !item.explanation_zh || !item.why_it_matters_zh)) {
+    reasons.push("grammar_focus 不满足中文主契约");
+  }
+
+  const bracketLeaks = collectBracketLeaks(data);
+  if (bracketLeaks.length > 0) {
+    reasons.push("公共 data 仍存在 bracket 泄露");
+  }
+
+  return reasons;
+}
+
+function buildExplainSentenceFallbackSkeleton(payload) {
+  const chunks = splitSentenceIntoChunks(payload.sentence);
+  const coreClause = extractCoreClause(payload.sentence, chunks);
+  const coreSkeleton = buildFallbackCoreSkeleton(payload.sentence);
+  const chunkLayers = normalizePublicChunkLayers(null, payload.sentence);
+  const grammarFocus = normalizePublicGrammarFocus(null, payload.sentence);
+
+  return recursivelyStripBracketMarkup({
+    identity: {
+      client_request_id: payload.identity.client_request_id,
+      document_id: payload.identity.document_id,
+      sentence_id: payload.identity.sentence_id,
+      segment_id: payload.identity.segment_id,
+      sentence_text_hash: payload.identity.sentence_text_hash,
+      anchor_label: payload.identity.anchor_label
+    },
+    original_sentence: payload.sentence.trim(),
+    sentence_function: {
+      title_zh: "句子定位",
+      explanation_zh: buildSentenceFunctionFromEvidenceType(inferEvidenceTypeFromParagraphRole(payload.paragraph_role))
+    },
+    core_skeleton: {
+      subject: coreSkeleton.subject || "",
+      predicate: coreSkeleton.predicate || "",
+      complement_or_object: coreSkeleton.complement_or_object || "",
+      explanation_zh: buildCoreSkeletonExplanation(coreSkeleton)
+    },
+    faithful_translation: "AI 翻译暂不可用，可稍后重试。",
+    teaching_interpretation: "AI 精讲暂不可用，当前展示本地解析骨架。",
+    chunk_layers: chunkLayers,
+    grammar_focus: grammarFocus,
+    misreading_traps: buildFallbackMisreadPoints({
+      sentence: payload.sentence,
+      chunks,
+      coreClause
+    }),
+    exam_paraphrase_routes: buildFallbackExamRewritePoints({
+      sentence: payload.sentence,
+      paragraph_role: payload.paragraph_role
+    }),
+    simpler_rewrite: buildFallbackSyntacticVariation(payload.sentence) || payload.sentence.trim(),
+    simpler_rewrite_translation: "当前展示的是本地简化改写说明，可在 AI 精讲恢复后查看更完整解释。",
+    mini_check: "重新获取 AI 精讲后可继续检查本句。"
+  });
+}
+
+function parseExplainSentenceModelResult(aiResult) {
+  const text = typeof aiResult?.data?.text === "string"
+    ? aiResult.data.text
+    : typeof aiResult?.data === "string"
+      ? aiResult.data
+      : "";
+
+  if (!text) {
+    return {
+      ok: false,
+      kind: "unparseable_json",
+      reasons: ["模型没有返回可解析文本。"],
+      rawText: ""
+    };
+  }
 
   try {
-    completion = await requestModel(buildExplainSentencePrompt({
-      title,
-      sentence,
-      context,
-      paragraph_theme,
-      paragraph_role,
-      question_prompt
-    }));
+    const parsed = parseModelJson(text);
+    return {
+      ok: true,
+      raw: parsed,
+      rawText: text
+    };
+  } catch {
+    return {
+      ok: false,
+      kind: "unparseable_json",
+      reasons: ["模型返回文本无法恢复为 JSON。"],
+      rawText: text
+    };
+  }
+}
+
+async function requestExplainSentenceModel(aiClient, payload, requestId) {
+  return aiClient.request({
+    requestId,
+    routeName: "ai/explain-sentence",
+    cacheScope: "sentence",
+    identity: buildExplainSentenceCacheIdentity(payload.identity),
+    payload: {
+      prompt: buildProfessorSentencePrompt(payload)
+    },
+    fallbackFactory: async () => buildExplainSentenceFallbackSkeleton(payload)
+  });
+}
+
+async function requestExplainSentenceRepair(aiClient, payload, requestId, previousText, reasons) {
+  return aiClient.request({
+    requestId,
+    routeName: "ai/explain-sentence",
+    cacheScope: "sentence",
+    identity: buildExplainSentenceCacheIdentity(payload.identity),
+    payload: {
+      prompt: buildProfessorSentenceRepairPrompt({
+        payload,
+        previousText,
+        reasons
+      })
+    },
+    fallbackFactory: async () => buildExplainSentenceFallbackSkeleton(payload)
+  });
+}
+
+export async function explainSentence(payload, options = {}) {
+  const requestId = options.requestId || "";
+  const aiClient = options.aiClient || defaultExplainSentenceAIClient;
+
+  console.log("[ai/explain-sentence] calling model", {
+    requestId,
+    sentenceLength: payload.sentence.length,
+    hasContext: Boolean(payload.context?.trim())
+  });
+
+  let aiResult;
+
+  try {
+    aiResult = await requestExplainSentenceModel(aiClient, payload, requestId);
   } catch (error) {
-    const status = typeof error?.status === "number" ? error.status : undefined;
-    const upstreamMessage = typeof error?.message === "string" ? error.message : "";
+    if (error?.code === ERROR_CODES.MODEL_CONFIG_MISSING) {
+      throw error;
+    }
 
-    console.error("[ai/explain-sentence] model request failed", {
-      status,
-      upstreamMessage
-    });
-
-    throw new AppError("调用大模型接口失败。", {
-      statusCode: 502,
-      code: "MODEL_REQUEST_FAILED"
+    throw createAIError(ERROR_CODES.INVALID_MODEL_RESPONSE, {
+      message: "explain-sentence 模型请求失败。",
+      requestId,
+      fallbackAvailable: true
     });
   }
 
-  const content = completion.choices?.[0]?.message?.content;
-  let normalized = normalizeExplainResult(parseModelJson(content), sentence, paragraph_role);
-  let qualityWarnings = validateExplainResultQuality(normalized, sentence);
-  let consistency = validateExplainResultConsistency(normalized, sentence);
-  qualityWarnings = [...qualityWarnings, ...consistency.warnings];
+  if (aiResult.meta?.used_fallback) {
+    return {
+      data: recursivelyStripBracketMarkup(aiResult.data),
+      meta: toExplainSentencePublicMeta(aiResult.meta)
+    };
+  }
 
-  if (qualityWarnings.length >= 2) {
-    console.warn("[ai/explain-sentence] quality warnings after first pass", qualityWarnings);
+  const parsedPrimary = parseExplainSentenceModelResult(aiResult);
+  if (!parsedPrimary.ok) {
+    return {
+      data: buildExplainSentenceFallbackSkeleton(payload),
+      meta: toExplainSentencePublicMeta(aiResult.meta, {
+        used_fallback: true
+      })
+    };
+  }
+
+  let rawContractReasons = validateExplainSentenceRawContract(parsedPrimary.raw);
+  let normalizedContract = normalizePublicExplainSentenceContract(parsedPrimary.raw, payload);
+  let publicContractReasons = validateExplainSentencePublicContract(normalizedContract, payload);
+
+  if (rawContractReasons.length > 0 || publicContractReasons.length > 0) {
+    const repairReasons = [...rawContractReasons, ...publicContractReasons];
+    console.warn("[ai/explain-sentence] contract requires repair", repairReasons);
 
     try {
-      const repairedCompletion = await requestModel(buildExplainSentenceRepairPrompt({
-        title,
-        sentence,
-        context,
-        paragraph_theme,
-        paragraph_role,
-        question_prompt,
-        previousResult: normalized,
-        warnings: qualityWarnings
-      }));
-      const repairedContent = repairedCompletion.choices?.[0]?.message?.content;
-      const repairedNormalized = normalizeExplainResult(parseModelJson(repairedContent), sentence, paragraph_role);
-      const repairedConsistency = validateExplainResultConsistency(repairedNormalized, sentence);
-      const repairedWarnings = [
-        ...validateExplainResultQuality(repairedNormalized, sentence),
-        ...repairedConsistency.warnings
-      ];
+      const repairedResult = await requestExplainSentenceRepair(
+        aiClient,
+        payload,
+        requestId,
+        parsedPrimary.rawText,
+        repairReasons
+      );
 
-      if (repairedWarnings.length <= qualityWarnings.length) {
-        normalized = repairedNormalized;
-        qualityWarnings = repairedWarnings;
-        consistency = repairedConsistency;
+      if (repairedResult.meta?.used_fallback) {
+        return {
+          data: recursivelyStripBracketMarkup(repairedResult.data),
+          meta: toExplainSentencePublicMeta(repairedResult.meta)
+        };
+      }
+
+      const parsedRepair = parseExplainSentenceModelResult(repairedResult);
+      if (!parsedRepair.ok) {
+        return {
+          data: buildExplainSentenceFallbackSkeleton(payload),
+          meta: toExplainSentencePublicMeta(repairedResult.meta, {
+            used_fallback: true
+          })
+        };
+      }
+
+      rawContractReasons = validateExplainSentenceRawContract(parsedRepair.raw);
+      normalizedContract = normalizePublicExplainSentenceContract(parsedRepair.raw, payload);
+      publicContractReasons = validateExplainSentencePublicContract(normalizedContract, payload);
+
+      if (rawContractReasons.length === 0 && publicContractReasons.length === 0) {
+        return {
+          data: normalizedContract,
+          meta: toExplainSentencePublicMeta(repairedResult.meta)
+        };
       }
     } catch (error) {
       console.warn("[ai/explain-sentence] repair pass failed", error?.message || error);
     }
+
+    return {
+      data: buildExplainSentenceFallbackSkeleton(payload),
+      meta: toExplainSentencePublicMeta(aiResult.meta, {
+        used_fallback: true
+      })
+    };
   }
 
-  if (consistency.critical) {
-    console.warn("[ai/explain-sentence] consistency validation failed", consistency.warnings);
-    throw new AppError("句子分析与源句不一致，已拒绝返回该结果。", {
-      statusCode: 502,
-      code: "MODEL_INCONSISTENT_SENTENCE"
-    });
-  }
-
-  if (qualityWarnings.length > 0) {
-    console.warn("[ai/explain-sentence] final quality warnings", qualityWarnings);
-  }
-
-  return enrichExplainResult(normalized, {
-    sentence,
-    paragraph_theme,
-    paragraph_role
-  });
+  return {
+    data: normalizedContract,
+    meta: toExplainSentencePublicMeta(aiResult.meta)
+  };
 }
 
 export const __testables = {
+  buildExplainSentenceFallbackSkeleton,
+  normalizePublicExplainSentenceContract,
+  validateExplainSentencePublicContract,
+  collectBracketLeaks,
+  containsTeachingTone,
   normalizeExplainResult,
   normalizeCoreSkeleton,
   normalizeGrammarFocus,

@@ -7,6 +7,12 @@ import { validateParseSourceRequest } from "../src/validators/parseSource.js";
 
 test("validateExplainSentenceRequest trims strings and preserves optional defaults", () => {
   const result = validateExplainSentenceRequest({
+    client_request_id: "  client-1  ",
+    document_id: "  document-1  ",
+    sentence_id: "  sentence-1  ",
+    segment_id: "  segment-1  ",
+    sentence_text_hash: "  hash-1  ",
+    anchor_label: "  Anchor A  ",
     title: "  Lesson Title  ",
     sentence: "  This is the target sentence.  ",
     context: "  Context here.  ",
@@ -16,6 +22,14 @@ test("validateExplainSentenceRequest trims strings and preserves optional defaul
   });
 
   assert.deepEqual(result, {
+    identity: {
+      client_request_id: "client-1",
+      document_id: "document-1",
+      sentence_id: "sentence-1",
+      segment_id: "segment-1",
+      sentence_text_hash: "hash-1",
+      anchor_label: "Anchor A"
+    },
     title: "Lesson Title",
     sentence: "This is the target sentence.",
     context: "Context here.",
@@ -27,8 +41,26 @@ test("validateExplainSentenceRequest trims strings and preserves optional defaul
 
 test("validateExplainSentenceRequest rejects missing sentence", () => {
   assert.throws(
-    () => validateExplainSentenceRequest({ title: "Only title" }),
+    () => validateExplainSentenceRequest({
+      client_request_id: "client-1",
+      document_id: "document-1",
+      sentence_id: "sentence-1",
+      segment_id: "segment-1",
+      sentence_text_hash: "hash-1",
+      anchor_label: "Anchor A",
+      title: "Only title"
+    }),
     (error) => error instanceof AppError && error.message === "sentence 不能为空。"
+  );
+});
+
+test("validateExplainSentenceRequest rejects missing sentence identity", () => {
+  assert.throws(
+    () => validateExplainSentenceRequest({
+      title: "Lesson Title",
+      sentence: "This is the target sentence."
+    }),
+    (error) => error instanceof AppError && error.code === "INVALID_REQUEST" && error.message === "缺少 sentence identity 字段。"
   );
 });
 

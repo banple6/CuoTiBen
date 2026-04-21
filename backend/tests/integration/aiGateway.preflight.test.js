@@ -79,6 +79,13 @@ test("POST /ai/explain-sentence returns MODEL_CONFIG_MISSING with request_id whe
           "content-type": "application/json"
         },
         body: JSON.stringify({
+          client_request_id: "client-preflight-1",
+          document_id: "document-1",
+          sentence_id: "sentence-1",
+          segment_id: "segment-1",
+          sentence_text_hash: "hash-1",
+          anchor_label: "Anchor 1",
+          title: "Lesson Title",
           sentence: "This is the target sentence.",
           context: "This is the context."
         })
