@@ -6,6 +6,8 @@ struct ProfessorAnalysisServiceResult {
     let requestID: String?
     let keySentenceIDs: [String]
     let questionLinks: [QuestionEvidenceLink]
+    let passageMap: PassageMap?
+    let admissionResult: MindMapAdmissionResult?
     let message: String?
     let structuredError: AIStructuredError?
 
@@ -262,12 +264,19 @@ enum ProfessorAnalysisService {
                             ].joined(separator: " "),
                             severity: .info
                         )
+                        let enrichedBundle = bundle.enrichedWithAIAnalysis(
+                            overview: payload.overview,
+                            paragraphCards: payload.paragraphCards,
+                            sentenceCards: []
+                        )
                         return ProfessorAnalysisServiceResult(
                             delta: delta,
                             meta: decoded.meta,
                             requestID: decoded.requestID,
                             keySentenceIDs: payload.keySentenceIDs,
                             questionLinks: payload.questionLinks,
+                            passageMap: enrichedBundle.passageMap,
+                            admissionResult: enrichedBundle.mindMapAdmissionResult,
                             message: decoded.meta.usedFallback ? "AI 地图分析暂不可用，已展示本地结构骨架。" : nil,
                             structuredError: decoded.structuredError
                         )
@@ -525,12 +534,15 @@ enum ProfessorAnalysisService {
             severity: .warning
         )
 
+        let enrichedBundle = bundle.applyingProfessorAnalysis(fallback.delta)
         return ProfessorAnalysisServiceResult(
             delta: fallback.delta,
             meta: fallback.meta,
             requestID: structuredError.requestID,
             keySentenceIDs: fallback.keySentenceIDs,
             questionLinks: [],
+            passageMap: enrichedBundle.passageMap,
+            admissionResult: enrichedBundle.mindMapAdmissionResult,
             message: fallback.message,
             structuredError: structuredError
         )

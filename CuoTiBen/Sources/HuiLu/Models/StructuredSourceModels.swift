@@ -52,41 +52,6 @@ struct Source: Identifiable, Codable, Equatable, Hashable {
     }
 }
 
-enum SourceContentKind: String, Codable, Equatable, Hashable {
-    case passageBody = "passage_body"
-    case passageHeading = "passage_heading"
-    case chineseExplanation = "chinese_explanation"
-    case bilingualAnnotation = "bilingual_annotation"
-    case questionSupport = "question_support"
-    case answerSupport = "answer_support"
-    case polluted = "polluted"
-    case synthetic = "synthetic"
-    case unknown = "unknown"
-
-    var displayName: String {
-        switch self {
-        case .passageBody:
-            return "英文正文"
-        case .passageHeading:
-            return "正文标题"
-        case .chineseExplanation:
-            return "中文说明"
-        case .bilingualAnnotation:
-            return "双语注释"
-        case .questionSupport:
-            return "题目辅助"
-        case .answerSupport:
-            return "答案辅助"
-        case .polluted:
-            return "污染块"
-        case .synthetic:
-            return "本地补全"
-        case .unknown:
-            return "未知来源"
-        }
-    }
-}
-
 struct SourceHygieneSnapshot: Codable, Equatable, Hashable {
     let score: Double
     let reversedRepaired: Bool
@@ -112,8 +77,11 @@ struct SourceHygieneSnapshot: Codable, Equatable, Hashable {
         englishRatio >= 0.42 &&
         !flags.contains("polluted") &&
         !flags.contains("chinese_explanation") &&
+        !flags.contains("bilingual_note") &&
         !flags.contains("bilingual_annotation") &&
-        !flags.contains("instructional")
+        !flags.contains("instructional") &&
+        !flags.contains("auxiliary_source") &&
+        !flags.contains("noise")
     }
 
     static let clean = SourceHygieneSnapshot(
@@ -124,27 +92,6 @@ struct SourceHygieneSnapshot: Codable, Equatable, Hashable {
         englishRatio: 1,
         ocrConfidence: 1,
         flags: []
-    )
-}
-
-struct NodeProvenance: Codable, Equatable, Hashable {
-    let sourceSegmentID: String?
-    let sourceSentenceID: String?
-    let sourceKind: SourceContentKind
-    let consistencyScore: Double
-
-    private enum CodingKeys: String, CodingKey {
-        case sourceSegmentID = "source_segment_id"
-        case sourceSentenceID = "source_sentence_id"
-        case sourceKind = "source_kind"
-        case consistencyScore = "consistency_score"
-    }
-
-    static let unknown = NodeProvenance(
-        sourceSegmentID: nil,
-        sourceSentenceID: nil,
-        sourceKind: .unknown,
-        consistencyScore: 0.5
     )
 }
 
@@ -2200,6 +2147,8 @@ struct StructuredSourceBundle: Equatable {
     let professorSentenceCards: [ProfessorSentenceCard]
     let questionLinks: [QuestionEvidenceLink]
     let zoningSummary: DocumentZoningSummary
+    let passageMap: PassageMap?
+    let mindMapAdmissionResult: MindMapAdmissionResult?
 
     // 缓存索引（惰性构建，一次性）
     private let _cachedFlatNodes: [OutlineNode]
@@ -2217,7 +2166,9 @@ struct StructuredSourceBundle: Equatable {
         lhs.paragraphTeachingCards == rhs.paragraphTeachingCards &&
         lhs.professorSentenceCards == rhs.professorSentenceCards &&
         lhs.questionLinks == rhs.questionLinks &&
-        lhs.zoningSummary == rhs.zoningSummary
+        lhs.zoningSummary == rhs.zoningSummary &&
+        lhs.passageMap == rhs.passageMap &&
+        lhs.mindMapAdmissionResult == rhs.mindMapAdmissionResult
     }
 
     init(
@@ -2235,7 +2186,9 @@ struct StructuredSourceBundle: Equatable {
             answerKeyParagraphCount: 0,
             vocabularyParagraphCount: 0,
             metaInstructionParagraphCount: 0
-        )
+        ),
+        passageMap: PassageMap? = nil,
+        mindMapAdmissionResult: MindMapAdmissionResult? = nil
     ) {
         self.source = source
         self.segments = segments
@@ -2246,6 +2199,8 @@ struct StructuredSourceBundle: Equatable {
         self.professorSentenceCards = professorSentenceCards
         self.questionLinks = questionLinks
         self.zoningSummary = zoningSummary
+        self.passageMap = passageMap
+        self.mindMapAdmissionResult = mindMapAdmissionResult
         self._cachedFlatNodes = Self.flattenSafe(nodes: outline, maxDepth: 20)
         self._sentenceIndex = Dictionary(sentences.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         self._segmentIndex = Dictionary(segments.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -2435,7 +2390,7 @@ struct StructuredSourceBundle: Equatable {
             questionLinks: questionLinks
         )
 
-        return StructuredSourceBundle(
+        let provisionalBundle = StructuredSourceBundle(
             source: source,
             segments: segments,
             sentences: sentences,
@@ -2445,6 +2400,22 @@ struct StructuredSourceBundle: Equatable {
             professorSentenceCards: mergedSentenceCards,
             questionLinks: questionLinks,
             zoningSummary: zoningSummary
+        )
+        let passageMap = MindMapAdmissionService.buildPassageMap(from: provisionalBundle)
+        let admissionResult = MindMapAdmissionService.admit(bundle: provisionalBundle, passageMap: passageMap)
+
+        return StructuredSourceBundle(
+            source: provisionalBundle.source,
+            segments: provisionalBundle.segments,
+            sentences: provisionalBundle.sentences,
+            outline: provisionalBundle.outline,
+            passageOverview: provisionalBundle.passageOverview,
+            paragraphTeachingCards: provisionalBundle.paragraphTeachingCards,
+            professorSentenceCards: provisionalBundle.professorSentenceCards,
+            questionLinks: provisionalBundle.questionLinks,
+            zoningSummary: provisionalBundle.zoningSummary,
+            passageMap: passageMap.withDiagnostics(admissionResult.diagnostics),
+            mindMapAdmissionResult: admissionResult
         )
     }
 
@@ -2507,7 +2478,7 @@ struct StructuredSourceBundle: Equatable {
                     provenance: NodeProvenance(
                         sourceSegmentID: card.segmentID,
                         sourceSentenceID: anchorSentenceID,
-                        sourceKind: .questionSupport,
+                        sourceKind: .question,
                         consistencyScore: localSentenceIDs.isEmpty ? 0.58 : 0.76
                     ),
                     children: []

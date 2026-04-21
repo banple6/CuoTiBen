@@ -192,7 +192,7 @@ enum NormalizedDocumentConverter {
             severity: .info
         )
 
-        let bundle = StructuredSourceBundle(
+        let provisionalBundle = StructuredSourceBundle(
             source: source,
             segments: segments,
             sentences: allSentences,
@@ -202,6 +202,21 @@ enum NormalizedDocumentConverter {
             professorSentenceCards: sentenceCards,
             questionLinks: questionLinks,
             zoningSummary: zoningSummary
+        )
+        let passageMap = MindMapAdmissionService.buildPassageMap(from: provisionalBundle)
+        let admissionResult = MindMapAdmissionService.admit(bundle: provisionalBundle, passageMap: passageMap)
+        let bundle = StructuredSourceBundle(
+            source: provisionalBundle.source,
+            segments: provisionalBundle.segments,
+            sentences: provisionalBundle.sentences,
+            outline: provisionalBundle.outline,
+            passageOverview: provisionalBundle.passageOverview,
+            paragraphTeachingCards: provisionalBundle.paragraphTeachingCards,
+            professorSentenceCards: provisionalBundle.professorSentenceCards,
+            questionLinks: provisionalBundle.questionLinks,
+            zoningSummary: provisionalBundle.zoningSummary,
+            passageMap: passageMap.withDiagnostics(admissionResult.diagnostics),
+            mindMapAdmissionResult: admissionResult
         )
 
         return StructuredSourceParsePayload(
@@ -441,25 +456,25 @@ enum NormalizedDocumentConverter {
         let profile = passageBodyProfile(for: text)
 
         if paragraph.zoneRole == .question || blockTypes.contains(.questionStem) || blockTypes.contains(.optionList) {
-            return .questionSupport
+            return .question
         }
         if paragraph.zoneRole == .answerKey {
-            return .answerSupport
+            return .answerKey
         }
         if blockTypes.contains(.chineseExplanation) {
-            return .chineseExplanation
+            return .chineseInstruction
         }
         if blockTypes.contains(.bilingualNote) || blockTypes.contains(.glossary) {
-            return .bilingualAnnotation
+            return .bilingualNote
         }
         if looksLikeInstructionOrQuestionParagraph(text) || paragraph.zoneRole == .metaInstruction {
-            return .polluted
+            return .chineseInstruction
         }
         if looksLikeBilingualGlossaryParagraph(text, profile: profile) {
-            return .bilingualAnnotation
+            return .bilingualNote
         }
         if profile.chineseCharacters > max(12, Int(Double(max(profile.englishLetters, 1)) * 0.9)) {
-            return .polluted
+            return .noise
         }
         if looksLikePassageHeading(text, profile: profile) {
             return .passageHeading
@@ -504,32 +519,29 @@ enum NormalizedDocumentConverter {
         if hasChineseExplanation { flags.append("chinese_explanation") }
         if hasBilingualAnnotation { flags.append("bilingual_annotation") }
         if hasInstructionalLeak { flags.append("instructional") }
-        if sourceKind == .polluted { flags.append("polluted") }
+        if sourceKind == .noise { flags.append("polluted") }
         if mixedContamination { flags.append("mixed_contamination") }
 
-        var score = 1.0
-        if wasRepaired { score -= 0.08 }
-        if mixedContamination { score -= 0.24 }
-        if chineseRatio > 0.24 { score -= min((chineseRatio - 0.24) * 0.8, 0.18) }
-        if englishRatio < 0.48 { score -= min((0.48 - englishRatio) * 0.85, 0.2) }
-        if averageOCRConfidence < 0.72 {
-            score -= min((0.72 - averageOCRConfidence) * 0.46, 0.18)
-        }
-        if sourceKind == .chineseExplanation || sourceKind == .bilingualAnnotation {
-            score -= 0.24
-        }
-        if sourceKind == .questionSupport || sourceKind == .answerSupport || sourceKind == .polluted {
-            score -= 0.3
-        }
-
-        return SourceHygieneSnapshot(
-            score: min(max(score, 0.02), 1),
+        let evaluation = SourceHygieneScorer.evaluate(
+            text: repairedText,
+            sourceKind: sourceKind,
+            ocrConfidence: averageOCRConfidence,
             reversedRepaired: wasRepaired,
             hasMixedContamination: mixedContamination,
             chineseRatio: chineseRatio,
             englishRatio: englishRatio,
-            ocrConfidence: averageOCRConfidence,
-            flags: flags
+            blockTypes: blocks.map(\.blockType),
+            zoneRole: paragraph.zoneRole
+        )
+
+        return SourceHygieneSnapshot(
+            score: evaluation.snapshot.score,
+            reversedRepaired: evaluation.snapshot.reversedRepaired,
+            hasMixedContamination: evaluation.snapshot.hasMixedContamination,
+            chineseRatio: evaluation.snapshot.chineseRatio,
+            englishRatio: evaluation.snapshot.englishRatio,
+            ocrConfidence: evaluation.snapshot.ocrConfidence,
+            flags: Array(Set(flags + evaluation.snapshot.flags)).sorted()
         )
     }
 
@@ -644,7 +656,10 @@ enum NormalizedDocumentConverter {
                     provenance: NodeProvenance(
                         sourceSegmentID: segmentID,
                         sourceSentenceID: sentenceID,
+                        sourcePage: paragraph.page,
                         sourceKind: segmentSourceKind,
+                        generatedFrom: .normalizedDocument,
+                        hygieneScore: sentenceHygiene.score,
                         consistencyScore: sentenceHygiene.score
                     ),
                     hygiene: sentenceHygiene
@@ -666,7 +681,10 @@ enum NormalizedDocumentConverter {
                 provenance: NodeProvenance(
                     sourceSegmentID: segmentID,
                     sourceSentenceID: sentenceIDs.first,
+                    sourcePage: paragraph.page,
                     sourceKind: segmentSourceKind,
+                    generatedFrom: .normalizedDocument,
+                    hygieneScore: segmentHygiene.score,
                     consistencyScore: segmentHygiene.score
                 ),
                 hygiene: segmentHygiene
@@ -1018,7 +1036,9 @@ enum NormalizedDocumentConverter {
                     provenance: NodeProvenance(
                         sourceSegmentID: card.segmentID,
                         sourceSentenceID: anchorSentenceID,
-                        sourceKind: .questionSupport,
+                        sourceKind: .question,
+                        generatedFrom: .questionLink,
+                        hygieneScore: paragraphSegment?.hygiene.score ?? 0.5,
                         consistencyScore: localSentenceIDs.isEmpty ? 0.58 : 0.76
                     ),
                     children: []
@@ -1262,7 +1282,7 @@ enum NormalizedDocumentConverter {
         if role == .evidence && (lower.contains("for example") || lower.contains("for instance")) { score += 25 }
         score += sentence.hygiene.score * 24
         if sentence.provenance.sourceKind == .passageHeading { score -= 12 }
-        if sentence.provenance.sourceKind == .chineseExplanation || sentence.provenance.sourceKind == .bilingualAnnotation {
+        if sentence.provenance.sourceKind == .chineseInstruction || sentence.provenance.sourceKind == .bilingualNote {
             score -= 30
         }
         return score

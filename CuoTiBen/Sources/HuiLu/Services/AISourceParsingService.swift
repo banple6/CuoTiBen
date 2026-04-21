@@ -217,12 +217,12 @@ enum AISourceParsingService {
                 }
 
                 let remotePayload = StructuredSourceParsePayload(
-                    bundle: StructuredSourceBundle(
+                    bundle: bundleWithAdmission(StructuredSourceBundle(
                         source: payload.source,
                         segments: payload.segments,
                         sentences: payload.sentences,
                         outline: payload.outline
-                    ),
+                    )),
                     sectionTitles: payload.sectionTitles ?? [],
                     topicTags: payload.topicTags ?? [],
                     candidateKnowledgePoints: payload.candidateKnowledgePoints ?? []
@@ -328,7 +328,7 @@ enum AISourceParsingService {
             sentences: sentences
         )
 
-        let bundle = StructuredSourceBundle(
+        let bundle = bundleWithAdmission(StructuredSourceBundle(
             source: Source(
                 id: sourceID,
                 title: title.isEmpty ? "未命名资料" : title,
@@ -344,7 +344,7 @@ enum AISourceParsingService {
             segments: localSegments,
             sentences: sentences,
             outline: outline
-        )
+        ))
 
         let mergedBundle = mergeSentenceGeometry(into: bundle, using: draft)
         let metadata = makeLocalMetadata(bundle: mergedBundle)
@@ -415,12 +415,12 @@ private extension AISourceParsingService {
             print("[AISourceParsingService] merged OCR geometry for \(mergedCount)/\(bundle.sentences.count) sentences")
         }
 
-        return StructuredSourceBundle(
+        return bundleWithAdmission(StructuredSourceBundle(
             source: bundle.source,
             segments: bundle.segments,
             sentences: mergedSentences,
             outline: bundle.outline
-        )
+        ))
     }
 
     static func mergeRemotePayload(
@@ -446,7 +446,7 @@ private extension AISourceParsingService {
             segments: mergedSegments,
             sentences: mergedSentences
         )
-        let mergedBundle = StructuredSourceBundle(
+        let mergedBundle = bundleWithAdmission(StructuredSourceBundle(
             source: mergeSource(
                 remote: remoteWithGeometry.source,
                 fallback: fallback.bundle.source,
@@ -457,7 +457,7 @@ private extension AISourceParsingService {
             segments: mergedSegments,
             sentences: mergedSentences,
             outline: mergedOutline
-        )
+        ))
         let localMetadata = makeLocalMetadata(bundle: mergedBundle)
 
         return StructuredSourceParsePayload(
@@ -477,6 +477,24 @@ private extension AISourceParsingService {
                 fallback: fallback.candidateKnowledgePoints + localMetadata.candidateKnowledgePoints,
                 limit: 12
             )
+        )
+    }
+
+    private static func bundleWithAdmission(_ bundle: StructuredSourceBundle) -> StructuredSourceBundle {
+        let passageMap = MindMapAdmissionService.buildPassageMap(from: bundle)
+        let admissionResult = MindMapAdmissionService.admit(bundle: bundle, passageMap: passageMap)
+        return StructuredSourceBundle(
+            source: bundle.source,
+            segments: bundle.segments,
+            sentences: bundle.sentences,
+            outline: bundle.outline,
+            passageOverview: bundle.passageOverview,
+            paragraphTeachingCards: bundle.paragraphTeachingCards,
+            professorSentenceCards: bundle.professorSentenceCards,
+            questionLinks: bundle.questionLinks,
+            zoningSummary: bundle.zoningSummary,
+            passageMap: passageMap.withDiagnostics(admissionResult.diagnostics),
+            mindMapAdmissionResult: admissionResult
         )
     }
 

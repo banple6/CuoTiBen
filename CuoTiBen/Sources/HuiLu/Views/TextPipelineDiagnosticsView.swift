@@ -7,6 +7,13 @@ struct TextPipelineDiagnosticsView: View {
     @State private var events: [TextPipelineDiagnostics.PipelineEvent] = []
     @State private var filterStage: String? = nil
 
+    private var latestAdmissionSummary: MindMapAdmissionSummary? {
+        events
+            .filter { $0.stage == "导图准入" }
+            .last
+            .flatMap(MindMapAdmissionSummary.init(event:))
+    }
+
     private var filteredEvents: [TextPipelineDiagnostics.PipelineEvent] {
         guard let stage = filterStage else { return events }
         return events.filter { $0.stage == stage }
@@ -39,6 +46,12 @@ struct TextPipelineDiagnosticsView: View {
                 }
 
                 List {
+                    if let summary = latestAdmissionSummary {
+                        Section("导图准入概览") {
+                            MindMapAdmissionSummaryCard(summary: summary)
+                        }
+                    }
+
                     if filteredEvents.isEmpty {
                         Text("暂无管线诊断事件")
                             .foregroundColor(.secondary)
@@ -119,6 +132,87 @@ struct TextPipelineDiagnosticsView: View {
         case .warning: return .orange
         case .error: return .red
         case .repaired: return .green
+        }
+    }
+}
+
+private struct MindMapAdmissionSummary {
+    let mainlineCount: Int
+    let auxiliaryCount: Int
+    let rejectedCount: Int
+    let averageHygiene: String
+    let averageConsistency: String
+    let topRejectedReasons: String
+
+    nonisolated init?(event: TextPipelineDiagnostics.PipelineEvent) {
+        let pairs = event.message
+            .split(separator: " ")
+            .compactMap { chunk -> (String, String)? in
+                let parts = chunk.split(separator: "=", maxSplits: 1).map(String.init)
+                guard parts.count == 2 else { return nil }
+                return (parts[0], parts[1])
+            }
+        let values = Dictionary(uniqueKeysWithValues: pairs)
+        guard let mainline = values["mainline_count"],
+              let auxiliary = values["auxiliary_count"],
+              let rejected = values["rejected_count"]
+        else {
+            return nil
+        }
+
+        self.mainlineCount = Int(mainline) ?? 0
+        self.auxiliaryCount = Int(auxiliary) ?? 0
+        self.rejectedCount = Int(rejected) ?? 0
+        self.averageHygiene = values["average_hygiene"] ?? "0.00"
+        self.averageConsistency = values["average_consistency"] ?? "0.00"
+        self.topRejectedReasons = values["top_rejected_reasons"]?
+            .replacingOccurrences(of: "||", with: " | ")
+            ?? "none"
+    }
+}
+
+private struct MindMapAdmissionSummaryCard: View {
+    let summary: MindMapAdmissionSummary
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                stat(title: "主线", value: "\(summary.mainlineCount)", color: .green)
+                Spacer()
+                stat(title: "辅助", value: "\(summary.auxiliaryCount)", color: .orange)
+                Spacer()
+                stat(title: "拒绝", value: "\(summary.rejectedCount)", color: .red)
+            }
+
+            HStack {
+                Label("平均 hygiene", systemImage: "sparkles")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Text(summary.averageHygiene)
+                    .font(.caption.monospaced())
+                Spacer()
+                Label("平均 consistency", systemImage: "point.3.connected.trianglepath.dotted")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Text(summary.averageConsistency)
+                    .font(.caption.monospaced())
+            }
+
+            Text("主要拒绝原因：\(summary.topRejectedReasons)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func stat(title: String, value: String, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundColor(.secondary)
+            Text(value)
+                .font(.headline.monospacedDigit())
+                .foregroundColor(color)
         }
     }
 }

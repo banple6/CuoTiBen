@@ -56,7 +56,10 @@ enum LocalPassageFallbackBuilder {
                     NodeProvenance(
                         sourceSegmentID: segment.id,
                         sourceSentenceID: segment.sentenceIDs.first,
+                        sourcePage: segment.page,
                         sourceKind: .passageBody,
+                        generatedFrom: .localFallback,
+                        hygieneScore: segment.hygiene.score,
                         consistencyScore: 0.82
                     )
                 )
