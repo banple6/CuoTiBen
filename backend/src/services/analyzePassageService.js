@@ -1,1186 +1,843 @@
-import { getDashScopeConfig } from "../config/env.js";
-import { AppError } from "../lib/appError.js";
-import { getDashScopeClient } from "../lib/dashscope.js";
+import { createAIClient } from "../models/aiClient.js";
+import { attachAIErrorMetadata, createAIError, ERROR_CODES } from "../models/errors.js";
+import { createModelRegistry } from "../models/modelRegistry.js";
 
-// ─────────────────────────────────────────────
-// 教授级全文教学分析服务
-// 一次 LLM 调用：文章总览 + 段落教学卡 + 关键句详析
-// ─────────────────────────────────────────────
-
-const MAX_PARAGRAPHS = 20;
-const MAX_KEY_SENTENCES = 8;
-const MAX_PARAGRAPH_CHARS = 900;
-const COMMON_ENGLISH_LEXICON = new Set([
-  "allow", "balance", "contact", "corporation", "cultural", "debate", "evidence", "growth",
-  "heading", "logical", "museum", "peaceful", "prosperity", "question", "reading", "sustainable",
-  "tourism", "visitor", "quantity", "archaeology", "community", "economic", "environmental"
+const MAX_PARAGRAPHS = 4;
+const MAX_KEY_SENTENCE_IDS = 6;
+const MAX_THEME_LENGTH = 50;
+const MAX_RELATION_LENGTH = 60;
+const MAX_EXAM_VALUE_LENGTH = 60;
+const MAX_BLIND_SPOT_LENGTH = 50;
+const MAX_OVERVIEW_LENGTH = 90;
+const ARGUMENT_ROLES = new Set([
+  "background",
+  "support",
+  "objection",
+  "transition",
+  "evidence",
+  "conclusion"
+]);
+const AUXILIARY_SOURCE_KINDS = new Set([
+  "question",
+  "answer_key",
+  "vocabulary_support",
+  "chinese_instruction"
+]);
+const FORBIDDEN_FIELDS = new Set([
+  "grammar_focus",
+  "faithful_translation",
+  "teaching_interpretation",
+  "core_skeleton",
+  "chunk_layers",
+  "sentence_function",
+  "simpler_rewrite",
+  "simpler_rewrite_translation",
+  "mini_check",
+  "sentence_core",
+  "translation",
+  "main_structure",
+  "rewrite_example"
 ]);
 
-function buildAnalyzePassagePrompt({ title, paragraphs, keySentences }) {
-  const safeParagraphs = paragraphs.slice(0, MAX_PARAGRAPHS);
-  const safeSentences = keySentences.slice(0, MAX_KEY_SENTENCES);
+const defaultAnalyzePassageAIClient = createAIClient({
+  registry: createModelRegistry()
+});
 
-  const paragraphBlock = safeParagraphs
-    .map((p) => `[P${typeof p.index === "number" ? p.index : 0}] ${p.text.slice(0, MAX_PARAGRAPH_CHARS)}`)
-    .join("\n\n");
-
-  const sentenceBlock = safeSentences
-    .map((s) => `[${s.ref}] (来自段落 P${typeof s.paragraphIndex === "number" ? s.paragraphIndex : 0}) ${s.text}`)
-    .join("\n");
-
-  return [
-    "你是一位顶级英语教授，正在为一个重要学生逐段逐句拆解一篇英语阅读材料。",
-    "你不是摘要器或翻译器。",
-    "你的目标是：让学生看完你的分析后，能真正读懂每一句。",
-    "你必须只输出一个合法 JSON 对象。不要输出 Markdown、注释或额外文字。",
-    "",
-    "═══════════════════════",
-    "资料标题：" + (title || "未提供"),
-    "═══════════════════════",
-    "",
-    "正文段落：",
-    paragraphBlock,
-    "",
-    "关键句子（需逐句精析）：",
-    sentenceBlock,
-    "",
-    "═══════════════════════",
-    "输出规则（严格执行）：",
-    "═══════════════════════",
-    "",
-    "JSON 必须包含三个顶层字段：passage_overview、paragraph_cards、sentence_analyses。",
-    "",
-    "一、passage_overview 对象：",
-    "  article_theme：像课堂讲义里的总标题说明，用中文一段话点明文章真正讨论的问题，不要写成'文章主要讲了什么'。",
-    "  author_core_question：用中文一句话说清作者真正追问的问题，要像老师在黑板上写出的核心问题。",
-    "  progression_path：用中文描述从第1段到最后一段，作者怎样一步步推进判断。推荐使用“先……→再……→最后……”这种讲义式表达。",
-    "  syntax_highlights：字符串数组，最值得关注的 3-5 个句法结构。每项都要写出“结构｜为什么值得学｜最容易挂错哪里”。",
-    "  likely_question_types：字符串数组，最容易出的 3-5 类题。每项必须像“主旨题：最后一段如何收束前文判断”这种具体表达。",
-    "  logic_pitfalls：字符串数组，学生最容易错的 3-5 个逻辑点。要写清是范围、让步、因果、指代还是态度读偏，并指出会错在哪里。",
-    "  paragraph_function_map：字符串数组，每项 '第X段｜角色｜一句话功能'。语气要像老师带着学生看结构图。",
-    "  reading_traps：字符串数组，学生最容易误读的 3-5 个点。",
-    "  vocabulary_highlights：字符串数组，最值得学习的 5-8 个词汇/搭配。",
-    "",
-    "二、paragraph_cards 数组（每段一项）：",
-    "  paragraph_index：段落编号，必须对应输入里的 [Pindex] 原始编号，不要重排。",
-    "  theme：中文，本段真正要立住的判断或说明点。不能是'本段主要讲了...'式的废话，要像讲义里的段落主旨，而且必须只根据本段内容生成，不能揉入别段信息。",
-    "  argument_role：必须为以下之一：background / support / objection / transition / evidence / conclusion。",
-    "  core_sentence_local_index：段内最关键的一句话的序号（从0开始）。",
-    "  keywords：5个本段最重要的英语关键词或短语。",
-    "  relation_to_previous：中文，本段和上一段之间的逻辑关系，不要说'承接上文'这类空话，要写清上一段做了什么、这一段怎么接或怎么转。",
-    "  exam_value：中文，说清这段内容在阅读理解考试中最可能对应什么题型、命题人会抓哪层信息、学生最容易掉进什么陷阱。",
-    "  teaching_focuses：字符串数组，2-3个具体教学动作。每条都必须体现“先读哪层 / 为什么重要 / 学生会怎么错”，像老师课堂提示，而且必须能在本段文本里找到支点。",
-    "  student_blind_spot：中文一句话，学生最容易在本段读偏的点。要写成能直接提醒学生的讲义批注。",
-    "",
-    "三、sentence_analyses 数组（每个关键句一项）：",
-    "  sentence_ref：对应输入的 [S_X_Y] 编号。",
-    "  evidence_type：本句在论证中是什么角色：core_claim / supporting_evidence / background_info / counter_argument / transition_signal / conclusion_marker。",
-    "  sentence_function：用中文说明这句在论证里到底在做什么，如“核心判断句：作者真正要成立的判断在这里”。",
-    "  core_skeleton：对象，字段固定为 subject、predicate、complement_or_object。必须明确主干。",
-    "  chunk_layers：数组，每项是对象，字段固定为 text、role、attaches_to、gloss。要说明每个语块是核心信息、框架、后置修饰还是补充说明。",
-    "  grammar_focus：数组，每项包含 phenomenon、function、why_it_matters、title_zh、explanation_zh、why_it_matters_zh、example_en。只保留真正帮助理解的 1-3 个。",
-    "  faithful_translation：忠实翻译。中文自然，但要尽量贴住原句真实意思，不要偷换成教学评论。",
-    "  teaching_interpretation：教学解读。说明这句话真正承担什么功能、该先抓哪一层、学生最可能错在哪。绝不能只是把 faithful_translation 换个说法重复一遍。",
-    "  vocabulary_in_context：数组，每项包含 term 和 meaning。meaning 是本句中的具体含义，不要给通用词典义。",
-    "  misreading_traps：字符串数组，学生最容易在这句话上犯的 1-3 个误读。必须具体说明会把哪一层挂错。",
-    "  exam_paraphrase_routes：字符串数组，1-3 条，这句话在阅读理解题中可能怎么被改写出题。必须给出具体改写路线。",
-    "  simpler_rewrite：用更简单的英语重写这句话，保持原意。",
-    "  simpler_rewrite_translation：中文说明这条简化改写在说什么、保留了原句哪层意思、主要简化了哪层结构。",
-    "  mini_check：一个针对性微练习，测试学生是否真的理解了本句。",
-    "",
-    "═══════════════════════",
-    "质量底线（违反任何一条都视为失败）：",
-    "═══════════════════════",
-    "1. core_skeleton 绝不能是'本句主要讲了...'或'本句说的是...'，必须指出具体的主语+谓语+宾语。",
-    "2. faithful_translation 必须像可靠译文，teaching_interpretation 才负责老师口吻的解释，两者不能混写，也不能互相抄写。",
-    "3. evidence_type 不能空缺，也不能乱给；它决定了学生先把这句当背景、转折还是核心判断。",
-    "4. misreading_traps 绝不能是泛泛的'注意理解'，必须说清学生具体会怎么误读。",
-    "5. exam_paraphrase_routes 绝不能只说'可能考同义替换'，必须给出具体的替换示例。",
-    "6. chunk_layers 不能只按逗号切，要按语义关系切，而且至少有一项标为“核心信息”。",
-    "7. grammar_focus 的解释不能只给术语名称，必须说清在本句中的具体作用；title_zh、explanation_zh、why_it_matters_zh 必须是中文主导的可展示文本。",
-    "8. teaching_focuses 不能是抽象建议（如'注意语法'），必须是具体的教学行动。",
-    "9. passage_overview 和 paragraph_cards 的口吻必须像课堂讲义，不像摘要器或题解答案。",
-    "10. 所有中文解释口吻：严谨但平易的英语教授。",
-    "11. 如果信息不足，返回空字符串或空数组，不能删字段。"
-  ].join("\n");
+function normalizeString(value, fallback = "") {
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
 }
 
 function normalizeArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
-function normalizeString(value, fallback = "") {
-  return typeof value === "string" && value.trim() ? value.trim() : fallback;
-}
-
-function isChineseDominantText(text) {
-  if (!text || typeof text !== "string") return false;
-  const chineseMatches = text.match(/[\u4e00-\u9fff]/g) || [];
-  const latinMatches = text.match(/[A-Za-z]/g) || [];
-  if (chineseMatches.length === 0) return false;
-  return chineseMatches.length >= Math.max(3, latinMatches.length * 0.55);
-}
-
-function extractChineseDominantClauses(text) {
-  if (!text || typeof text !== "string") return [];
-  return text
-    .split(/[；;。！？!?]\s*/g)
-    .map((clause) => clause.trim())
-    .filter((clause) => clause.length >= 4 && isChineseDominantText(clause));
-}
-
-function purifyChineseExplanation(text) {
-  const normalized = normalizeString(text);
-  if (!normalized) return "";
-  if (isChineseDominantText(normalized)) return normalized;
-
-  const clauses = extractChineseDominantClauses(normalized);
-  if (clauses.length > 0) {
-    return clauses.join("；");
+function clipText(value, maxLength) {
+  const normalized = normalizeString(value);
+  if (!normalized) {
+    return "";
   }
 
-  return "";
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1).trim()}…` : normalized;
 }
 
-function purifyChineseDisplayText(text) {
-  return purifyChineseExplanation(text)
-    .replace(/\s+/g, " ")
-    .trim();
+function chineseCount(text) {
+  return (normalizeString(text).match(/[\u4e00-\u9fff]/g) || []).length;
 }
 
-function purifyChineseList(values, limit = 4) {
-  return normalizeArray(values)
-    .map((item) => purifyChineseDisplayText(String(item)))
-    .filter(Boolean)
-    .slice(0, limit);
+function latinCount(text) {
+  return (normalizeString(text).match(/[A-Za-z]/g) || []).length;
 }
 
-function firstDefined(raw, keys) {
-  for (const key of keys) {
-    if (raw?.[key] !== undefined) {
-      return raw[key];
-    }
-  }
-  return undefined;
-}
-
-function englishTokens(text) {
-  return normalizeString(text)
-    .match(/[A-Za-z]+(?:'[A-Za-z]+)?/g)
-    ?.map((token) => token.toLowerCase()) ?? [];
-}
-
-function reverseString(value) {
-  return String(value || "").split("").reverse().join("");
-}
-
-function textEnglishProfile(text) {
-  const normalized = normalizeString(text);
-  const englishLetters = (normalized.match(/[A-Za-z]/g) || []).length;
-  const chineseCharacters = (normalized.match(/[\u4e00-\u9fff]/g) || []).length;
-  const tokens = englishTokens(normalized);
-  const ratioBase = englishLetters + chineseCharacters;
-  return {
-    englishLetters,
-    chineseCharacters,
-    englishRatio: ratioBase === 0 ? 0 : englishLetters / ratioBase,
-    tokens
-  };
-}
-
-function looksLikeInstructionOrQuestionParagraph(text) {
-  const normalized = normalizeString(text);
-  if (!normalized) return false;
-  const lower = normalized.toLowerCase();
-
-  if (/第[一二三四五六七八九十\d]+部分|说明|题干|答案|解析|配对|标题|选择|判断|先做|对照答案|把下列|请根据|阅读下面|题目/.test(normalized)) {
-    return true;
-  }
-
-  if (/\bquestions?\b|\bheadings?\b|\bchoose\b|\bmatch(?:ing)?\b|\btrue\b|\bfalse\b|\bnot given\b|\banswer key\b/.test(lower)) {
-    return true;
-  }
-
-  return false;
-}
-
-function looksLikeBilingualGlossaryParagraph(text) {
-  const normalized = normalizeString(text);
-  if (!normalized) return false;
-  const profile = textEnglishProfile(normalized);
-
-  if (profile.chineseCharacters < 4 || profile.tokens.length < 2) {
-    return false;
-  }
-
-  return /(是|意为|意思是|译为|译作|mean(?:s|ing)?)/i.test(normalized)
-    && /[“”"']/u.test(normalized);
-}
-
-function looksLikeReversedEnglishGarbage(text) {
-  const tokens = englishTokens(text).filter((token) => token.length >= 4);
-  if (tokens.length < 4) return false;
-
-  const reversedHits = tokens.reduce((count, token) => {
-    const reversed = reverseString(token);
-    return COMMON_ENGLISH_LEXICON.has(reversed) ? count + 1 : count;
-  }, 0);
-
-  return reversedHits >= Math.max(3, Math.ceil(tokens.length * 0.35));
-}
-
-function looksLikeStrongPassageHeading(text) {
-  const normalized = normalizeString(text);
-  if (!normalized) return false;
-  const profile = textEnglishProfile(normalized);
-  return profile.englishRatio >= 0.72
-    && profile.tokens.length >= 2
-    && profile.tokens.length <= 12
-    && normalized.length <= 96
-    && !/[。！？]/.test(normalized);
-}
-
-function isPassageBodyText(text) {
-  const normalized = normalizeString(text);
-  if (!normalized) return false;
-  if (looksLikeInstructionOrQuestionParagraph(normalized)) return false;
-  if (looksLikeBilingualGlossaryParagraph(normalized)) return false;
-  if (looksLikeReversedEnglishGarbage(normalized)) return false;
-
-  const profile = textEnglishProfile(normalized);
-  if (profile.chineseCharacters > profile.englishLetters * 1.15 && !looksLikeStrongPassageHeading(normalized)) {
-    return false;
-  }
-
-  return profile.tokens.length >= 8 || looksLikeStrongPassageHeading(normalized);
-}
-
-function classifyPassageTextKind(text) {
-  const normalized = normalizeString(text);
-  if (!normalized) return "unknown";
-  if (looksLikeInstructionOrQuestionParagraph(normalized)) return "polluted";
-  if (looksLikeBilingualGlossaryParagraph(normalized)) return "bilingual_annotation";
-  if (looksLikeReversedEnglishGarbage(normalized)) return "polluted";
-  if (looksLikeStrongPassageHeading(normalized)) return "passage_heading";
-
-  const profile = textEnglishProfile(normalized);
-  if (profile.chineseCharacters > Math.max(8, profile.englishLetters * 0.9)) {
-    return "polluted";
-  }
-  return "passage_body";
-}
-
-function scorePassageTextHygiene(text) {
+function isChineseDominant(text) {
   const normalized = normalizeString(text);
   if (!normalized) {
-    return { score: 0, kind: "unknown", flags: ["empty"] };
+    return false;
   }
 
-  const profile = textEnglishProfile(normalized);
-  const kind = classifyPassageTextKind(normalized);
-  const flags = [];
-  let score = 1;
-
-  if (kind === "bilingual_annotation") {
-    score -= 0.28;
-    flags.push("bilingual_annotation");
-  }
-  if (kind === "polluted") {
-    score -= 0.34;
-    flags.push("polluted");
-  }
-  if (profile.chineseCharacters > 0 && profile.englishRatio < 0.52) {
-    score -= 0.2;
-    flags.push("mixed_contamination");
-  }
-  if (profile.tokens.length < 6 && kind !== "passage_heading") {
-    score -= 0.18;
-    flags.push("too_short");
-  }
-
-  return {
-    score: Math.max(0, Math.min(1, score)),
-    kind,
-    flags
-  };
+  const zh = chineseCount(normalized);
+  const latin = latinCount(normalized);
+  return zh >= Math.max(4, latin * 0.55);
 }
 
-function sanitizePassageInputs(paragraphs, keySentences) {
-  const safeParagraphs = normalizeArray(paragraphs)
-    .filter((item) => typeof item?.text === "string")
-    .map((item, idx) => ({
-      index: typeof item.index === "number" ? item.index : idx,
-      text: normalizeString(item.text)
-    }));
+function normalizeChineseSummary(value, fallback, maxLength) {
+  const clipped = clipText(value, maxLength);
+  if (isChineseDominant(clipped)) {
+    return clipped;
+  }
 
-  const filteredParagraphs = safeParagraphs.filter((item) => {
-    const hygiene = scorePassageTextHygiene(item.text);
-    if (hygiene.kind !== "passage_body" && hygiene.kind !== "passage_heading") {
-      return false;
-    }
-    return isPassageBodyText(item.text) && hygiene.score >= 0.54;
-  });
-  const retainedParagraphs = filteredParagraphs.length > 0 ? filteredParagraphs : safeParagraphs;
-  const retainedIndexSet = new Set(retainedParagraphs.map((item) => item.index));
-
-  const safeKeySentences = normalizeArray(keySentences)
-    .filter((item) => typeof item?.text === "string" && typeof item?.ref === "string")
-    .map((item) => ({
-      ref: normalizeString(item.ref),
-      text: normalizeString(item.text),
-      paragraphIndex: typeof item.paragraphIndex === "number"
-        ? item.paragraphIndex
-        : (typeof item.paragraph_index === "number" ? item.paragraph_index : 0)
-    }));
-
-  const filteredKeySentences = safeKeySentences.filter((item) => {
-    if (!retainedIndexSet.has(item.paragraphIndex)) return false;
-    const hygiene = scorePassageTextHygiene(item.text);
-    if (hygiene.kind !== "passage_body") return false;
-    return isPassageBodyText(item.text) && !looksLikeStrongPassageHeading(item.text) && hygiene.score >= 0.52;
-  });
-
-  return {
-    paragraphs: retainedParagraphs,
-    keySentences: filteredKeySentences.length > 0 ? filteredKeySentences : safeKeySentences.filter((item) => retainedIndexSet.has(item.paragraphIndex))
-  };
+  return clipText(fallback, maxLength);
 }
 
-function normalizeEvidenceType(value, fallback = "supporting_evidence") {
-  if (typeof value !== "string") {
+function normalizeChineseList(values, maxItems = 4, maxLength = 48) {
+  return normalizeArray(values)
+    .map((item) => clipText(String(item), maxLength))
+    .filter((item) => item && isChineseDominant(item))
+    .slice(0, maxItems);
+}
+
+function normalizeScore(value, fallback = 0.88) {
+  const score = Number(value);
+  if (!Number.isFinite(score)) {
     return fallback;
   }
 
-  const normalized = value.trim().toLowerCase();
+  return Math.max(0, Math.min(1, score));
+}
+
+function splitIntoSentences(text) {
+  const normalized = normalizeString(text);
+  if (!normalized) {
+    return [];
+  }
+
+  const sentences = normalized
+    .split(/(?<=[.!?])\s+|(?<=[。！？])\s*/u)
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  if (sentences.length > 0) {
+    return sentences;
+  }
+
+  return [normalized];
+}
+
+function buildSentenceCandidates(paragraph) {
+  return splitIntoSentences(paragraph.text).map((sentence, index) => ({
+    id: `${paragraph.segment_id}::s${index + 1}`,
+    text: sentence
+  }));
+}
+
+function inferArgumentRole(text, index, total) {
+  const lower = normalizeString(text).toLowerCase();
+
+  if (index === 0) {
+    return "background";
+  }
+  if (/(however|but|yet|still|nevertheless|nonetheless)/.test(lower)) {
+    return "transition";
+  }
+  if (/(critics?|opponents?|some argue|objection)/.test(lower)) {
+    return "objection";
+  }
+  if (index === total - 1 && /(therefore|thus|overall|in conclusion|as a result)/.test(lower)) {
+    return "conclusion";
+  }
+  if (/(for example|for instance|according to|evidence|data|because)/.test(lower)) {
+    return "evidence";
+  }
+
+  return "support";
+}
+
+function normalizeArgumentRole(value, fallback) {
+  const normalized = normalizeString(value).toLowerCase();
   const aliases = {
-    background: "background_info",
-    background_info: "background_info",
-    transition: "transition_signal",
-    transition_signal: "transition_signal",
-    core: "core_claim",
-    core_claim: "core_claim",
-    claim: "core_claim",
-    support: "supporting_evidence",
-    supporting_evidence: "supporting_evidence",
-    evidence: "supporting_evidence",
-    objection: "counter_argument",
-    counter_argument: "counter_argument",
-    rebuttal: "counter_argument",
-    conclusion: "conclusion_marker",
-    conclusion_marker: "conclusion_marker"
+    background: "background",
+    support: "support",
+    supporting: "support",
+    objection: "objection",
+    counter_argument: "objection",
+    transition: "transition",
+    evidence: "evidence",
+    support_evidence: "evidence",
+    conclusion: "conclusion"
   };
 
   return aliases[normalized] || fallback;
 }
 
-function buildSentenceFunctionFromEvidenceType(evidenceType) {
-  const normalized = normalizeEvidenceType(evidenceType, "supporting_evidence");
-  const mapping = {
-    core_claim: "核心判断句：这句承担作者真正要成立的判断，做题时先盯主干，再看其余修饰怎么限制这个判断。",
-    supporting_evidence: "支撑证据句：这句在替上一层判断补事实、补例子或补论据，不能只记细节而忘了它服务的观点。",
-    background_info: "背景信息句：这句主要交代场景、前提或历史背景，不是作者最后要你选的结论。",
-    counter_argument: "让步/反方句：这句常先承认一种看法，真正立场多半落在它之后，最容易把让步内容错当答案。",
-    transition_signal: "推进信号句：这句的价值在于提示作者怎样换挡，适合判断段落关系、论证方向和结构推进。",
-    conclusion_marker: "结论收束句：这句在回收前文信息，常是主旨题、标题题和作者态度题最该回看的位置。"
+function buildPassageContext(payload) {
+  const passageParagraphs = normalizeArray(payload?.paragraphs)
+    .filter((item) => item?.source_kind === "passage_body")
+    .slice(0, MAX_PARAGRAPHS)
+    .map((item, index) => ({
+      segment_id: normalizeString(item.segment_id),
+      index: Number.isInteger(item.index) ? item.index : index,
+      anchor_label: normalizeString(item.anchor_label) || `P${index + 1}`,
+      text: normalizeString(item.text),
+      source_kind: "passage_body",
+      hygiene_score: normalizeScore(item.hygiene_score)
+    }));
+
+  const sentenceCandidatesBySegment = new Map();
+  const validSentenceIds = new Set();
+  const paragraphBySegmentId = new Map();
+
+  for (const paragraph of passageParagraphs) {
+    const candidates = buildSentenceCandidates(paragraph);
+    sentenceCandidatesBySegment.set(paragraph.segment_id, candidates);
+    paragraphBySegmentId.set(paragraph.segment_id, paragraph);
+
+    for (const candidate of candidates) {
+      validSentenceIds.add(candidate.id);
+    }
+  }
+
+  const auxiliaryBlocks = [
+    ...normalizeArray(payload?.question_blocks),
+    ...normalizeArray(payload?.answer_blocks),
+    ...normalizeArray(payload?.vocabulary_blocks)
+  ]
+    .filter((item) => AUXILIARY_SOURCE_KINDS.has(item?.source_kind))
+    .map((item) => ({
+      block_id: normalizeString(item.block_id),
+      source_kind: normalizeString(item.source_kind),
+      anchor_label: normalizeString(item.anchor_label),
+      text: normalizeString(item.text)
+    }));
+
+  return {
+    passageParagraphs,
+    paragraphBySegmentId,
+    sentenceCandidatesBySegment,
+    validSentenceIds,
+    auxiliaryBlocks
   };
-  return mapping[normalized] || mapping.supporting_evidence;
 }
 
-function renderCoreSkeleton(coreSkeleton) {
-  if (!coreSkeleton || typeof coreSkeleton !== "object") {
-    return "";
-  }
+function buildPassageMapPrompt(payload) {
+  const context = buildPassageContext(payload);
 
-  const subject = sanitizeCoreSkeletonField(normalizeString(firstDefined(coreSkeleton, ["subject"])));
-  const predicate = sanitizeCoreSkeletonField(normalizeString(firstDefined(coreSkeleton, ["predicate"])));
-  const complement = sanitizeCoreSkeletonField(normalizeString(firstDefined(coreSkeleton, ["complement_or_object", "complementOrObject", "object"])));
+  const paragraphBlock = context.passageParagraphs
+    .map((paragraph) => {
+      const candidates = context.sentenceCandidatesBySegment.get(paragraph.segment_id) || [];
+      const sentenceList = candidates
+        .map((candidate) => `${candidate.id}: ${candidate.text}`)
+        .join("\n");
+
+      return [
+        `[${paragraph.segment_id}] 段落序号=${paragraph.index} 锚点=${paragraph.anchor_label}`,
+        paragraph.text,
+        "本段可选核心句：",
+        sentenceList
+      ].join("\n");
+    })
+    .join("\n\n");
+
+  const auxiliaryBlock = context.auxiliaryBlocks.length > 0
+    ? context.auxiliaryBlocks.map((block) => `[${block.source_kind}] ${block.text}`).join("\n")
+    : "无";
+
   return [
-    subject ? `主语：${subject}` : "",
-    predicate ? `谓语：${predicate}` : "",
-    complement ? `核心补足：${complement}` : ""
-  ].filter(Boolean).join("｜");
+    "你是一名严格的英语阅读地图级分析引擎。",
+    "你只输出一个合法 JSON 对象，不要输出 Markdown、解释或额外文字。",
+    "你当前只做全文地图级分析，不做单句深讲。",
+    "",
+    "你必须只输出这些顶层字段：passage_overview、paragraph_cards、key_sentence_ids、question_links。",
+    "严禁输出：grammar_focus、faithful_translation、teaching_interpretation、core_skeleton、chunk_layers、sentence_function、simpler_rewrite、simpler_rewrite_translation、mini_check、sentence_core、translation、main_structure、rewrite_example。",
+    "",
+    "passage_overview 字段固定为：",
+    "- article_theme：中文，点明全文真正讨论什么。",
+    "- author_core_question：中文，作者真正追问什么。",
+    "- progression_path：中文，说明全文如何推进。",
+    "- likely_question_types：中文数组。",
+    "- logic_pitfalls：中文数组。",
+    "",
+    "paragraph_cards 规则：",
+    "- 只为 source_kind=passage_body 的段落生成卡片。",
+    "- 每段 1 张卡，字段固定为 segment_id、paragraph_index、anchor_label、theme、argument_role、core_sentence_id、relation_to_previous、exam_value、teaching_focuses、student_blind_spot、provenance。",
+    "- argument_role 只能是 background/support/objection/transition/evidence/conclusion。",
+    "- core_sentence_id 必须从给定候选句 id 中选择。",
+    "- provenance 必须包含 source_segment_id、source_sentence_id、source_kind、generated_from、hygiene_score、consistency_score。",
+    "",
+    "key_sentence_ids 规则：",
+    "- 只保留最值得后续 explain-sentence 深讲的句子 id。",
+    "- 最多 6 个。",
+    "",
+    "question_links 规则：",
+    "- 只能放 question / answer_key / vocabulary_support / chinese_instruction 这类辅助层线索。",
+    "- 不能把这些内容塞进 paragraph_cards。",
+    "",
+    `标题：${normalizeString(payload?.title) || "未提供"}`,
+    "",
+    "正文段落：",
+    paragraphBlock,
+    "",
+    "辅助块：",
+    auxiliaryBlock
+  ].join("\n");
 }
 
-function sanitizeCoreSkeletonField(value) {
-  const normalized = normalizeString(value);
-  if (!normalized) return "";
-  return normalized
-    .replace(/\[[A-Za-z_\s-]+:\s*([^\]]+)\]/g, "$1")
-    .replace(/^(主语|谓语|核心补足|宾语|补语|表语|subject|predicate|object|complement)\s*[：:]\s*/gi, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function normalizeCoreSkeleton(raw, fallbackCore) {
-  const subject = sanitizeCoreSkeletonField(firstDefined(raw, ["subject"]));
-  const predicate = sanitizeCoreSkeletonField(firstDefined(raw, ["predicate"]));
-  const complement = sanitizeCoreSkeletonField(firstDefined(raw, ["complement_or_object", "complementOrObject", "object"]));
-
-  if (subject || predicate || complement) {
-    return {
-      subject,
-      predicate,
-      complement_or_object: complement
-    };
-  }
-
-  const segments = normalizeString(fallbackCore)
-    .split("｜")
-    .map((item) => item.trim())
-    .filter(Boolean);
-  const fallback = { subject: "", predicate: "", complement_or_object: "" };
-  for (const segment of segments) {
-    if (segment.startsWith("主语：")) fallback.subject = segment.replace("主语：", "").trim();
-    if (segment.startsWith("谓语：")) fallback.predicate = segment.replace("谓语：", "").trim();
-    if (segment.startsWith("核心补足：")) fallback.complement_or_object = segment.replace("核心补足：", "").trim();
-  }
-  return fallback.subject || fallback.predicate || fallback.complement_or_object ? fallback : null;
-}
-
-function normalizeChunkLayers(raw, fallbackBreakdown) {
-  const direct = Array.isArray(raw)
-    ? raw
-      .map((item) => ({
-        text: normalizeString(item?.text),
-        role: normalizeString(item?.role),
-        attaches_to: normalizeString(firstDefined(item, ["attaches_to", "attachesTo"])),
-        gloss: normalizeString(item?.gloss)
-      }))
-      .filter((item) => item.text || item.role || item.attaches_to || item.gloss)
-    : [];
-
-  if (direct.length > 0) {
-    return direct;
-  }
-
-  return normalizeArray(fallbackBreakdown)
-    .map((item) => String(item).trim())
-    .filter(Boolean)
-    .map((item) => {
-      const [rawRole, rawText = ""] = item.split(/[:：]/, 2);
-      const role = (rawRole || "").trim();
-      const text = (rawText || item).trim();
-      return {
-        text,
-        role: role || "语块",
-        attaches_to: role === "核心信息" ? "主句主干" : "核心信息",
-        gloss: role === "后置修饰" ? "注意它修饰谁。" : ""
-      };
-    });
-}
-
-function normalizeMixedGrammarChinese(text) {
-  let normalized = normalizeString(text);
-  if (!normalized) return "";
-
-  const replacements = [
-    [/temporal clause/gi, "时间状语从句"],
-    [/time clause/gi, "时间状语从句"],
-    [/reduced relative clause/gi, "压缩定语从句"],
-    [/relative clause/gi, "定语从句"],
-    [/object clause/gi, "宾语从句"],
-    [/modal verb/gi, "情态动词"],
-    [/postpositive modifier/gi, "后置修饰"],
-    [/passive voice/gi, "被动结构"],
-    [/concessive frame/gi, "让步框架"],
-    [/framing phrase/gi, "前置框架"],
-    [/conditional frame/gi, "条件框架"],
-    [/participle phrase/gi, "分词短语"],
-    [/infinitive phrase/gi, "不定式短语"],
-    [/non-finite/gi, "非谓语结构"],
-    [/adverbial clause/gi, "状语从句"],
-    [/subject clause/gi, "主语从句"],
-    [/predicative clause/gi, "表语从句"],
-    [/appositive clause/gi, "同位语从句"]
-  ];
-
-  for (const [pattern, replacement] of replacements) {
-    normalized = normalized.replace(pattern, replacement);
-  }
-
-  return normalized.replace(/([A-Za-z]+)\s*引导的/g, "由原句里的“$1 …”引出的");
-}
-
-function sanitizePedagogicalChinese(text) {
-  return normalizeMixedGrammarChinese(text)
-    .replace(/\[[A-Za-z_\s-]+:\s*[^\]]+\]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function containsPedagogicalEnglishLeakage(text) {
+function extractJsonObject(text) {
   const normalized = normalizeString(text);
-  if (!normalized) return false;
-  if (/\[[A-Za-z_\s-]+:\s*[^\]]+\]/.test(normalized)) return true;
-  if (/[A-Za-z]{2,}\s*引导/.test(normalized)) return true;
-  return /[A-Za-z]{8,}(?:\s+[A-Za-z]{2,})+/.test(normalized);
-}
+  if (!normalized) {
+    return null;
+  }
 
-function grammarFocusTemplate(raw) {
-  const normalized = normalizeMixedGrammarChinese(raw);
-  const lower = normalized.toLowerCase();
-
-  if (normalized.includes("时间状语从句") || lower.includes("after") || lower.includes("before") || lower.includes("when ") || lower.includes("once")) {
-    return {
-      title: "时间状语从句",
-      explanation: "这是用来交代时间背景的状语从句，说明事情在什么时间条件下发生。",
-      function: "它在这句里先搭时间背景，再把真正要成立的判断交给主句。",
-      why: "时间框架一旦错挂，背景信息就会被误读成核心判断。"
-    };
-  }
-  if (normalized.includes("压缩定语从句")) {
-    return {
-      title: "压缩定语从句",
-      explanation: "这是把完整关系从句压缩成更短修饰块的写法，本质上仍在补前面名词的信息。",
-      function: "它在这里负责压缩对前面名词的限定说明，不是在另起一个主句。",
-      why: "如果把这层误当成主干谓语，整句结构就会被拆坏。"
-    };
-  }
-  if (normalized.includes("宾语从句")) {
-    return {
-      title: "宾语从句",
-      explanation: "这是跟在谓语后面、充当核心内容的从句，常回答“认为什么”“说明什么”。",
-      function: "它在这句里承接前面的谓语，真正承载作者要表达的内容对象。",
-      why: "宾语从句一旦挂错，学生会把说法来源和作者判断混在一起。"
-    };
-  }
-  if (normalized.includes("情态动词") || lower.includes("might") || lower.includes("could") || lower.includes("would") || lower.includes("should")) {
-    return {
-      title: "情态动词",
-      explanation: "情态动词本身不增加新事实，而是在调节语气强弱，表示可能、推测、限制或建议。",
-      function: "它在这句里控制作者判断的把握程度，不让语气走成绝对断言。",
-      why: "情态一旦忽略，题目里的态度强弱和作者把握程度就会读偏。"
-    };
-  }
-  if (normalized.includes("后置修饰") || normalized.includes("定语从句")) {
-    return {
-      title: normalized.includes("后置修饰") ? "后置修饰" : "定语从句",
-      explanation: "这是补在中心名词后面的限定信息，读的时候要先找清楚它修饰谁。",
-      function: "它在这里负责给前面的名词补限定范围，不是在推进新的主句判断。",
-      why: "修饰对象一旦挂错，枝叶就会被误当成主干。"
-    };
-  }
-  if (normalized.includes("非谓语") || lower.includes("participle") || lower.includes("infinitive")) {
-    return {
-      title: "非谓语结构",
-      explanation: "这是把完整动作压缩成信息块的写法，常用来补目的、原因、伴随或修饰关系。",
-      function: "它在这句里负责压缩附加信息，不能被当成新的完整谓语。",
-      why: "如果把非谓语误判成主句谓语，整句主干会被直接拆坏。"
-    };
-  }
-  if (normalized.includes("被动结构")) {
-    return {
-      title: "被动结构",
-      explanation: "被动结构会把动作承受者顶到前面，真正的施动者可能后移甚至省略。",
-      function: "它在这句里改变了信息出场顺序，强调的是谁被作用，而不是谁主动发出动作。",
-      why: "如果被动方向没看清，因果和细节关系很容易整体读反。"
-    };
-  }
-  if (normalized.includes("让步框架")) {
-    return {
-      title: "让步框架",
-      explanation: "让步框架会先承认一个条件、反方声音或看似成立的情况，再回到自己的真正判断。",
-      function: "它在这里先让一步，真正想成立的判断通常落在后面的主句。",
-      why: "学生最容易把让步内容错当成作者最终立场。"
-    };
+  try {
+    return JSON.parse(normalized);
+  } catch {
+    const start = normalized.indexOf("{");
+    const end = normalized.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(normalized.slice(start, end + 1));
+      } catch {
+        return null;
+      }
+    }
   }
 
   return null;
 }
 
-function localizeGrammarFocusItem(item) {
-  const template = grammarFocusTemplate(item.phenomenon || "");
-  const titleZh = purifyChineseDisplayText(item.title_zh)
-    || template?.title
-    || purifyChineseDisplayText(sanitizePedagogicalChinese(item.phenomenon))
-    || "关键语法点";
-  const explanationZh = purifyChineseExplanation(item.explanation_zh)
-    || template?.explanation
-    || purifyChineseExplanation(sanitizePedagogicalChinese(item.phenomenon))
-    || "这是本句里最值得先抓的一层结构。";
-  const functionZh = purifyChineseExplanation(sanitizePedagogicalChinese(item.function))
-    || template?.function
-    || "它在这句里负责限定主干、补充范围或交代背景。";
-  const whyZh = purifyChineseExplanation(item.why_it_matters_zh)
-    || purifyChineseExplanation(sanitizePedagogicalChinese(item.why_it_matters))
-    || template?.why
-    || "这个结构一旦挂错，主干、修饰范围和命题改写都会跟着读偏。";
-
+function normalizePassageOverview(raw) {
   return {
-    phenomenon: item.phenomenon || titleZh,
-    function: functionZh,
-    why_it_matters: whyZh,
-    title_zh: titleZh,
-    explanation_zh: explanationZh,
-    why_it_matters_zh: whyZh,
-    example_en: normalizeString(item.example_en)
+    article_theme: clipText(raw?.article_theme, MAX_OVERVIEW_LENGTH),
+    author_core_question: clipText(raw?.author_core_question, MAX_OVERVIEW_LENGTH),
+    progression_path: clipText(raw?.progression_path, MAX_OVERVIEW_LENGTH),
+    likely_question_types: normalizeChineseList(raw?.likely_question_types, 5, 50),
+    logic_pitfalls: normalizeChineseList(raw?.logic_pitfalls, 5, 50)
   };
 }
 
-function normalizeGrammarFocus(raw, fallbackPoints) {
-  const direct = Array.isArray(raw)
-    ? raw
-      .map((item) => localizeGrammarFocusItem({
-        phenomenon: normalizeString(item?.phenomenon),
-        function: firstDefined(item, ["function"]),
-        why_it_matters: firstDefined(item, ["why_it_matters", "whyItMatters"]),
-        title_zh: normalizeString(item?.title_zh),
-        explanation_zh: normalizeString(item?.explanation_zh),
-        why_it_matters_zh: normalizeString(item?.why_it_matters_zh),
-        example_en: normalizeString(item?.example_en)
-      }))
-      .filter((item) => item.phenomenon || item.function || item.why_it_matters || item.title_zh)
-    : [];
+function normalizeCoreSentenceId(rawValue, candidates) {
+  const candidateIds = candidates.map((item) => item.id);
+  const normalized = normalizeString(rawValue);
+  if (candidateIds.includes(normalized)) {
+    return normalized;
+  }
+
+  const match = normalized.match(/s(\d+)$/i);
+  if (match) {
+    const candidate = candidateIds[Number(match[1]) - 1];
+    if (candidate) {
+      return candidate;
+    }
+  }
+
+  return candidateIds[0] || "";
+}
+
+function normalizeProvenance(raw, paragraph, coreSentenceId) {
+  return {
+    source_segment_id: paragraph.segment_id,
+    source_sentence_id: coreSentenceId,
+    source_kind: "passage_body",
+    generated_from: "ai_passage_analysis",
+    hygiene_score: normalizeScore(raw?.hygiene_score, paragraph.hygiene_score),
+    consistency_score: normalizeScore(raw?.consistency_score, 0.88)
+  };
+}
+
+function normalizeParagraphCard(raw, context) {
+  const segmentId = normalizeString(raw?.segment_id) || normalizeString(raw?.provenance?.source_segment_id);
+  const paragraph = context.paragraphBySegmentId.get(segmentId);
+  if (!paragraph || paragraph.source_kind !== "passage_body") {
+    return null;
+  }
+
+  const candidates = context.sentenceCandidatesBySegment.get(segmentId) || [];
+  const fallbackRole = inferArgumentRole(paragraph.text, paragraph.index, context.passageParagraphs.length);
+  const coreSentenceId = normalizeCoreSentenceId(raw?.core_sentence_id, candidates);
+
+  return {
+    segment_id: paragraph.segment_id,
+    paragraph_index: paragraph.index,
+    anchor_label: paragraph.anchor_label,
+    theme: clipText(raw?.theme, MAX_THEME_LENGTH),
+    argument_role: normalizeArgumentRole(raw?.argument_role, fallbackRole),
+    core_sentence_id: coreSentenceId,
+    relation_to_previous: clipText(raw?.relation_to_previous, MAX_RELATION_LENGTH),
+    exam_value: clipText(raw?.exam_value, MAX_EXAM_VALUE_LENGTH),
+    teaching_focuses: normalizeChineseList(raw?.teaching_focuses, 3, 40),
+    student_blind_spot: clipText(raw?.student_blind_spot, MAX_BLIND_SPOT_LENGTH),
+    provenance: normalizeProvenance(raw?.provenance, paragraph, coreSentenceId)
+  };
+}
+
+function buildAuxiliaryQuestionLinks(payload, context) {
+  const linkedSegmentId = context.passageParagraphs.at(-1)?.segment_id || context.passageParagraphs[0]?.segment_id || "";
+
+  return context.auxiliaryBlocks.slice(0, 8).map((block) => ({
+    source_kind: block.source_kind,
+    block_id: block.block_id,
+    linked_segment_id: linkedSegmentId,
+    summary: normalizeChineseSummary(
+      block.text,
+      block.source_kind === "question"
+        ? "该题目线索只进入辅助层，不进入正文主导图。"
+        : (block.source_kind === "answer_key"
+          ? "该答案线索只作为辅助核对信息，不进入正文主导图。"
+          : "该词汇或中文说明只作为辅助支持，不进入正文主导图。"),
+      60
+    )
+  }));
+}
+
+function normalizeQuestionLinks(raw, payload, context) {
+  const direct = normalizeArray(raw)
+    .map((item) => ({
+      source_kind: normalizeString(item?.source_kind),
+      block_id: normalizeString(item?.block_id),
+      linked_segment_id: normalizeString(item?.linked_segment_id) || context.passageParagraphs.at(-1)?.segment_id || "",
+      summary: clipText(item?.summary, 60)
+    }))
+    .filter((item) => AUXILIARY_SOURCE_KINDS.has(item.source_kind) && item.summary);
 
   if (direct.length > 0) {
-    return direct.slice(0, 3);
+    return direct.slice(0, 8);
   }
 
-  return normalizeArray(fallbackPoints)
-    .map((item) => localizeGrammarFocusItem({
-      phenomenon: normalizeString(item?.name),
-      function: normalizeString(item?.explanation),
-      why_it_matters: "这个结构一旦挂错范围或修饰对象，整句主干就会被带偏。",
-      title_zh: "",
-      explanation_zh: "",
-      why_it_matters_zh: "",
-      example_en: ""
-    }))
-    .filter((item) => item.phenomenon || item.function)
-    .slice(0, 3);
+  return buildAuxiliaryQuestionLinks(payload, context);
 }
 
-function buildPassageRewriteTranslationExplanation({ simplerRewrite, faithfulTranslation, coreSkeleton, chunkLayers }) {
-  const rewrite = normalizeString(simplerRewrite);
-  if (!rewrite) return "";
+function normalizeAnalyzePassageContract(rawJson, payload) {
+  const context = buildPassageContext(payload);
+  const paragraphCards = normalizeArray(rawJson?.paragraph_cards)
+    .map((item) => normalizeParagraphCard(item, context))
+    .filter(Boolean);
+  const keySentenceIds = normalizeArray(rawJson?.key_sentence_ids)
+    .map((item) => normalizeString(item))
+    .filter((item, index, array) => context.validSentenceIds.has(item) && array.indexOf(item) === index)
+    .slice(0, MAX_KEY_SENTENCE_IDS);
 
-  const parts = [];
-  const faithful = normalizeString(faithfulTranslation);
-  if (faithful) {
-    parts.push(`这条改写仍在说：${faithful}`);
-  }
-
-  const layeredRoles = normalizeArray(chunkLayers).map((item) => normalizeString(item?.role));
-  if (layeredRoles.some((role) => /前置框架|条件|让步|后置修饰/.test(role))) {
-    parts.push("它保留了原句主干判断，把外围框架和修饰层压缩成更直接的主句表达。");
-  } else {
-    parts.push("它保留原意，只把句法改成更直接的主谓表达。");
-  }
-
-  const stableCore = renderCoreSkeleton(coreSkeleton);
-  if (stableCore) {
-    parts.push(`主干没有变，抓住“${stableCore}”就能看出改写没有换义。`);
-  }
-
-  return parts.join(" ");
+  return {
+    passage_overview: normalizePassageOverview(rawJson?.passage_overview),
+    paragraph_cards: paragraphCards,
+    key_sentence_ids: keySentenceIds,
+    question_links: normalizeQuestionLinks(rawJson?.question_links, payload, context)
+  };
 }
 
-function normalizedChineseComparisonKey(text) {
-  return purifyChineseExplanation(text)
-    .toLowerCase()
-    .replace(/[^\p{sc=Han}a-z0-9]+/gu, "");
+function collectForbiddenFields(value, bucket = []) {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectForbiddenFields(item, bucket);
+    }
+    return bucket;
+  }
+
+  if (value && typeof value === "object") {
+    for (const [key, nested] of Object.entries(value)) {
+      if (FORBIDDEN_FIELDS.has(key)) {
+        bucket.push(key);
+      }
+      collectForbiddenFields(nested, bucket);
+    }
+  }
+
+  return bucket;
 }
 
-function buildPassageTeachingInterpretationFallback({ sentenceFunction, coreSkeleton, chunkLayers, faithfulTranslation }) {
-  const parts = [];
-  const localizedFunction = purifyChineseDisplayText(sentenceFunction);
-  if (localizedFunction) {
-    parts.push(`老师先会把这句当成“${localizedFunction}”来看。`);
+function validateAnalyzePassageContract(data, payload) {
+  const reasons = [];
+  const context = buildPassageContext(payload);
+  const expectedSegments = new Set(context.passageParagraphs.map((item) => item.segment_id));
+  const seenSegments = new Set();
+
+  if (!isChineseDominant(data?.passage_overview?.article_theme)) {
+    reasons.push("overview.article_theme");
+  }
+  if (!isChineseDominant(data?.passage_overview?.author_core_question)) {
+    reasons.push("overview.author_core_question");
+  }
+  if (!isChineseDominant(data?.passage_overview?.progression_path)) {
+    reasons.push("overview.progression_path");
   }
 
-  const stableCore = renderCoreSkeleton(coreSkeleton);
-  if (stableCore) {
-    parts.push(`板书时先锁定“${stableCore}”，其余语块都往这个主干上挂。`);
+  const forbiddenFields = collectForbiddenFields(data);
+  if (forbiddenFields.length > 0) {
+    reasons.push(`forbidden:${forbiddenFields.join(",")}`);
   }
 
-  const layeredRoles = normalizeArray(chunkLayers).map((item) => normalizeString(item?.role));
-  if (layeredRoles.some((role) => /前置框架|条件|让步/.test(role))) {
-    parts.push("读的时候不要被句首框架带走，真正判断一般落在后面的主句主干。");
-  } else if (layeredRoles.some((role) => /后置修饰|补充说明/.test(role))) {
-    parts.push("其余语块主要是在补限定范围和修饰关系，不要把枝叶误抬成主干。");
+  for (const card of normalizeArray(data?.paragraph_cards)) {
+    if (!expectedSegments.has(card.segment_id)) {
+      reasons.push(`unknown_segment:${card.segment_id}`);
+      continue;
+    }
+
+    const paragraph = context.paragraphBySegmentId.get(card.segment_id);
+    const candidates = context.sentenceCandidatesBySegment.get(card.segment_id) || [];
+    const candidateIds = new Set(candidates.map((item) => item.id));
+
+    seenSegments.add(card.segment_id);
+
+    if (!ARGUMENT_ROLES.has(card.argument_role)) {
+      reasons.push(`invalid_argument_role:${card.segment_id}`);
+    }
+    if (!candidateIds.has(card.core_sentence_id)) {
+      reasons.push(`invalid_core_sentence:${card.segment_id}`);
+    }
+    if (card.provenance?.source_kind !== "passage_body") {
+      reasons.push(`invalid_source_kind:${card.segment_id}`);
+    }
+    if (card.provenance?.source_segment_id !== paragraph.segment_id) {
+      reasons.push(`invalid_provenance_segment:${card.segment_id}`);
+    }
+    if (card.provenance?.source_sentence_id !== card.core_sentence_id) {
+      reasons.push(`invalid_provenance_sentence:${card.segment_id}`);
+    }
+    if (!isChineseDominant(card.theme)) {
+      reasons.push(`theme_not_chinese:${card.segment_id}`);
+    }
+    if (!isChineseDominant(card.relation_to_previous)) {
+      reasons.push(`relation_not_chinese:${card.segment_id}`);
+    }
+    if (!isChineseDominant(card.exam_value)) {
+      reasons.push(`exam_value_not_chinese:${card.segment_id}`);
+    }
+    if (!isChineseDominant(card.student_blind_spot)) {
+      reasons.push(`blind_spot_not_chinese:${card.segment_id}`);
+    }
+    if (!normalizeArray(card.teaching_focuses).every((item) => isChineseDominant(item))) {
+      reasons.push(`teaching_focus_not_chinese:${card.segment_id}`);
+    }
   }
 
-  const faithful = purifyChineseExplanation(faithfulTranslation);
-  if (faithful) {
-    parts.push(`先把“${faithful}”这个基本意思抓稳，再回头分层看修饰关系。`);
+  if (seenSegments.size !== context.passageParagraphs.length) {
+    reasons.push("missing_paragraph_cards");
+  }
+  if (normalizeArray(data?.key_sentence_ids).length > MAX_KEY_SENTENCE_IDS) {
+    reasons.push("too_many_key_sentence_ids");
+  }
+  if (!normalizeArray(data?.key_sentence_ids).every((item) => context.validSentenceIds.has(item))) {
+    reasons.push("invalid_key_sentence_id");
   }
 
-  return parts.join(" ");
+  return reasons;
 }
 
-function resolvePassageTeachingInterpretation({ teachingInterpretation, faithfulTranslation, sentenceFunction, coreSkeleton, chunkLayers }) {
-  const faithfulKey = normalizedChineseComparisonKey(faithfulTranslation);
-  const explicit = purifyChineseExplanation(teachingInterpretation);
-  if (explicit && normalizedChineseComparisonKey(explicit) !== faithfulKey) {
-    return explicit;
+function buildFallbackOverview(payload, context) {
+  const title = normalizeString(payload?.title);
+  const paragraphCount = context.passageParagraphs.length;
+
+  return {
+    article_theme: normalizeChineseSummary(
+      "",
+      title
+        ? `这篇文章围绕“${title}”展开，重点是先看背景，再看作者把判断推进到哪里。`
+        : "这篇文章先交代背景，再推进作者真正关心的判断方向。",
+      MAX_OVERVIEW_LENGTH
+    ),
+    author_core_question: "作者真正关心的是背景信息如何推进成全文的核心判断。",
+    progression_path: paragraphCount <= 1
+      ? "先建立段落主题，再定位最值得后续深讲的核心句。"
+      : "先交代背景或起点，再推进关键转折，最后收束成全文判断。",
+    likely_question_types: [
+      "主旨题：全文真正关心的问题是什么",
+      "段落功能题：各段在推进链路里承担什么角色"
+    ],
+    logic_pitfalls: [
+      "容易把背景段误当成结论段",
+      "容易把辅助信息误塞进正文主线"
+    ]
+  };
+}
+
+function buildFallbackTheme(paragraph, role, order) {
+  const mapping = {
+    background: `第${order}段先交代背景或讨论起点。`,
+    support: `第${order}段继续补充支撑作者判断的信息。`,
+    objection: `第${order}段提出需要辨认的反向声音或限制条件。`,
+    transition: `第${order}段承担推进结构转换的作用。`,
+    evidence: `第${order}段提供支撑判断的例证或依据。`,
+    conclusion: `第${order}段收束前文并靠近全文结论。`
+  };
+
+  return mapping[role] || mapping.support;
+}
+
+function buildFallbackRelation(role, index) {
+  if (index === 0) {
+    return "首段先建立阅读背景，后文都在这个起点上推进。";
   }
 
-  return buildPassageTeachingInterpretationFallback({
-    sentenceFunction,
-    coreSkeleton,
-    chunkLayers,
-    faithfulTranslation
+  const mapping = {
+    transition: "这一段相对前一段完成视角切换或推进换挡。",
+    objection: "这一段相对前一段引入需要辨认的反向声音。",
+    evidence: "这一段相对前一段补上更具体的证据支撑。",
+    conclusion: "这一段相对前一段开始收束并靠近全文判断。"
+  };
+
+  return mapping[role] || "这一段相对前一段继续把论证向前推进。";
+}
+
+function buildFallbackExamValue(role) {
+  const mapping = {
+    background: "做题时先把它当背景定位，不要抢成结论。",
+    support: "常见于段落功能题或细节支撑题。",
+    objection: "要分清这是反方声音还是作者最后立场。",
+    transition: "适合抓结构转折与作者思路变化。",
+    evidence: "适合定位支撑信息与证据作用。",
+    conclusion: "要重点回看它如何收束全文判断。"
+  };
+
+  return mapping[role] || mapping.support;
+}
+
+function buildFallbackTeachingFocuses(role) {
+  const mapping = {
+    background: ["先把本段当背景，不要提前替作者下结论。"],
+    support: ["先看它支撑的是哪一层判断，再记细节。"],
+    objection: ["先辨认这是不是作者真正站队的句子。"],
+    transition: ["先盯结构转折词，判断作者论证怎样换挡。"],
+    evidence: ["先看证据服务哪层观点，不要只背例子。"],
+    conclusion: ["先回收前文信息，再判断它怎样收束全文。"]
+  };
+
+  return mapping[role] || mapping.support;
+}
+
+function buildFallbackBlindSpot(role) {
+  const mapping = {
+    background: "最容易把背景说明直接看成作者最后判断。",
+    support: "最容易只记细节，却忘了它支撑哪层观点。",
+    objection: "最容易把让步或反向声音误判成作者立场。",
+    transition: "最容易忽略结构换挡，导致段落关系读散。",
+    evidence: "最容易把例证本身当成全文主旨。",
+    conclusion: "最容易只看句尾信息，却忘了它是在回收前文。"
+  };
+
+  return mapping[role] || mapping.support;
+}
+
+function buildParagraphFallbackCard(paragraph, context, order) {
+  const role = inferArgumentRole(paragraph.text, order - 1, context.passageParagraphs.length);
+  const coreSentenceId = context.sentenceCandidatesBySegment.get(paragraph.segment_id)?.[0]?.id || `${paragraph.segment_id}::s1`;
+
+  return {
+    segment_id: paragraph.segment_id,
+    paragraph_index: paragraph.index,
+    anchor_label: paragraph.anchor_label,
+    theme: buildFallbackTheme(paragraph, role, order),
+    argument_role: role,
+    core_sentence_id: coreSentenceId,
+    relation_to_previous: buildFallbackRelation(role, order - 1),
+    exam_value: buildFallbackExamValue(role),
+    teaching_focuses: buildFallbackTeachingFocuses(role),
+    student_blind_spot: buildFallbackBlindSpot(role),
+    provenance: {
+      source_segment_id: paragraph.segment_id,
+      source_sentence_id: coreSentenceId,
+      source_kind: "passage_body",
+      generated_from: "ai_passage_analysis",
+      hygiene_score: normalizeScore(paragraph.hygiene_score, 0.85),
+      consistency_score: 0.78
+    }
+  };
+}
+
+function buildAnalyzePassageFallbackSkeleton(payload) {
+  const context = buildPassageContext(payload);
+  const paragraphCards = context.passageParagraphs.map((paragraph, index) => buildParagraphFallbackCard(paragraph, context, index + 1));
+
+  return {
+    passage_overview: buildFallbackOverview(payload, context),
+    paragraph_cards: paragraphCards,
+    key_sentence_ids: paragraphCards
+      .map((card) => card.core_sentence_id)
+      .filter((item, index, array) => item && array.indexOf(item) === index)
+      .slice(0, MAX_KEY_SENTENCE_IDS),
+    question_links: buildAuxiliaryQuestionLinks(payload, context)
+  };
+}
+
+function toPublicMeta(meta, overrides = {}) {
+  return {
+    provider: normalizeString(meta?.provider),
+    model: normalizeString(meta?.model),
+    retry_count: Number(overrides.retry_count ?? meta?.retry_count ?? 0),
+    used_cache: Boolean(overrides.used_cache ?? meta?.used_cache),
+    used_fallback: Boolean(overrides.used_fallback ?? meta?.used_fallback),
+    circuit_state: normalizeString(overrides.circuit_state ?? meta?.circuit_state, "closed")
+  };
+}
+
+async function requestPassageAnalysis(aiClient, payload, requestId) {
+  return aiClient.request({
+    requestId,
+    routeName: "ai/analyze-passage",
+    cacheScope: "passage",
+    identity: {
+      documentID: payload.identity.document_id,
+      contentHash: payload.identity.content_hash
+    },
+    payload: {
+      system: "你是严格输出 JSON 的地图级阅读分析引擎。无论任何情况都只返回 JSON 对象。",
+      messages: [
+        {
+          role: "user",
+          content: buildPassageMapPrompt(payload)
+        }
+      ],
+      maxTokens: 8192
+    },
+    fallbackFactory: async () => buildAnalyzePassageFallbackSkeleton(payload)
   });
 }
 
-function normalizePassageOverview(raw) {
-  if (!raw || typeof raw !== "object") {
+async function requestPassageRepair(aiClient, payload, previousResult, reasons, requestId) {
+  return aiClient.request({
+    requestId,
+    routeName: "ai/analyze-passage/repair",
+    cacheScope: "none",
+    payload: {
+      system: "你是严格输出 JSON 的地图级阅读分析修复引擎。只能修补给定 JSON，不能扩展成单句精讲。",
+      messages: [
+        {
+          role: "user",
+          content: [
+            "请修复下面这个地图级全文分析 JSON。",
+            "只允许输出顶层字段：passage_overview、paragraph_cards、key_sentence_ids、question_links。",
+            "禁止输出任何 sentence-level 深讲字段。",
+            `修复原因：${reasons.join(" | ")}`,
+            "",
+            "输入段落：",
+            buildPassageMapPrompt(payload),
+            "",
+            "上一次结果：",
+            JSON.stringify(previousResult)
+          ].join("\n")
+        }
+      ],
+      maxTokens: 8192
+    }
+  });
+}
+
+function parseAnalyzePassageText(text) {
+  const parsed = extractJsonObject(text);
+  if (!parsed || typeof parsed !== "object") {
     return {
-      article_theme: "",
-      author_core_question: "",
-      progression_path: "",
-      likely_question_types: [],
-      logic_pitfalls: [],
-      paragraph_function_map: [],
-      syntax_highlights: [],
-      reading_traps: [],
-      vocabulary_highlights: []
+      kind: "unparseable_json",
+      value: null
     };
   }
+
   return {
-    article_theme: purifyChineseExplanation(raw.article_theme),
-    author_core_question: purifyChineseDisplayText(raw.author_core_question),
-    progression_path: purifyChineseExplanation(raw.progression_path),
-    likely_question_types: purifyChineseList(raw.likely_question_types, 5),
-    logic_pitfalls: purifyChineseList(raw.logic_pitfalls, 5),
-    paragraph_function_map: purifyChineseList(raw.paragraph_function_map, 8),
-    syntax_highlights: purifyChineseList(raw.syntax_highlights, 5),
-    reading_traps: purifyChineseList(raw.reading_traps, 5),
-    vocabulary_highlights: normalizeArray(raw.vocabulary_highlights).map(String)
+    kind: "ok",
+    value: parsed
   };
 }
 
-function normalizeParagraphCard(raw) {
-  if (!raw || typeof raw !== "object") return null;
-  const validRoles = ["background", "support", "objection", "transition", "evidence", "conclusion"];
-  const role = validRoles.includes(raw.argument_role) ? raw.argument_role : "support";
-  return {
-    paragraph_index: typeof raw.paragraph_index === "number" ? raw.paragraph_index : 0,
-    theme: purifyChineseExplanation(raw.theme),
-    argument_role: role,
-    core_sentence_local_index: typeof raw.core_sentence_local_index === "number" ? raw.core_sentence_local_index : 0,
-    keywords: normalizeArray(raw.keywords).map(String).filter(Boolean).slice(0, 8),
-    relation_to_previous: purifyChineseDisplayText(raw.relation_to_previous),
-    exam_value: purifyChineseExplanation(raw.exam_value),
-    teaching_focuses: purifyChineseList(raw.teaching_focuses, 4),
-    student_blind_spot: purifyChineseDisplayText(raw.student_blind_spot)
-  };
-}
+async function repairAnalyzePassageContract(payload, previousResult, reasons, options = {}) {
+  const {
+    aiClient,
+    requestId
+  } = options;
 
-function normalizeSentenceAnalysis(raw, sourceSentence) {
-  if (!raw || typeof raw !== "object") return null;
-
-  const evidenceType = normalizeEvidenceType(raw.evidence_type, "supporting_evidence");
-  const rawVocabulary = firstDefined(raw, ["vocabulary_in_context", "contextual_vocabulary"]);
-  const rawMisread = firstDefined(raw, ["misreading_traps", "misread_points", "common_misreadings"]);
-  const rawRewrite = firstDefined(raw, ["exam_paraphrase_routes", "exam_rewrite_points", "exam_paraphrase_points"]);
-  const rawSimplerRewrite = firstDefined(raw, ["simpler_rewrite", "simplified_english"]);
-  const rawSimplerRewriteTranslation = firstDefined(raw, ["simpler_rewrite_translation", "rewrite_translation"]);
-  const rawFaithfulTranslation = firstDefined(raw, ["faithful_translation"]);
-  const rawTeachingInterpretation = firstDefined(raw, ["teaching_interpretation"]);
-  const rawNaturalChineseMeaning = firstDefined(raw, ["natural_chinese_meaning"]);
-  const rawChunkBreakdown = normalizeArray(raw.chunk_breakdown).map(String).filter(Boolean);
-  const rawGrammarPoints = normalizeArray(raw.grammar_points)
-    .map((item) => ({
-      name: normalizeString(item?.name),
-      explanation: normalizeString(item?.explanation)
-    }))
-    .filter((item) => item.name || item.explanation)
-    .slice(0, 3);
-  const coreSkeleton = normalizeCoreSkeleton(firstDefined(raw, ["core_skeleton"]), normalizeString(raw.sentence_core));
-  const chunkLayers = normalizeChunkLayers(firstDefined(raw, ["chunk_layers"]), rawChunkBreakdown);
-  const grammarFocus = normalizeGrammarFocus(firstDefined(raw, ["grammar_focus"]), rawGrammarPoints);
-  const sentenceFunction = purifyChineseDisplayText(
-    normalizeString(raw.sentence_function, buildSentenceFunctionFromEvidenceType(evidenceType))
-  );
-  const misreadingTraps = purifyChineseList(rawMisread, 3);
-  const examParaphraseRoutes = purifyChineseList(rawRewrite, 3);
-  const simplerRewrite = normalizeString(rawSimplerRewrite);
-  const faithfulTranslation = purifyChineseExplanation(rawFaithfulTranslation);
-  const simplerRewriteTranslation = (function resolveRewriteTranslation() {
-    const explicit = purifyChineseExplanation(rawSimplerRewriteTranslation);
-    if (explicit && normalizedChineseComparisonKey(explicit) !== normalizedChineseComparisonKey(faithfulTranslation)) {
-      return explicit;
-    }
-    return buildPassageRewriteTranslationExplanation({
-      simplerRewrite,
-      faithfulTranslation,
-      coreSkeleton,
-      chunkLayers
-    });
-  })();
-  const teachingInterpretation = resolvePassageTeachingInterpretation({
-    teachingInterpretation: rawTeachingInterpretation || rawNaturalChineseMeaning,
-    faithfulTranslation,
-    sentenceFunction,
-    coreSkeleton,
-    chunkLayers
-  });
-  const miniCheck = purifyChineseDisplayText(firstDefined(raw, ["mini_check", "mini_exercise"]));
-  const derivedChunkBreakdown = chunkLayers
-    .map((item) => {
-      const role = item.role || "语块";
-      const text = item.text || "";
-      return role && text ? `${role}：${text}` : text;
-    })
-    .filter(Boolean);
-
-  return {
-    sentence_ref: normalizeString(raw.sentence_ref),
-    original_sentence: sourceSentence || normalizeString(raw.original_sentence),
-    sentence_function: sentenceFunction,
-    core_skeleton: coreSkeleton,
-    chunk_layers: chunkLayers,
-    grammar_focus: grammarFocus,
-    faithful_translation: faithfulTranslation,
-    teaching_interpretation: teachingInterpretation,
-    natural_chinese_meaning: teachingInterpretation,
-    sentence_core: normalizeString(raw.sentence_core, renderCoreSkeleton(coreSkeleton)),
-    chunk_breakdown: rawChunkBreakdown.length > 0 ? rawChunkBreakdown : derivedChunkBreakdown,
-    grammar_points: rawGrammarPoints.length > 0
-      ? rawGrammarPoints
-      : grammarFocus.map((item) => ({
-        name: item.phenomenon,
-        explanation: [item.function, item.why_it_matters ? `为什么重要：${item.why_it_matters}` : ""].filter(Boolean).join("｜")
-      })),
-    vocabulary_in_context: normalizeArray(rawVocabulary)
-      .map((item) => ({
-        term: normalizeString(item?.term),
-        meaning: purifyChineseExplanation(item?.meaning)
-      }))
-      .filter((item) => item.term)
-      .slice(0, 6),
-    misread_points: misreadingTraps,
-    misreading_traps: misreadingTraps,
-    exam_rewrite_points: examParaphraseRoutes,
-    exam_paraphrase_routes: examParaphraseRoutes,
-    simplified_english: simplerRewrite,
-    simpler_rewrite: simplerRewrite,
-    simpler_rewrite_translation: simplerRewriteTranslation,
-    mini_exercise: miniCheck,
-    mini_check: miniCheck,
-    hierarchy_rebuild: normalizeArray(raw.hierarchy_rebuild).map(String).filter(Boolean),
-    syntactic_variation: normalizeString(raw.syntactic_variation),
-    evidence_type: evidenceType
-  };
-}
-
-// ─── 质量门控 ───
-
-function isShallowSentenceCore(core) {
-  if (!core) return true;
-  const shallowPrefixes = ["本句主要讲", "本句说的是", "这句话主要", "这句讲的", "本句讲了", "this sentence"];
-  return shallowPrefixes.some((p) => core.toLowerCase().startsWith(p));
-}
-
-function isShallowMisreadPoint(point) {
-  if (!point) return true;
-  const shallowPatterns = ["注意理解", "注意语法", "注意翻译", "需要注意", "仔细阅读"];
-  return shallowPatterns.some((p) => point.includes(p)) && point.length < 15;
-}
-
-function validateAnalysisQuality(result) {
-  const warnings = [];
-
-  if (!result.passage_overview?.article_theme || result.passage_overview.article_theme.includes("文章主要讲了")) {
-    warnings.push("passage_overview.article_theme 太空");
-  }
-  if (result.passage_overview?.article_theme && !isChineseDominantText(result.passage_overview.article_theme)) {
-    warnings.push("passage_overview.article_theme 中文纯度不足");
-  }
-  if (!result.passage_overview?.author_core_question || result.passage_overview.author_core_question.includes("作者真正要回答的问题可以概括为")) {
-    warnings.push("passage_overview.author_core_question 太模板化");
-  }
-  if (!result.passage_overview?.progression_path || result.passage_overview.progression_path.length < 12) {
-    warnings.push("passage_overview.progression_path 不够具体");
-  }
-  if (result.passage_overview?.progression_path && !result.passage_overview.progression_path.includes("→") && !(result.passage_overview.progression_path.includes("先") && result.passage_overview.progression_path.includes("再"))) {
-    warnings.push("passage_overview.progression_path 不像讲义式推进路径");
-  }
-  if ((result.passage_overview?.likely_question_types || []).length < 2) {
-    warnings.push("passage_overview.likely_question_types 太弱");
-  }
-  if ((result.passage_overview?.logic_pitfalls || []).length < 2) {
-    warnings.push("passage_overview.logic_pitfalls 太弱");
-  }
-
-  if (result.paragraph_cards) {
-    for (const card of result.paragraph_cards) {
-      if (!card.theme || card.theme.includes("本段主要讲") || card.theme.includes("承担")) {
-        warnings.push(`[P${card.paragraph_index}] theme 太空`);
-      }
-      if (card.theme && !isChineseDominantText(card.theme)) {
-        warnings.push(`[P${card.paragraph_index}] theme 中文纯度不足`);
-      }
-      if (card.theme && !(card.theme.includes("真正") || card.theme.includes("关键") || card.theme.includes("核心") || card.theme.includes("要立住"))) {
-        warnings.push(`[P${card.paragraph_index}] theme 讲义感不足`);
-      }
-      if (!card.relation_to_previous || card.relation_to_previous === "承接上文") {
-        warnings.push(`[P${card.paragraph_index}] relation_to_previous 太空`);
-      }
-      if (!card.exam_value || (!card.exam_value.includes("题") && !card.exam_value.includes("陷阱"))) {
-        warnings.push(`[P${card.paragraph_index}] exam_value 不像考试解法`);
-      }
-      if ((card.teaching_focuses || []).length === 0) {
-        warnings.push(`[P${card.paragraph_index}] teaching_focuses 缺失`);
-      }
-      if ((card.teaching_focuses || []).some((item) => !item.includes("先") && !item.includes("别") && !item.includes("容易"))) {
-        warnings.push(`[P${card.paragraph_index}] teaching_focuses 讲义感不足`);
-      }
-      if (!card.student_blind_spot || card.student_blind_spot.length < 10) {
-        warnings.push(`[P${card.paragraph_index}] student_blind_spot 太弱`);
-      }
-    }
-  }
-
-  if (result.sentence_analyses) {
-    for (const sa of result.sentence_analyses) {
-      if (!sa.sentence_function || sa.sentence_function.length < 10) {
-        warnings.push(`[${sa.sentence_ref}] sentence_function 太弱`);
-      }
-      if (!sa.faithful_translation || sa.faithful_translation.includes("真正要") || sa.faithful_translation.includes("重点在")) {
-        warnings.push(`[${sa.sentence_ref}] faithful_translation 不像忠实翻译`);
-      }
-      if (sa.faithful_translation && !isChineseDominantText(sa.faithful_translation)) {
-        warnings.push(`[${sa.sentence_ref}] faithful_translation 中文纯度不足`);
-      }
-      if (!sa.teaching_interpretation || sa.teaching_interpretation.length < 10) {
-        warnings.push(`[${sa.sentence_ref}] teaching_interpretation 太弱`);
-      }
-      if (sa.teaching_interpretation && !isChineseDominantText(sa.teaching_interpretation)) {
-        warnings.push(`[${sa.sentence_ref}] teaching_interpretation 中文纯度不足`);
-      }
-      if (isShallowSentenceCore(sa.sentence_core)) {
-        warnings.push(`[${sa.sentence_ref}] sentence_core 太浅: "${sa.sentence_core?.slice(0, 40)}"`);
-      }
-      if (!sa.core_skeleton || (!sa.core_skeleton.subject && !sa.core_skeleton.predicate)) {
-        warnings.push(`[${sa.sentence_ref}] core_skeleton 缺失`);
-      }
-      if (!sa.evidence_type) {
-        warnings.push(`[${sa.sentence_ref}] evidence_type 缺失`);
-      }
-      if (sa.misreading_traps?.every(isShallowMisreadPoint)) {
-        warnings.push(`[${sa.sentence_ref}] misreading_traps 全部太泛`);
-      }
-      if (sa.chunk_layers?.length <= 1 && sa.original_sentence?.length > 40) {
-        warnings.push(`[${sa.sentence_ref}] chunk_layers 不足`);
-      }
-      if ((sa.chunk_layers || []).length > 0 && !(sa.chunk_layers || []).some((item) => String(item?.role || "").includes("核心信息"))) {
-        warnings.push(`[${sa.sentence_ref}] chunk_layers 没有标出核心信息`);
-      }
-      if ((sa.grammar_focus || []).length === 0 && sa.original_sentence?.length > 35) {
-        warnings.push(`[${sa.sentence_ref}] grammar_focus 缺失`);
-      }
-      if ((sa.grammar_focus || []).some((item) => !item.title_zh || !item.explanation_zh || !item.why_it_matters_zh)) {
-        warnings.push(`[${sa.sentence_ref}] grammar_focus 中文展示字段不完整`);
-      }
-    }
-  }
-
-  return warnings;
-}
-
-function buildAnalyzePassageRepairPrompt({ title, paragraphs, keySentences, previousResult, warnings }) {
-  return [
-    buildAnalyzePassagePrompt({ title, paragraphs, keySentences }),
-    "",
-    "上一次输出质量不够，请你在保持 JSON 结构不变的前提下，重点修复这些问题：",
-    warnings.join("；"),
-    "",
-    "额外要求：",
-    "1. paragraph_cards.theme 不要写成“本段主要讲了什么”或“第X段承担什么作用”。",
-    "2. relation_to_previous 和 exam_value 必须具体到逻辑推进和考试题型，不能只写泛泛判断。",
-    "3. teaching_focuses 必须写成具体教学动作，而不是抽象建议。",
-    "4. passage_overview 必须像老师带读整篇文章，而不是做摘要；progression_path 要像讲义里的推进图，likely_question_types 和 logic_pitfalls 不能空。",
-    "5. faithful_translation 必须是忠实翻译，不能混入“真正要你抓”这类教学评论；teaching_interpretation 才负责老师口吻。",
-    "6. sentence_function 必须明确说明这句在论证中做什么；core_skeleton 必须指出主语、谓语、核心宾补。",
-    "7. evidence_type 不能漏；chunk_layers 至少有一项 role 是“核心信息”，并说明 attaches_to。",
-    "",
-    "你上一次的 JSON 为：",
-    JSON.stringify(previousResult)
-  ].join("\n");
-}
-
-// ─── JSON 解析 ───
-
-function extractTextContent(content) {
-  if (typeof content === "string") return content.trim();
-  if (Array.isArray(content)) {
-    return content
-      .filter((item) => item?.type === "text" && typeof item.text === "string")
-      .map((item) => item.text.trim())
-      .join("")
-      .trim();
-  }
-  return "";
-}
-
-function tryParseJson(text) {
   try {
-    return JSON.parse(text);
+    const repairedResult = await requestPassageRepair(aiClient, payload, previousResult, reasons, requestId);
+    const parsed = parseAnalyzePassageText(repairedResult?.data?.text);
+    if (parsed.kind !== "ok") {
+      return null;
+    }
+
+    const normalized = normalizeAnalyzePassageContract(parsed.value, payload);
+    const validationReasons = validateAnalyzePassageContract(normalized, payload);
+    if (validationReasons.length > 0) {
+      return null;
+    }
+
+    return {
+      data: normalized,
+      meta: toPublicMeta(repairedResult.meta)
+    };
   } catch {
     return null;
   }
 }
 
-function extractJsonCandidate(text) {
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start >= 0 && end > start) return text.slice(start, end + 1);
-  return text;
-}
-
-function parseModelJson(content) {
-  const text = extractTextContent(content);
-  if (!text) {
-    throw new AppError("模型没有返回可解析内容。", {
-      statusCode: 502,
-      code: "MODEL_EMPTY_RESPONSE"
-    });
-  }
-
-  const directResult = tryParseJson(text);
-  if (directResult) return directResult;
-
-  const candidate = extractJsonCandidate(text);
-  const fallbackResult = tryParseJson(candidate);
-  if (fallbackResult) {
-    console.warn("[ai/analyze-passage] recovered JSON from wrapped response");
-    return fallbackResult;
-  }
-
-  console.error("[ai/analyze-passage] model returned invalid JSON:", text.slice(0, 300));
-  throw new AppError("模型返回格式异常，无法解析为 JSON。", {
-    statusCode: 502,
-    code: "MODEL_INVALID_JSON"
-  });
-}
-
-// ─── 主函数 ───
-
-export async function analyzePassage({ title = "", paragraphs = [], keySentences = [] }) {
-  const client = getDashScopeClient();
-  const { modelName } = getDashScopeConfig();
-
-  if (!client) {
-    throw new AppError("DASHSCOPE_API_KEY 或 DASHSCOPE_BASE_URL 未配置。", {
-      statusCode: 500,
-      code: "MODEL_CONFIG_MISSING"
-    });
-  }
-
-  const sanitizedInputs = sanitizePassageInputs(paragraphs, keySentences);
-  const effectiveParagraphs = sanitizedInputs.paragraphs;
-  const effectiveKeySentences = sanitizedInputs.keySentences;
-
-  const sentenceTextIndex = Object.fromEntries(
-    effectiveKeySentences.map((s) => [s.ref, s.text])
-  );
+export async function analyzePassage(payload, options = {}) {
+  const requestId = normalizeString(options.requestId);
+  const aiClient = options.aiClient || defaultAnalyzePassageAIClient;
 
   console.log("[ai/analyze-passage] calling model", {
-    modelName,
-    paragraphCount: effectiveParagraphs.length,
-    keySentenceCount: effectiveKeySentences.length,
-    titleLength: title.length
+    requestId,
+    paragraphCount: normalizeArray(payload?.paragraphs).length,
+    titleLength: normalizeString(payload?.title).length
   });
 
-  const requestModel = async (prompt) => {
-    return client.chat.completions.create({
-      model: modelName,
-      temperature: 0.15,
-      response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "system",
-          content: "你是严格输出 JSON 的英语阅读教学分析引擎。无论任何情况都只返回 JSON 对象。"
-        },
-        {
-          role: "user",
-          content: prompt
-        }
-      ]
-    });
-  };
-
-  const startTime = Date.now();
-  let completion;
-
+  let result;
   try {
-    completion = await requestModel(buildAnalyzePassagePrompt({
-      title,
-      paragraphs: effectiveParagraphs,
-      keySentences: effectiveKeySentences
-    }));
+    result = await requestPassageAnalysis(aiClient, payload, requestId);
   } catch (error) {
-    const status = typeof error?.status === "number" ? error.status : undefined;
-    console.error("[ai/analyze-passage] model request failed", { status, message: error?.message });
-    throw new AppError("调用大模型接口失败。", { statusCode: 502, code: "MODEL_REQUEST_FAILED" });
-  }
-
-  const elapsed = Date.now() - startTime;
-  const normalizeResult = (parsed) => {
-    const overview = normalizePassageOverview(parsed.passage_overview);
-    const paragraphCards = normalizeArray(parsed.paragraph_cards)
-      .map(normalizeParagraphCard)
-      .filter(Boolean);
-    const sentenceAnalyses = normalizeArray(parsed.sentence_analyses)
-      .map((sa) => normalizeSentenceAnalysis(sa, sentenceTextIndex[sa?.sentence_ref]))
-      .filter(Boolean);
-
-    return {
-      passage_overview: overview,
-      paragraph_cards: paragraphCards,
-      sentence_analyses: sentenceAnalyses
-    };
-  };
-
-  let normalized = normalizeResult(parseModelJson(completion.choices?.[0]?.message?.content));
-  let qualityWarnings = validateAnalysisQuality(normalized);
-
-  if (
-    qualityWarnings.length >= 2 ||
-    normalized.paragraph_cards.length < Math.min(effectiveParagraphs.length, MAX_PARAGRAPHS) ||
-    normalized.sentence_analyses.length < Math.min(effectiveKeySentences.length, MAX_KEY_SENTENCES)
-  ) {
-    console.warn("[ai/analyze-passage] quality warnings after first pass:", qualityWarnings);
-
-    try {
-      const repairedCompletion = await requestModel(buildAnalyzePassageRepairPrompt({
-        title,
-        paragraphs: effectiveParagraphs,
-        keySentences: effectiveKeySentences,
-        previousResult: normalized,
-        warnings: qualityWarnings
-      }));
-      const repaired = normalizeResult(parseModelJson(repairedCompletion.choices?.[0]?.message?.content));
-      const repairedWarnings = validateAnalysisQuality(repaired);
-
-      if (repairedWarnings.length <= qualityWarnings.length) {
-        normalized = repaired;
-        qualityWarnings = repairedWarnings;
-      }
-    } catch (error) {
-      console.warn("[ai/analyze-passage] repair pass failed:", error?.message || error);
+    if (error?.code === ERROR_CODES.MODEL_CONFIG_MISSING) {
+      throw error;
     }
+
+    throw attachAIErrorMetadata(
+      error?.code
+        ? error
+        : createAIError(ERROR_CODES.INVALID_MODEL_RESPONSE, {
+          requestId,
+          fallbackAvailable: true
+        }),
+      {
+        requestId,
+        routeName: "ai/analyze-passage",
+        fallbackAvailable: true
+      }
+    );
   }
 
-  if (qualityWarnings.length > 0) {
-    console.warn("[ai/analyze-passage] quality warnings:", qualityWarnings);
+  if (result?.meta?.used_fallback) {
+    return {
+      data: result.data,
+      meta: toPublicMeta(result.meta, { used_fallback: true })
+    };
   }
 
-  console.log("[ai/analyze-passage] done", {
-    elapsed: `${elapsed}ms`,
-    paragraphCards: normalized.paragraph_cards.length,
-    sentenceAnalyses: normalized.sentence_analyses.length,
-    qualityWarnings: qualityWarnings.length
+  const parsed = parseAnalyzePassageText(result?.data?.text);
+  if (parsed.kind === "unparseable_json") {
+    return {
+      data: buildAnalyzePassageFallbackSkeleton(payload),
+      meta: toPublicMeta(result.meta, { used_fallback: true })
+    };
+  }
+
+  const normalized = normalizeAnalyzePassageContract(parsed.value, payload);
+  const reasons = validateAnalyzePassageContract(normalized, payload);
+
+  if (reasons.length === 0) {
+    return {
+      data: normalized,
+      meta: toPublicMeta(result.meta)
+    };
+  }
+
+  const repaired = await repairAnalyzePassageContract(payload, parsed.value, reasons, {
+    aiClient,
+    requestId
   });
+  if (repaired) {
+    return repaired;
+  }
 
   return {
-    passage_overview: normalized.passage_overview,
-    paragraph_cards: normalized.paragraph_cards,
-    sentence_analyses: normalized.sentence_analyses,
-    quality_warnings: qualityWarnings,
-    model_name: modelName,
-    elapsed_ms: elapsed
+    data: buildAnalyzePassageFallbackSkeleton(payload),
+    meta: toPublicMeta(result.meta, { used_fallback: true })
   };
 }
+
+export const __testables = {
+  buildPassageMapPrompt,
+  normalizeAnalyzePassageContract,
+  validateAnalyzePassageContract,
+  buildAnalyzePassageFallbackSkeleton,
+  splitIntoSentences,
+  inferArgumentRole
+};

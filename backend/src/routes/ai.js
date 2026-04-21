@@ -4,6 +4,7 @@ import { explainSentence } from "../services/explainSentenceService.js";
 import { parseSource } from "../services/parseSourceService.js";
 import { analyzePassage } from "../services/analyzePassageService.js";
 import { validateExplainSentenceRequest } from "../validators/explainSentence.js";
+import { validateAnalyzePassageRequest } from "../validators/analyzePassage.js";
 import { validateParseSourceRequest } from "../validators/parseSource.js";
 import { createModelRegistry } from "../models/modelRegistry.js";
 import { createAIError, attachAIErrorMetadata, ERROR_CODES } from "../models/errors.js";
@@ -94,59 +95,30 @@ router.post("/parse-source", async (req, res) => {
 // ─── 教授级全文教学分析 ───
 
 router.post("/analyze-passage", async (req, res) => {
-  const requestId = runAIPreflight(req, "ai/analyze-passage");
-  const body = req.body ?? {};
-
-  const title = typeof body.title === "string" ? body.title.trim() : "";
-  const paragraphs = Array.isArray(body.paragraphs) ? body.paragraphs : [];
-  const keySentences = Array.isArray(body.key_sentences) ? body.key_sentences : [];
-
-  if (paragraphs.length === 0) {
-    return res.status(400).json({
-      success: false,
-      error: { code: "MISSING_PARAGRAPHS", message: "paragraphs 不能为空。" }
-    });
-  }
-
-  const validParagraphs = paragraphs
-    .filter((p) => typeof p?.text === "string" && p.text.trim().length >= 5)
-    .map((p, i) => ({
-      index: typeof p.index === "number" ? p.index : i,
-      text: p.text.trim()
-    }));
-
-  const validSentences = keySentences
-    .filter((s) => typeof s?.text === "string" && typeof s?.ref === "string")
-    .map((s) => ({
-      ref: s.ref.trim(),
-      text: s.text.trim(),
-      paragraphIndex: typeof s.paragraph_index === "number" ? s.paragraph_index : 0
-    }));
+  const requestId = ensureRequestId(req);
+  const payload = validateAnalyzePassageRequest(req.body);
+  runAIPreflight(req, "ai/analyze-passage");
 
   console.log("[ai/analyze-passage] request", {
     requestId,
-    title,
-    paragraphCount: validParagraphs.length,
-    keySentenceCount: validSentences.length
+    documentId: payload.identity.document_id,
+    title: payload.title,
+    paragraphCount: payload.paragraphs.length
   });
 
-  const data = await analyzePassage({
-    title,
-    paragraphs: validParagraphs,
-    keySentences: validSentences
-  });
+  const result = await analyzePassage(payload, { requestId });
 
   console.log("[ai/analyze-passage] success", {
     requestId,
-    elapsed_ms: data.elapsed_ms,
-    paragraphCards: data.paragraph_cards.length,
-    sentenceAnalyses: data.sentence_analyses.length
+    paragraphCards: result.data.paragraph_cards.length,
+    usedFallback: result.meta.used_fallback
   });
 
   return res.json({
     success: true,
     request_id: requestId,
-    data
+    data: result.data,
+    meta: result.meta
   });
 });
 
