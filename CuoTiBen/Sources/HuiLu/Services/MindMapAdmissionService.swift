@@ -344,7 +344,10 @@ enum MindMapAdmissionService {
         overview: PassageOverview?
     ) -> NodeGeneratedFrom {
         let question = overview?.displayedAuthorCoreQuestion.lowercased() ?? ""
-        if question.contains("本地结构骨架") || question.contains("暂不可用") {
+        if bundle.passageAnalysisDiagnostics?.materialMode != .passageReading {
+            return .localFallback
+        }
+        if question.contains("本地结构骨架") || question.contains("结构骨架") || question.contains("暂不可用") {
             return .localFallback
         }
         if bundle.paragraphTeachingCards.contains(where: \.isAIGenerated) {

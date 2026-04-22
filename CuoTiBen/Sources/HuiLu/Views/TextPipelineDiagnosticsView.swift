@@ -282,6 +282,12 @@ private struct AIGatewayEventStatus {
     let usedFallback: Bool
     let circuitState: String
     let fallbackMessage: String?
+    let materialMode: String?
+    let activeCallPath: String?
+    let acceptedParagraphCount: Int?
+    let rejectedParagraphCount: Int?
+    let nonPassageRatio: String?
+    let reason: String?
 
     init?(event: TextPipelineDiagnostics.PipelineEvent) {
         guard event.stage == "AI" else { return nil }
@@ -296,7 +302,7 @@ private struct AIGatewayEventStatus {
         }
 
         let values = DiagnosticsEventParser.parseKeyValuePairs(from: event.message)
-        guard values["used_fallback"] != nil else { return nil }
+        guard values["used_fallback"] != nil || values["material_mode"] != nil else { return nil }
 
         self.scope = scope
         timestamp = event.timestamp
@@ -321,10 +327,17 @@ private struct AIGatewayEventStatus {
         } else {
             configured = nil
         }
+        materialMode = values["material_mode"]
+        activeCallPath = values["active_call_path"]
+        acceptedParagraphCount = Int(values["accepted_paragraph_count"] ?? "")
+        rejectedParagraphCount = Int(values["rejected_paragraph_count"] ?? "")
+        nonPassageRatio = values["non_passage_ratio"]
+        reason = values["reason"]?.replacingOccurrences(of: "||", with: " | ")
         fallbackMessage = DiagnosticsEventParser.buildFallbackMessage(
             scope: scope,
             errorCode: errorCode,
-            usedFallback: usedFallback
+            usedFallback: usedFallback,
+            materialMode: materialMode
         )
     }
 }
@@ -343,6 +356,14 @@ private struct AIGatewayStatusCard: View {
             DiagnosticKeyValueRow(label: "used_cache", value: status.usedCache ? "true" : "false")
             DiagnosticKeyValueRow(label: "used_fallback", value: status.usedFallback ? "true" : "false")
             DiagnosticKeyValueRow(label: "circuit_state", value: status.circuitState)
+            if status.scope == .passage {
+                DiagnosticKeyValueRow(label: "material_mode", value: status.materialMode ?? "nil")
+                DiagnosticKeyValueRow(label: "activeCallPath", value: status.activeCallPath ?? "nil")
+                DiagnosticKeyValueRow(label: "acceptedParagraphCount", value: status.acceptedParagraphCount.map(String.init) ?? "nil")
+                DiagnosticKeyValueRow(label: "rejectedParagraphCount", value: status.rejectedParagraphCount.map(String.init) ?? "nil")
+                DiagnosticKeyValueRow(label: "nonPassageRatio", value: status.nonPassageRatio ?? "nil")
+                DiagnosticKeyValueRow(label: "reason", value: status.reason ?? "nil")
+            }
         }
         .padding(.vertical, 4)
     }
@@ -416,7 +437,8 @@ private enum DiagnosticsEventParser {
     static func buildFallbackMessage(
         scope: AIGatewayEventStatus.Scope,
         errorCode: String?,
-        usedFallback: Bool
+        usedFallback: Bool,
+        materialMode: String?
     ) -> String? {
         guard usedFallback else { return nil }
 
@@ -429,6 +451,16 @@ private enum DiagnosticsEventParser {
             return "AI 返回内容不可用，已展示本地解析骨架。"
         case (.sentence, _):
             return "句子讲解已切回本地骨架。"
+        case (.passage, _) where materialMode == MaterialAnalysisMode.learningMaterial.rawValue:
+            return "这份资料主要是讲义、说明或中文解析，已展示本地学习资料结构骨架。"
+        case (.passage, _) where materialMode == MaterialAnalysisMode.vocabularyNotes.rawValue:
+            return "这份资料主要是词汇注释或双语说明，已展示本地词汇讲义结构骨架。"
+        case (.passage, _) where materialMode == MaterialAnalysisMode.questionSheet.rawValue:
+            return "这份资料主要是题干、选项或答案线索，已展示本地题目结构骨架。"
+        case (.passage, _) where materialMode == MaterialAnalysisMode.auxiliaryOnlyMap.rawValue:
+            return "这份资料主要由辅助信息组成，已展示本地辅助资料结构骨架。"
+        case (.passage, _) where materialMode == MaterialAnalysisMode.insufficientText.rawValue:
+            return "当前正文不足，已展示本地结构骨架。"
         case (.passage, "MODEL_CONFIG_MISSING"):
             return "AI 地图分析暂未配置，已展示本地结构骨架。"
         case (.passage, "UPSTREAM_503"), (.passage, "UPSTREAM_TIMEOUT"), (.passage, "NETWORK_UNAVAILABLE"):

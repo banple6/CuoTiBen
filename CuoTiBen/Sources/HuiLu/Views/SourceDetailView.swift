@@ -146,6 +146,18 @@ struct SourceDetailView: View {
         )
     }
 
+    private var passageMaterialMode: MaterialAnalysisMode? {
+        structuredSource?.passageAnalysisDiagnostics?.materialMode
+    }
+
+    private var structureStatusTitle: String {
+        passageMaterialMode?.statusTitle ?? "思维导图暂不可用"
+    }
+
+    private var allowsPassageRetry: Bool {
+        passageMaterialMode == nil || passageMaterialMode == .passageReading
+    }
+
     var body: some View {
         GeometryReader { proxy in
             let usesArchivistWorkspace = proxy.size.width >= 960
@@ -658,7 +670,7 @@ struct SourceDetailView: View {
                         .font(.system(size: 17, weight: .semibold, design: .serif))
                         .foregroundStyle(AppPalette.paperInk.opacity(0.82))
                 } else if let error = viewModel.structuredSourceError(for: liveDocument) {
-                    Text("思维导图暂不可用")
+                    Text(structureStatusTitle)
                         .font(.system(size: 17, weight: .bold, design: .serif))
                         .foregroundStyle(AppPalette.paperInk)
 
@@ -666,14 +678,16 @@ struct SourceDetailView: View {
                         .font(.system(size: 15, weight: .medium, design: .serif))
                         .foregroundStyle(AppPalette.paperMuted)
 
-                    Button("重试解析") {
-                        Task {
-                            await viewModel.loadStructuredSource(for: liveDocument, force: true)
+                    if allowsPassageRetry {
+                        Button("重试解析") {
+                            Task {
+                                await viewModel.loadStructuredSource(for: liveDocument, force: true)
+                            }
                         }
+                        .font(.system(size: 14, weight: .semibold, design: .serif))
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Color.blue.opacity(0.8))
                     }
-                    .font(.system(size: 14, weight: .semibold, design: .serif))
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Color.blue.opacity(0.8))
                 } else {
                     Text("资料导入后会在这里展示原文、思维导图和教授式讲解。")
                         .font(.system(size: 15, weight: .medium, design: .serif))

@@ -149,6 +149,8 @@
 		B0000000000000000000008C /* MindMapMiniMapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000008C /* MindMapMiniMapView.swift */; };
 		B0000000000000000000008D /* MindMapToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000008D /* MindMapToolbar.swift */; };
 		B0000000000000000000008E /* MindMapLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000008E /* MindMapLayout.swift */; };
+		B0000000000000000000008F /* AnalyzePassageRequestBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000008F /* AnalyzePassageRequestBuilder.swift */; };
+		B00000000000000000000090 /* MaterialAnalysisGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000090 /* MaterialAnalysisGate.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -295,6 +297,8 @@
 		C0000000000000000000008C /* MindMapMiniMapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MindMapMiniMapView.swift; sourceTree = "<group>"; };
 		C0000000000000000000008D /* MindMapToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MindMapToolbar.swift; sourceTree = "<group>"; };
 		C0000000000000000000008E /* MindMapLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MindMapLayout.swift; sourceTree = "<group>"; };
+		C0000000000000000000008F /* AnalyzePassageRequestBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalyzePassageRequestBuilder.swift; sourceTree = "<group>"; };
+		C00000000000000000000090 /* MaterialAnalysisGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MaterialAnalysisGate.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -421,6 +425,8 @@
 				C0000000000000000000006D /* DocumentParseService.swift */,
 				C0000000000000000000006E /* NormalizedDocumentConverter.swift */,
 				C0000000000000000000006F /* ProfessorAnalysisService.swift */,
+				C0000000000000000000008F /* AnalyzePassageRequestBuilder.swift */,
+				C00000000000000000000090 /* MaterialAnalysisGate.swift */,
 				C00000000000000000000080 /* LocalSentenceFallbackBuilder.swift */,
 				C00000000000000000000081 /* LocalPassageFallbackBuilder.swift */,
 				C00000000000000000000088 /* MindMapAdmissionService.swift */,
@@ -847,6 +853,8 @@
 				B0000000000000000000006D /* DocumentParseService.swift in Sources */,
 				B0000000000000000000006E /* NormalizedDocumentConverter.swift in Sources */,
 				B0000000000000000000006F /* ProfessorAnalysisService.swift in Sources */,
+				B0000000000000000000008F /* AnalyzePassageRequestBuilder.swift in Sources */,
+				B00000000000000000000090 /* MaterialAnalysisGate.swift in Sources */,
 				B00000000000000000000080 /* LocalSentenceFallbackBuilder.swift in Sources */,
 				B00000000000000000000081 /* LocalPassageFallbackBuilder.swift in Sources */,
 				B00000000000000000000088 /* MindMapAdmissionService.swift in Sources */,

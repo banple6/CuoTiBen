@@ -2149,6 +2149,7 @@ struct StructuredSourceBundle: Equatable {
     let zoningSummary: DocumentZoningSummary
     let passageMap: PassageMap?
     let mindMapAdmissionResult: MindMapAdmissionResult?
+    let passageAnalysisDiagnostics: PassageAnalysisDiagnostics?
 
     // 缓存索引（惰性构建，一次性）
     private let _cachedFlatNodes: [OutlineNode]
@@ -2168,7 +2169,8 @@ struct StructuredSourceBundle: Equatable {
         lhs.questionLinks == rhs.questionLinks &&
         lhs.zoningSummary == rhs.zoningSummary &&
         lhs.passageMap == rhs.passageMap &&
-        lhs.mindMapAdmissionResult == rhs.mindMapAdmissionResult
+        lhs.mindMapAdmissionResult == rhs.mindMapAdmissionResult &&
+        lhs.passageAnalysisDiagnostics == rhs.passageAnalysisDiagnostics
     }
 
     init(
@@ -2188,7 +2190,8 @@ struct StructuredSourceBundle: Equatable {
             metaInstructionParagraphCount: 0
         ),
         passageMap: PassageMap? = nil,
-        mindMapAdmissionResult: MindMapAdmissionResult? = nil
+        mindMapAdmissionResult: MindMapAdmissionResult? = nil,
+        passageAnalysisDiagnostics: PassageAnalysisDiagnostics? = nil
     ) {
         self.source = source
         self.segments = segments
@@ -2201,6 +2204,7 @@ struct StructuredSourceBundle: Equatable {
         self.zoningSummary = zoningSummary
         self.passageMap = passageMap
         self.mindMapAdmissionResult = mindMapAdmissionResult
+        self.passageAnalysisDiagnostics = passageAnalysisDiagnostics
         self._cachedFlatNodes = Self.flattenSafe(nodes: outline, maxDepth: 20)
         self._sentenceIndex = Dictionary(sentences.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         self._segmentIndex = Dictionary(segments.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -2337,7 +2341,8 @@ struct StructuredSourceBundle: Equatable {
     func enrichedWithAIAnalysis(
         overview: PassageOverview?,
         paragraphCards: [ParagraphTeachingCard],
-        sentenceCards: [ProfessorSentenceCard]
+        sentenceCards: [ProfessorSentenceCard],
+        passageAnalysisDiagnostics: PassageAnalysisDiagnostics? = nil
     ) -> StructuredSourceBundle {
         let aiParagraphIndex = Dictionary(
             paragraphCards.map { ($0.segmentID, $0) },
@@ -2399,7 +2404,8 @@ struct StructuredSourceBundle: Equatable {
             paragraphTeachingCards: mergedParagraphCards,
             professorSentenceCards: mergedSentenceCards,
             questionLinks: questionLinks,
-            zoningSummary: zoningSummary
+            zoningSummary: zoningSummary,
+            passageAnalysisDiagnostics: passageAnalysisDiagnostics ?? self.passageAnalysisDiagnostics
         )
         let passageMap = MindMapAdmissionService.buildPassageMap(from: provisionalBundle)
         let admissionResult = MindMapAdmissionService.admit(bundle: provisionalBundle, passageMap: passageMap)
@@ -2415,7 +2421,8 @@ struct StructuredSourceBundle: Equatable {
             questionLinks: provisionalBundle.questionLinks,
             zoningSummary: provisionalBundle.zoningSummary,
             passageMap: passageMap.withDiagnostics(admissionResult.diagnostics),
-            mindMapAdmissionResult: admissionResult
+            mindMapAdmissionResult: admissionResult,
+            passageAnalysisDiagnostics: provisionalBundle.passageAnalysisDiagnostics
         )
     }
 

@@ -10,74 +10,14 @@ struct ProfessorAnalysisServiceResult {
     let admissionResult: MindMapAdmissionResult?
     let message: String?
     let structuredError: AIStructuredError?
+    let analysisDiagnostics: PassageAnalysisDiagnostics
 
     var usedFallback: Bool { meta.usedFallback }
 }
 
 enum ProfessorAnalysisService {
-    private static let maxParagraphCount = 4
-    private static let maxParagraphCharacters = 700
     private static let analyzePassageTimeout: TimeInterval = 150
-
-    private struct AnalyzePassageIdentity: Encodable {
-        let clientRequestID: String
-        let documentID: String
-        let contentHash: String
-
-        private enum CodingKeys: String, CodingKey {
-            case clientRequestID = "client_request_id"
-            case documentID = "document_id"
-            case contentHash = "content_hash"
-        }
-    }
-
-    private struct ParagraphInput: Encodable {
-        let segmentID: String
-        let index: Int
-        let anchorLabel: String
-        let text: String
-        let sourceKind: String
-        let hygieneScore: Double
-
-        private enum CodingKeys: String, CodingKey {
-            case segmentID = "segment_id"
-            case index
-            case anchorLabel = "anchor_label"
-            case text
-            case sourceKind = "source_kind"
-            case hygieneScore = "hygiene_score"
-        }
-    }
-
-    private struct AuxiliaryBlock: Encodable {
-        let id: String
-        let text: String
-        let sourceKind: String
-
-        private enum CodingKeys: String, CodingKey {
-            case id
-            case text
-            case sourceKind = "source_kind"
-        }
-    }
-
-    private struct AnalyzePassageRequest: Encodable {
-        let identity: AnalyzePassageIdentity
-        let title: String
-        let paragraphs: [ParagraphInput]
-        let questionBlocks: [AuxiliaryBlock]
-        let answerBlocks: [AuxiliaryBlock]
-        let vocabularyBlocks: [AuxiliaryBlock]
-
-        private enum CodingKeys: String, CodingKey {
-            case identity
-            case title
-            case paragraphs
-            case questionBlocks = "question_blocks"
-            case answerBlocks = "answer_blocks"
-            case vocabularyBlocks = "vocabulary_blocks"
-        }
-    }
+    private static let activeCallPath = "ProfessorAnalysisService.enrichBundle"
 
     private struct AnalyzePassageResponseEnvelope {
         let success: Bool
@@ -100,36 +40,45 @@ enum ProfessorAnalysisService {
         title: String,
         overrideBaseURL: String? = nil
     ) async throws -> ProfessorAnalysisServiceResult {
-        let paragraphInputs = buildParagraphInputs(from: bundle)
-        guard !paragraphInputs.isEmpty else {
+        let materialDecision = MaterialAnalysisGate.evaluate(document: document, bundle: bundle)
+        let requestBuild = AnalyzePassageRequestBuilder.build(
+            document: document,
+            bundle: bundle,
+            title: title,
+            decision: materialDecision,
+            activeCallPath: activeCallPath
+        )
+
+        logRequestPreparation(requestBuild.diagnostics)
+
+        guard let requestBody = requestBuild.payload else {
             return fallbackResult(
                 document: document,
                 bundle: bundle,
-                structuredError: AIStructuredError.invalidRequest(message: "当前资料缺少可用于地图分析的正文段落。")
+                diagnostics: requestBuild.diagnostics,
+                structuredError: AIStructuredError.invalidRequest(
+                    message: requestBuild.diagnostics.fallbackMessage,
+                    requestID: requestBuild.diagnostics.clientRequestID,
+                    fallbackAvailable: true
+                ),
+                meta: AIServiceResponseMeta.localFallback()
             )
         }
-
-        let contentHash = AIRequestIdentity.hash(
-            text: paragraphInputs.map(\.text).joined(separator: "\n\n")
-        )
-        let identity = AnalyzePassageIdentity(
-            clientRequestID: UUID().uuidString.lowercased(),
-            documentID: document.id.uuidString,
-            contentHash: contentHash
-        )
 
         if let blockingMessage = await aiServiceAvailabilityGate.blockingMessage(for: .professorAnalysis) {
             return fallbackResult(
                 document: document,
                 bundle: bundle,
+                diagnostics: requestBuild.diagnostics,
                 structuredError: AIStructuredError(
                     kind: .upstream503,
-                    requestID: identity.clientRequestID,
+                    requestID: requestBuild.diagnostics.clientRequestID,
                     errorCode: "UPSTREAM_503",
                     retryable: true,
                     fallbackAvailable: true,
                     message: blockingMessage
-                )
+                ),
+                meta: AIServiceResponseMeta.localFallback()
             )
         }
 
@@ -141,44 +90,36 @@ enum ProfessorAnalysisService {
             return fallbackResult(
                 document: document,
                 bundle: bundle,
+                diagnostics: requestBuild.diagnostics,
                 structuredError: AIStructuredError(
                     kind: .networkUnavailable,
-                    requestID: identity.clientRequestID,
+                    requestID: requestBuild.diagnostics.clientRequestID,
                     errorCode: "BACKEND_NOT_CONFIGURED",
                     retryable: true,
                     fallbackAvailable: true,
                     message: "AI 后端未配置，已展示本地结构骨架。"
-                )
+                ),
+                meta: AIServiceResponseMeta.localFallback()
             )
         }
 
-        let requestBody = AnalyzePassageRequest(
-            identity: identity,
-            title: title,
-            paragraphs: paragraphInputs,
-            questionBlocks: [],
-            answerBlocks: [],
-            vocabularyBlocks: []
-        )
         let requestData = try JSONEncoder().encode(requestBody)
 
         return try await performAnalyzePassage(
             document: document,
             bundle: bundle,
-            requestIdentity: identity,
+            requestBuild: requestBuild,
             endpointURLs: endpointURLs,
-            requestData: requestData,
-            paragraphInputs: paragraphInputs
+            requestData: requestData
         )
     }
 
     private static func performAnalyzePassage(
         document: SourceDocument,
         bundle: StructuredSourceBundle,
-        requestIdentity: AnalyzePassageIdentity,
+        requestBuild: AnalyzePassageRequestBuildResult,
         endpointURLs: [URL],
-        requestData: Data,
-        paragraphInputs: [ParagraphInput]
+        requestData: Data
     ) async throws -> ProfessorAnalysisServiceResult {
         var lastError: Error?
 
@@ -212,6 +153,28 @@ enum ProfessorAnalysisService {
                             cooldown: AIServiceAvailabilityPolicy.cooldown(for: httpResponse.statusCode)
                         )
 
+                        if let structuredError,
+                           structuredError.errorCode == "INVALID_REQUEST",
+                           structuredError.message.contains("缺少 passage identity 字段") {
+                            logMissingIdentityBug(
+                                diagnostics: requestBuild.diagnostics.withFlags(
+                                    requestBuilderUsed: false,
+                                    missingIdentity: true
+                                ),
+                                structuredError: structuredError
+                            )
+                            return fallbackResult(
+                                document: document,
+                                bundle: bundle,
+                                diagnostics: requestBuild.diagnostics.withFlags(
+                                    requestBuilderUsed: false,
+                                    missingIdentity: true
+                                ),
+                                structuredError: structuredError,
+                                meta: AIServiceResponseMeta.localFallback()
+                            )
+                        }
+
                         if AIExplainSentenceService.shouldRetryEndpoint(statusCode: httpResponse.statusCode),
                            endpointIndex < endpointURLs.count - 1 {
                             lastError = structuredError.map(AIExplainSentenceServiceError.structured)
@@ -225,8 +188,9 @@ enum ProfessorAnalysisService {
                             return fallbackResult(
                                 document: document,
                                 bundle: bundle,
+                                diagnostics: requestBuild.diagnostics,
                                 structuredError: structuredError,
-                                meta: .localFallback()
+                                meta: AIServiceResponseMeta.localFallback()
                             )
                         }
 
@@ -239,7 +203,7 @@ enum ProfessorAnalysisService {
                     let decoded = try decodeResponseEnvelope(
                         from: data,
                         bundle: bundle,
-                        paragraphInputs: paragraphInputs
+                        acceptedParagraphs: requestBuild.payload?.paragraphs ?? []
                     )
 
                     if decoded.success, let payload = decoded.data {
@@ -249,25 +213,23 @@ enum ProfessorAnalysisService {
                             storedAt: Date(),
                             passageOverview: payload.overview,
                             paragraphCards: payload.paragraphCards,
-                            sentenceCards: []
+                            sentenceCards: [],
+                            passageAnalysisDiagnostics: requestBuild.diagnostics
                         )
                         TextPipelineDiagnostics.log(
                             "AI",
-                            [
-                                "[AI][PassageMap] success",
-                                "request_id=\(decoded.requestID ?? "nil")",
-                                "provider=\(decoded.meta.provider ?? "nil")",
-                                "model=\(decoded.meta.model ?? "nil")",
-                                "retry_count=\(decoded.meta.retryCount)",
-                                "used_cache=\(decoded.meta.usedCache)",
-                                "used_fallback=\(decoded.meta.usedFallback)"
-                            ].joined(separator: " "),
+                            successLogFields(
+                                diagnostics: requestBuild.diagnostics,
+                                requestID: decoded.requestID,
+                                meta: decoded.meta
+                            ).joined(separator: " "),
                             severity: .info
                         )
                         let enrichedBundle = bundle.enrichedWithAIAnalysis(
                             overview: payload.overview,
                             paragraphCards: payload.paragraphCards,
-                            sentenceCards: []
+                            sentenceCards: [],
+                            passageAnalysisDiagnostics: requestBuild.diagnostics
                         )
                         return ProfessorAnalysisServiceResult(
                             delta: delta,
@@ -277,8 +239,9 @@ enum ProfessorAnalysisService {
                             questionLinks: payload.questionLinks,
                             passageMap: enrichedBundle.passageMap,
                             admissionResult: enrichedBundle.mindMapAdmissionResult,
-                            message: decoded.meta.usedFallback ? "AI 地图分析暂不可用，已展示本地结构骨架。" : nil,
-                            structuredError: decoded.structuredError
+                            message: decoded.meta.usedFallback ? requestBuild.diagnostics.fallbackMessage : nil,
+                            structuredError: decoded.structuredError,
+                            analysisDiagnostics: requestBuild.diagnostics
                         )
                     }
 
@@ -287,6 +250,7 @@ enum ProfessorAnalysisService {
                             return fallbackResult(
                                 document: document,
                                 bundle: bundle,
+                                diagnostics: requestBuild.diagnostics,
                                 structuredError: structuredError,
                                 meta: fallbackMeta(from: decoded.meta)
                             )
@@ -297,6 +261,7 @@ enum ProfessorAnalysisService {
                     return fallbackResult(
                         document: document,
                         bundle: bundle,
+                        diagnostics: requestBuild.diagnostics,
                         structuredError: AIStructuredError.invalidModelResponse(
                             message: "AI 地图分析返回内容不可解析。",
                             requestID: decoded.requestID
@@ -326,21 +291,27 @@ enum ProfessorAnalysisService {
                     return fallbackResult(
                         document: document,
                         bundle: bundle,
-                        structuredError: AIStructuredError.from(urlError: error)
+                        diagnostics: requestBuild.diagnostics,
+                        structuredError: AIStructuredError.from(urlError: error),
+                        meta: AIServiceResponseMeta.localFallback()
                     )
                 } catch let error as AIExplainSentenceServiceError {
                     if case .structured(let structuredError) = error, structuredError.shouldUseLocalFallback {
                         return fallbackResult(
                             document: document,
                             bundle: bundle,
-                            structuredError: structuredError
+                            diagnostics: requestBuild.diagnostics,
+                            structuredError: structuredError,
+                            meta: AIServiceResponseMeta.localFallback()
                         )
                     }
                     if case .invalidServerResponse = error {
                         return fallbackResult(
                             document: document,
                             bundle: bundle,
-                            structuredError: AIStructuredError.invalidModelResponse(message: "AI 地图分析返回内容不可解析。")
+                            diagnostics: requestBuild.diagnostics,
+                            structuredError: AIStructuredError.invalidModelResponse(message: "AI 地图分析返回内容不可解析。"),
+                            meta: AIServiceResponseMeta.localFallback()
                         )
                     }
                     if endpointIndex < endpointURLs.count - 1 {
@@ -356,7 +327,9 @@ enum ProfessorAnalysisService {
                     return fallbackResult(
                         document: document,
                         bundle: bundle,
-                        structuredError: AIStructuredError.invalidModelResponse(message: "AI 地图分析返回内容不可解析。")
+                        diagnostics: requestBuild.diagnostics,
+                        structuredError: AIStructuredError.invalidModelResponse(message: "AI 地图分析返回内容不可解析。"),
+                        meta: AIServiceResponseMeta.localFallback()
                     )
                 }
             }
@@ -371,7 +344,9 @@ enum ProfessorAnalysisService {
             return fallbackResult(
                 document: document,
                 bundle: bundle,
-                structuredError: structuredError
+                diagnostics: requestBuild.diagnostics,
+                structuredError: structuredError,
+                meta: AIServiceResponseMeta.localFallback()
             )
         }
 
@@ -382,14 +357,16 @@ enum ProfessorAnalysisService {
         return fallbackResult(
             document: document,
             bundle: bundle,
-            structuredError: AIStructuredError.invalidModelResponse(message: "AI 地图分析返回内容不可解析。")
+            diagnostics: requestBuild.diagnostics,
+            structuredError: AIStructuredError.invalidModelResponse(message: "AI 地图分析返回内容不可解析。"),
+            meta: AIServiceResponseMeta.localFallback()
         )
     }
 
     private static func decodeResponseEnvelope(
         from data: Data,
         bundle: StructuredSourceBundle,
-        paragraphInputs: [ParagraphInput]
+        acceptedParagraphs: [AnalyzePassageParagraphPayload]
     ) throws -> AnalyzePassageResponseEnvelope {
         let isWhitespaceOnly = data.allSatisfy { byte in
             byte == 0x20 || byte == 0x09 || byte == 0x0A || byte == 0x0D
@@ -421,7 +398,7 @@ enum ProfessorAnalysisService {
         let payload = normalizePayload(
             from: payloadDictionary,
             bundle: bundle,
-            paragraphInputs: paragraphInputs
+            acceptedParagraphs: acceptedParagraphs
         )
         return AnalyzePassageResponseEnvelope(
             success: success,
@@ -435,9 +412,9 @@ enum ProfessorAnalysisService {
     private static func normalizePayload(
         from dictionary: [String: Any],
         bundle: StructuredSourceBundle,
-        paragraphInputs: [ParagraphInput]
+        acceptedParagraphs: [AnalyzePassageParagraphPayload]
     ) -> AnalyzePassagePayload? {
-        let allowedSegmentIDs = Set(paragraphInputs.map(\.segmentID))
+        let allowedSegmentIDs = Set(acceptedParagraphs.map { $0.segmentID })
         let segmentIndex = Dictionary(uniqueKeysWithValues: bundle.segments.map { ($0.id, $0) })
         let sentencesBySegment = Dictionary(grouping: bundle.sentences, by: \.segmentID)
 
@@ -511,26 +488,26 @@ enum ProfessorAnalysisService {
     private static func fallbackResult(
         document: SourceDocument,
         bundle: StructuredSourceBundle,
+        diagnostics: PassageAnalysisDiagnostics,
         structuredError: AIStructuredError,
         meta: AIServiceResponseMeta? = nil
     ) -> ProfessorAnalysisServiceResult {
         let fallback = LocalPassageFallbackBuilder.build(
             document: document,
             bundle: bundle,
+            diagnostics: diagnostics,
             structuredError: structuredError,
-            meta: meta ?? .localFallback()
+            meta: meta ?? AIServiceResponseMeta.localFallback()
         )
 
         TextPipelineDiagnostics.log(
             "AI",
-            [
-                "[AI][PassageMap] local fallback",
-                "request_id=\(structuredError.requestID ?? "nil")",
-                "error_code=\(structuredError.errorCode)",
-                "retry_count=\(fallback.meta.retryCount)",
-                "used_cache=\(fallback.meta.usedCache)",
-                "used_fallback=\(fallback.meta.usedFallback)"
-            ].joined(separator: " "),
+            fallbackLogFields(
+                diagnostics: fallback.analysisDiagnostics,
+                requestID: structuredError.requestID,
+                errorCode: structuredError.errorCode,
+                meta: fallback.meta
+            ).joined(separator: " "),
             severity: .warning
         )
 
@@ -544,7 +521,8 @@ enum ProfessorAnalysisService {
             passageMap: enrichedBundle.passageMap,
             admissionResult: enrichedBundle.mindMapAdmissionResult,
             message: fallback.message,
-            structuredError: structuredError
+            structuredError: structuredError,
+            analysisDiagnostics: fallback.analysisDiagnostics
         )
     }
 
@@ -559,30 +537,101 @@ enum ProfessorAnalysisService {
         )
     }
 
-    private static func buildParagraphInputs(from bundle: StructuredSourceBundle) -> [ParagraphInput] {
-        candidateSegments(in: bundle).map { segment in
-            ParagraphInput(
-                segmentID: segment.id,
-                index: segment.index,
-                anchorLabel: segment.anchorLabel,
-                text: truncated(segment.text, limit: maxParagraphCharacters),
-                sourceKind: segment.provenance.sourceKind.rawValue,
-                hygieneScore: segment.hygiene.score
-            )
-        }
+    private static func logRequestPreparation(_ diagnostics: PassageAnalysisDiagnostics) {
+        TextPipelineDiagnostics.log(
+            "AI",
+            [
+                "[AI][PassageMap] request_prepared",
+                "client_request_id=\(diagnostics.clientRequestID ?? "nil")",
+                "document_id=\(diagnostics.documentID)",
+                "active_call_path=\(diagnostics.activeCallPath)",
+                "content_hash=\(diagnostics.contentHash ?? "nil")",
+                "accepted_paragraph_count=\(diagnostics.acceptedParagraphCount)",
+                "rejected_paragraph_count=\(diagnostics.rejectedParagraphCount)",
+                String(format: "non_passage_ratio=%.2f", diagnostics.nonPassageRatio),
+                "material_mode=\(diagnostics.materialMode.rawValue)",
+                "reason=\(diagnostics.reasonFlags.isEmpty ? diagnostics.reason : diagnostics.reasonFlags.joined(separator: "||"))",
+                "request_builder_used=\(diagnostics.requestBuilderUsed)",
+                "used_fallback=\(!diagnostics.requestBuilderUsed)"
+            ].joined(separator: " "),
+            severity: diagnostics.requestBuilderUsed ? .info : .warning
+        )
     }
 
-    private static func candidateSegments(in bundle: StructuredSourceBundle) -> [Segment] {
-        let primary = bundle.segments.filter { $0.provenance.sourceKind == .passageBody }
-        if !primary.isEmpty {
-            return Array(primary.prefix(maxParagraphCount))
-        }
-
-        return Array(
-            bundle.segments
-                .filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-                .prefix(maxParagraphCount)
+    private static func logMissingIdentityBug(
+        diagnostics: PassageAnalysisDiagnostics,
+        structuredError: AIStructuredError
+    ) {
+        TextPipelineDiagnostics.log(
+            "AI",
+            [
+                "[AI][PassageMap] identity_bug",
+                "request_id=\(structuredError.requestID ?? "nil")",
+                "client_request_id=\(diagnostics.clientRequestID ?? "nil")",
+                "document_id=\(diagnostics.documentID)",
+                "active_call_path=\(diagnostics.activeCallPath)",
+                "content_hash=\(diagnostics.contentHash ?? "nil")",
+                "accepted_paragraph_count=\(diagnostics.acceptedParagraphCount)",
+                "material_mode=\(diagnostics.materialMode.rawValue)",
+                "request_builder_used=false",
+                "missing_identity=true",
+                "used_fallback=true",
+                "error_code=\(structuredError.errorCode)"
+            ].joined(separator: " "),
+            severity: .error
         )
+    }
+
+    private static func successLogFields(
+        diagnostics: PassageAnalysisDiagnostics,
+        requestID: String?,
+        meta: AIServiceResponseMeta
+    ) -> [String] {
+        [
+            "[AI][PassageMap] success",
+            "request_id=\(requestID ?? "nil")",
+            "client_request_id=\(diagnostics.clientRequestID ?? "nil")",
+            "document_id=\(diagnostics.documentID)",
+            "active_call_path=\(diagnostics.activeCallPath)",
+            "content_hash=\(diagnostics.contentHash ?? "nil")",
+            "accepted_paragraph_count=\(diagnostics.acceptedParagraphCount)",
+            "rejected_paragraph_count=\(diagnostics.rejectedParagraphCount)",
+            String(format: "non_passage_ratio=%.2f", diagnostics.nonPassageRatio),
+            "material_mode=\(diagnostics.materialMode.rawValue)",
+            "reason=\(diagnostics.reasonFlags.isEmpty ? diagnostics.reason : diagnostics.reasonFlags.joined(separator: "||"))",
+            "provider=\(meta.provider ?? "nil")",
+            "model=\(meta.model ?? "nil")",
+            "retry_count=\(meta.retryCount)",
+            "used_cache=\(meta.usedCache)",
+            "used_fallback=\(meta.usedFallback)",
+            "circuit_state=\(meta.circuitState)"
+        ]
+    }
+
+    private static func fallbackLogFields(
+        diagnostics: PassageAnalysisDiagnostics,
+        requestID: String?,
+        errorCode: String,
+        meta: AIServiceResponseMeta
+    ) -> [String] {
+        [
+            "[AI][PassageMap] local fallback",
+            "request_id=\(requestID ?? "nil")",
+            "client_request_id=\(diagnostics.clientRequestID ?? "nil")",
+            "document_id=\(diagnostics.documentID)",
+            "active_call_path=\(diagnostics.activeCallPath)",
+            "content_hash=\(diagnostics.contentHash ?? "nil")",
+            "accepted_paragraph_count=\(diagnostics.acceptedParagraphCount)",
+            "rejected_paragraph_count=\(diagnostics.rejectedParagraphCount)",
+            String(format: "non_passage_ratio=%.2f", diagnostics.nonPassageRatio),
+            "material_mode=\(diagnostics.materialMode.rawValue)",
+            "reason=\(diagnostics.reasonFlags.isEmpty ? diagnostics.reason : diagnostics.reasonFlags.joined(separator: "||"))",
+            "error_code=\(errorCode)",
+            "retry_count=\(meta.retryCount)",
+            "used_cache=\(meta.usedCache)",
+            "used_fallback=\(meta.usedFallback)",
+            "circuit_state=\(meta.circuitState)"
+        ]
     }
 
     private static func stringArray(_ value: Any?) -> [String] {

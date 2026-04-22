@@ -6,6 +6,7 @@ struct ProfessorAnalysisDelta: Codable {
     let passageOverview: PassageOverview?
     let paragraphCards: [ParagraphTeachingCard]
     let sentenceCards: [ProfessorSentenceCard]
+    let passageAnalysisDiagnostics: PassageAnalysisDiagnostics?
 }
 
 actor ProfessorAnalysisCacheStore {
@@ -19,7 +20,7 @@ actor ProfessorAnalysisCacheStore {
         let source: CacheSource
     }
 
-    static let analysisSchemaVersion = "professor-analysis.v1"
+    static let analysisSchemaVersion = "professor-analysis.v2"
 
     private let fileManager: FileManager
     private let encoder: JSONEncoder
@@ -147,7 +148,8 @@ actor ProfessorAnalysisCacheStore {
             storedAt: Date(),
             passageOverview: enrichedBundle.passageOverview,
             paragraphCards: enrichedBundle.paragraphTeachingCards.filter(\.isAIGenerated),
-            sentenceCards: enrichedBundle.professorSentenceCards.filter { $0.analysis.isAIGenerated }
+            sentenceCards: enrichedBundle.professorSentenceCards.filter { $0.analysis.isAIGenerated },
+            passageAnalysisDiagnostics: enrichedBundle.passageAnalysisDiagnostics
         )
     }
 
@@ -175,7 +177,8 @@ extension StructuredSourceBundle {
         enrichedWithAIAnalysis(
             overview: delta.passageOverview,
             paragraphCards: delta.paragraphCards,
-            sentenceCards: delta.sentenceCards
+            sentenceCards: delta.sentenceCards,
+            passageAnalysisDiagnostics: delta.passageAnalysisDiagnostics
         )
     }
 }

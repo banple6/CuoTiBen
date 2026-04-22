@@ -1023,6 +1023,18 @@ private struct ReviewWorkbenchAnalysisPane: View {
     let onShowOutline: () -> Void
     let onRetryPassageAnalysis: () -> Void
 
+    private var materialMode: MaterialAnalysisMode? {
+        bundle.passageAnalysisDiagnostics?.materialMode
+    }
+
+    private var analysisStatusTitle: String {
+        materialMode?.statusTitle ?? "AI 地图分析暂不可用，已展示本地结构骨架"
+    }
+
+    private var allowsPassageRetry: Bool {
+        materialMode == nil || materialMode == .passageReading
+    }
+
     var body: some View {
         PaperSheetCard(
             padding: usesPadLayout ? 18 : 14,
@@ -1062,7 +1074,7 @@ private struct ReviewWorkbenchAnalysisPane: View {
                 if let analysisStatusMessage = analysisStatusMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
                    !analysisStatusMessage.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("AI 地图分析暂不可用，已展示本地结构骨架")
+                        Text(analysisStatusTitle)
                             .font(.system(size: 15, weight: .bold, design: .serif))
                             .foregroundStyle(AppPalette.paperInk)
 
@@ -1070,12 +1082,14 @@ private struct ReviewWorkbenchAnalysisPane: View {
                             .font(.system(size: 14, weight: .medium, design: .serif))
                             .foregroundStyle(AppPalette.paperMuted)
 
-                        Button("稍后重新生成地图") {
-                            onRetryPassageAnalysis()
+                        if allowsPassageRetry {
+                            Button("稍后重新生成地图") {
+                                onRetryPassageAnalysis()
+                            }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 13, weight: .semibold, design: .serif))
+                            .foregroundStyle(Color.blue.opacity(0.82))
                         }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 13, weight: .semibold, design: .serif))
-                        .foregroundStyle(Color.blue.opacity(0.82))
                     }
                     .padding(14)
                     .background(

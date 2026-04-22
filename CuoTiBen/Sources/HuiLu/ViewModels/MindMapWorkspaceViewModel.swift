@@ -13,6 +13,7 @@ final class MindMapWorkspaceViewModel: ObservableObject {
     @Published private(set) var diagnostics: [MindMapAdmissionDiagnostic] = []
     @Published private(set) var isUsingFallback = false
     @Published private(set) var fallbackMessage: String?
+    @Published private(set) var materialMode: MaterialAnalysisMode = .passageReading
 
     @Published var selectedNodeID: String?
     @Published var highlightedNodeID: String?
@@ -156,14 +157,22 @@ final class MindMapWorkspaceViewModel: ObservableObject {
         rejectedNodes = resolvedAdmission.rejectedNodes
         diagnostics = resolvedAdmission.diagnostics
         rootNode = resolvedAdmission.mainlineNodes.first(where: { $0.kind == .root })
+        materialMode = bundle.passageAnalysisDiagnostics?.materialMode ?? .passageReading
         rebuildIndices()
 
         let fallbackInProvenance = resolvedPassageMap.paragraphMaps.contains { $0.provenance.generatedFrom == .localFallback }
             || resolvedAdmission.mainlineNodes.contains { $0.provenance.generatedFrom == .localFallback }
         let fallbackInText = resolvedPassageMap.authorCoreQuestion.contains("本地结构骨架")
             || resolvedPassageMap.authorCoreQuestion.contains("暂不可用")
-        isUsingFallback = fallbackInProvenance || fallbackInText
-        fallbackMessage = isUsingFallback ? "AI 地图分析暂不可用，已展示本地结构骨架" : nil
+            || resolvedPassageMap.authorCoreQuestion.contains("结构骨架")
+        isUsingFallback = fallbackInProvenance || fallbackInText || materialMode != .passageReading
+        fallbackMessage = isUsingFallback
+            ? (bundle.passageAnalysisDiagnostics?.fallbackMessage
+                ?? "AI 地图分析暂不可用，已展示本地结构骨架。")
+            : nil
+        if materialMode != .passageReading, !auxiliaryNodes.isEmpty {
+            showsAuxiliary = true
+        }
 
         if let selectedNodeID, nodeIndex[selectedNodeID] == nil {
             self.selectedNodeID = nil
