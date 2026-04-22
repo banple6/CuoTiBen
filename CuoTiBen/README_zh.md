@@ -376,6 +376,15 @@
 
 - `docs/superpowers/runbooks/ai-core-local-verify.md`
 - `docs/superpowers/runbooks/ai-core-server-deploy-gate.md`
+- `docs/superpowers/runbooks/ai-core-production-deploy-record.md`
+- `docs/superpowers/checklists/ai-core-production-regression-checklist.md`
+
+其中：
+
+- `ai-core-local-verify.md` 记录本地验收命令
+- `ai-core-server-deploy-gate.md` 记录部署 gate 与 SSH 前置
+- `ai-core-production-deploy-record.md` 固化本次生产部署事实与 smoke 结果
+- `ai-core-production-regression-checklist.md` 用于上线后最小回归
 
 ### 10.2 FastAPI PP-StructureV3 网关
 
