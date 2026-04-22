@@ -5,6 +5,7 @@ const router = Router();
 
 router.get("/", (_req, res) => {
   const aiConfig = getAIConfig();
+  const gatewayStatus = _req.app?.locals?.aiGatewayStatus;
 
   res.json({
     ok: true,
@@ -18,7 +19,8 @@ router.get("/", (_req, res) => {
       api_kind: aiConfig.apiKind,
       timeout_ms: aiConfig.timeoutMs,
       max_retries: aiConfig.maxRetries,
-      circuit_breaker_enabled: aiConfig.circuitBreakerEnabled
+      circuit_breaker_enabled: aiConfig.circuitBreakerEnabled,
+      circuit_state: gatewayStatus?.circuitState || "closed"
     }
   });
 });

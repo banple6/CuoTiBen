@@ -11,14 +11,41 @@ struct TextPipelineDiagnosticsView: View {
         events
             .filter { $0.stage == "导图准入" }
             .last
-            .flatMap(MindMapAdmissionSummary.init(event:))
+            .flatMap { event in
+                MindMapAdmissionSummary(event: event)
+            }
     }
 
-    private var latestPassageAIStatus: PassageMapAIStatus? {
+    private var latestSentenceAIStatus: AIGatewayEventStatus? {
+        events
+            .filter { $0.stage == "AI" && $0.message.contains("[AI][SentenceExplain]") }
+            .last
+            .flatMap { event in
+                AIGatewayEventStatus(event: event)
+            }
+    }
+
+    private var latestPassageAIStatus: AIGatewayEventStatus? {
         events
             .filter { $0.stage == "AI" && $0.message.contains("[AI][PassageMap]") }
             .last
-            .flatMap(PassageMapAIStatus.init(event:))
+            .flatMap { event in
+                AIGatewayEventStatus(event: event)
+            }
+    }
+
+    private var latestAIGatewayStatus: AIGatewayEventStatus? {
+        [latestSentenceAIStatus, latestPassageAIStatus]
+            .compactMap { $0 }
+            .sorted { $0.timestamp < $1.timestamp }
+            .last
+    }
+
+    private var fallbackSummary: FallbackSummary? {
+        FallbackSummary(
+            sentenceStatus: latestSentenceAIStatus,
+            passageStatus: latestPassageAIStatus
+        )
     }
 
     private var filteredEvents: [TextPipelineDiagnostics.PipelineEvent] {
@@ -53,12 +80,21 @@ struct TextPipelineDiagnosticsView: View {
                 }
 
                 List {
+                    if let gatewayStatus = latestAIGatewayStatus {
+                        Section("AI Gateway") {
+                            AIGatewayStatusCard(status: gatewayStatus)
+                        }
+                    }
+
                     if let summary = latestAdmissionSummary {
-                        Section("导图准入概览") {
-                            MindMapAdmissionSummaryCard(
-                                summary: summary,
-                                aiStatus: latestPassageAIStatus
-                            )
+                        Section("MindMap admission") {
+                            MindMapAdmissionSummaryCard(summary: summary)
+                        }
+                    }
+
+                    if let fallbackSummary {
+                        Section("Fallback") {
+                            FallbackSummaryCard(summary: fallbackSummary)
                         }
                     }
 
@@ -155,15 +191,8 @@ private struct MindMapAdmissionSummary {
     let topRejectedReasons: String
     let diagnosticsSample: String
 
-    nonisolated init?(event: TextPipelineDiagnostics.PipelineEvent) {
-        let pairs = event.message
-            .split(separator: " ")
-            .compactMap { chunk -> (String, String)? in
-                let parts = chunk.split(separator: "=", maxSplits: 1).map(String.init)
-                guard parts.count == 2 else { return nil }
-                return (parts[0], parts[1])
-            }
-        let values = Dictionary(uniqueKeysWithValues: pairs)
+    init?(event: TextPipelineDiagnostics.PipelineEvent) {
+        let values = DiagnosticsEventParser.parseKeyValuePairs(from: event.message)
         guard let mainline = values["mainline_count"],
               let auxiliary = values["auxiliary_count"],
               let rejected = values["rejected_count"]
@@ -187,41 +216,34 @@ private struct MindMapAdmissionSummary {
 
 private struct MindMapAdmissionSummaryCard: View {
     let summary: MindMapAdmissionSummary
-    let aiStatus: PassageMapAIStatus?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                stat(title: "主线", value: "\(summary.mainlineCount)", color: .green)
+                stat(title: "mainline", value: "\(summary.mainlineCount)", color: .green)
                 Spacer()
-                stat(title: "辅助", value: "\(summary.auxiliaryCount)", color: .orange)
+                stat(title: "auxiliary", value: "\(summary.auxiliaryCount)", color: .orange)
                 Spacer()
-                stat(title: "拒绝", value: "\(summary.rejectedCount)", color: .red)
+                stat(title: "rejected", value: "\(summary.rejectedCount)", color: .red)
             }
 
             HStack {
-                Label("平均 hygiene", systemImage: "sparkles")
+                Label("average hygiene", systemImage: "sparkles")
                     .font(.caption)
                     .foregroundColor(.secondary)
                 Text(summary.averageHygiene)
                     .font(.caption.monospaced())
                 Spacer()
-                Label("平均 consistency", systemImage: "point.3.connected.trianglepath.dotted")
+                Label("average consistency", systemImage: "point.3.connected.trianglepath.dotted")
                     .font(.caption)
                     .foregroundColor(.secondary)
                 Text(summary.averageConsistency)
                     .font(.caption.monospaced())
             }
 
-            Text("主要拒绝原因：\(summary.topRejectedReasons)")
+            Text("top rejected reasons: \(summary.topRejectedReasons)")
                 .font(.caption)
                 .foregroundColor(.secondary)
-
-            if let aiStatus {
-                Text("usingFallback：\(aiStatus.usedFallback ? "true" : "false") · request_id：\(aiStatus.requestID ?? "nil") · retry_count：\(aiStatus.retryCount)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
 
             Text("diagnostics sample：\(summary.diagnosticsSample)")
                 .font(.caption)
@@ -242,28 +264,180 @@ private struct MindMapAdmissionSummaryCard: View {
     }
 }
 
-private struct PassageMapAIStatus {
+private struct AIGatewayEventStatus {
+    enum Scope: String {
+        case sentence = "sentence"
+        case passage = "passage"
+    }
+
+    let scope: Scope
+    let timestamp: Date
     let requestID: String?
     let provider: String?
     let model: String?
+    let configured: Bool?
+    let errorCode: String?
     let retryCount: Int
+    let usedCache: Bool
     let usedFallback: Bool
+    let circuitState: String
+    let fallbackMessage: String?
 
-    nonisolated init?(event: TextPipelineDiagnostics.PipelineEvent) {
-        let pairs = event.message
+    init?(event: TextPipelineDiagnostics.PipelineEvent) {
+        guard event.stage == "AI" else { return nil }
+
+        let scope: Scope
+        if event.message.contains("[AI][SentenceExplain]") {
+            scope = .sentence
+        } else if event.message.contains("[AI][PassageMap]") {
+            scope = .passage
+        } else {
+            return nil
+        }
+
+        let values = DiagnosticsEventParser.parseKeyValuePairs(from: event.message)
+        guard values["used_fallback"] != nil else { return nil }
+
+        self.scope = scope
+        timestamp = event.timestamp
+        requestID = values["request_id"]
+        provider = values["provider"] ?? ((values["used_fallback"] == "true") ? "local_fallback" : nil)
+        model = values["model"] ?? ((values["used_fallback"] == "true") ? "local_fallback" : nil)
+        errorCode = values["error_code"]
+        retryCount = Int(values["retry_count"] ?? "0") ?? 0
+        usedCache = (values["used_cache"] ?? "false") == "true"
+        usedFallback = (values["used_fallback"] ?? "false") == "true"
+        if let rawCircuitState = values["circuit_state"], !rawCircuitState.isEmpty {
+            circuitState = rawCircuitState
+        } else if errorCode == "MODEL_CONFIG_MISSING" {
+            circuitState = "closed"
+        } else {
+            circuitState = "unknown"
+        }
+        if errorCode == "MODEL_CONFIG_MISSING" {
+            configured = false
+        } else if provider != nil || model != nil || requestID != nil {
+            configured = true
+        } else {
+            configured = nil
+        }
+        fallbackMessage = DiagnosticsEventParser.buildFallbackMessage(
+            scope: scope,
+            errorCode: errorCode,
+            usedFallback: usedFallback
+        )
+    }
+}
+
+private struct AIGatewayStatusCard: View {
+    let status: AIGatewayEventStatus
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            DiagnosticKeyValueRow(label: "provider", value: status.provider ?? "nil")
+            DiagnosticKeyValueRow(label: "model", value: status.model ?? "nil")
+            DiagnosticKeyValueRow(label: "configured", value: status.configured.map { $0 ? "true" : "false" } ?? "unknown")
+            DiagnosticKeyValueRow(label: "error_code", value: status.errorCode ?? "nil")
+            DiagnosticKeyValueRow(label: "request_id", value: status.requestID ?? "nil")
+            DiagnosticKeyValueRow(label: "retry_count", value: "\(status.retryCount)")
+            DiagnosticKeyValueRow(label: "used_cache", value: status.usedCache ? "true" : "false")
+            DiagnosticKeyValueRow(label: "used_fallback", value: status.usedFallback ? "true" : "false")
+            DiagnosticKeyValueRow(label: "circuit_state", value: status.circuitState)
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+private struct FallbackSummary {
+    let usingSentenceFallback: Bool
+    let usingPassageFallback: Bool
+    let fallbackMessage: String
+
+    init?(sentenceStatus: AIGatewayEventStatus?, passageStatus: AIGatewayEventStatus?) {
+        let usingSentenceFallback = sentenceStatus?.usedFallback ?? false
+        let usingPassageFallback = passageStatus?.usedFallback ?? false
+        guard sentenceStatus != nil || passageStatus != nil else { return nil }
+
+        self.usingSentenceFallback = usingSentenceFallback
+        self.usingPassageFallback = usingPassageFallback
+
+        let messages = [sentenceStatus?.fallbackMessage, passageStatus?.fallbackMessage]
+            .compactMap { $0 }
+            .filter { !$0.isEmpty }
+        fallbackMessage = messages.isEmpty ? "none" : messages.joined(separator: "；")
+    }
+}
+
+private struct FallbackSummaryCard: View {
+    let summary: FallbackSummary
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            DiagnosticKeyValueRow(label: "using sentence fallback", value: summary.usingSentenceFallback ? "true" : "false")
+            DiagnosticKeyValueRow(label: "using passage fallback", value: summary.usingPassageFallback ? "true" : "false")
+            DiagnosticKeyValueRow(label: "fallback message", value: summary.fallbackMessage)
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+private struct DiagnosticKeyValueRow: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(label)
+                .font(.caption.monospaced())
+                .foregroundColor(.secondary)
+                .frame(width: 128, alignment: .leading)
+            Text(value)
+                .font(.caption.monospaced())
+                .foregroundColor(.primary)
+                .textSelection(.enabled)
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+private enum DiagnosticsEventParser {
+    static func parseKeyValuePairs(from message: String) -> [String: String] {
+        let pairs = message
             .split(separator: " ")
             .compactMap { chunk -> (String, String)? in
                 let parts = chunk.split(separator: "=", maxSplits: 1).map(String.init)
                 guard parts.count == 2 else { return nil }
                 return (parts[0], parts[1])
             }
-        let values = Dictionary(uniqueKeysWithValues: pairs)
-        guard values["used_fallback"] != nil else { return nil }
-        requestID = values["request_id"]
-        provider = values["provider"]
-        model = values["model"]
-        retryCount = Int(values["retry_count"] ?? "0") ?? 0
-        usedFallback = (values["used_fallback"] ?? "false") == "true"
+
+        return Dictionary(uniqueKeysWithValues: pairs)
+    }
+
+    static func buildFallbackMessage(
+        scope: AIGatewayEventStatus.Scope,
+        errorCode: String?,
+        usedFallback: Bool
+    ) -> String? {
+        guard usedFallback else { return nil }
+
+        switch (scope, errorCode ?? "") {
+        case (.sentence, "MODEL_CONFIG_MISSING"):
+            return "AI 服务暂未配置，已展示本地解析骨架。"
+        case (.sentence, "UPSTREAM_503"), (.sentence, "UPSTREAM_TIMEOUT"), (.sentence, "NETWORK_UNAVAILABLE"):
+            return "AI 服务暂时繁忙，已展示本地解析骨架。"
+        case (.sentence, "INVALID_MODEL_RESPONSE"):
+            return "AI 返回内容不可用，已展示本地解析骨架。"
+        case (.sentence, _):
+            return "句子讲解已切回本地骨架。"
+        case (.passage, "MODEL_CONFIG_MISSING"):
+            return "AI 地图分析暂未配置，已展示本地结构骨架。"
+        case (.passage, "UPSTREAM_503"), (.passage, "UPSTREAM_TIMEOUT"), (.passage, "NETWORK_UNAVAILABLE"):
+            return "AI 地图分析暂不可用，已展示本地结构骨架。"
+        case (.passage, "INVALID_MODEL_RESPONSE"):
+            return "AI 地图分析返回内容不可用，已展示本地结构骨架。"
+        case (.passage, _):
+            return "全文地图已切回本地结构骨架。"
+        }
     }
 }
 

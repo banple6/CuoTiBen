@@ -370,6 +370,12 @@
 - 全文教授分析 prompt 字段名一致性修正
 - 后端校验器单测补齐
 - `npm test` 脚本补齐
+- `/health` 已收口为安全的 `ai_gateway` 摘要，不返回 key 或 Authorization
+
+当前 AI Core 本地验收与部署门禁文档位于：
+
+- `docs/superpowers/runbooks/ai-core-local-verify.md`
+- `docs/superpowers/runbooks/ai-core-server-deploy-gate.md`
 
 ### 10.2 FastAPI PP-StructureV3 网关
 
@@ -423,11 +429,21 @@ npm install
 npm run dev
 ```
 
+配置请从 `backend/.env.example` 复制，真实 `NOVAI_API_KEY` 只能放本地私有 `.env` 或服务器 `.env`，不要写进 README、runbook 或仓库历史。
+
 当前 `backend/` 还包含基础测试：
 
 ```bash
 cd backend
 npm test
+```
+
+Phase 7 本地门禁建议再补跑：
+
+```bash
+cd backend
+find src -name "*.js" -print0 | xargs -0 -n1 node --check
+npm test -- tests/integration/localCurlSmoke.test.js
 ```
 
 ### 11.3 FastAPI 解析网关
