@@ -158,9 +158,13 @@ enum AISourceParsingService {
             "本地回退已构建: \(localFallback.bundle.sentences.count)句 \(localFallback.bundle.segments.count)段"
         )
 
-        let baseURLString = AIExplainSentenceService.storedBaseURL
-        guard let endpointURL = URL(string: "\(baseURLString)/ai/parse-source") else {
-            throw AISourceParsingServiceError.invalidBaseURL
+        guard let endpointURL = AIBackendConfig.endpointURL(path: "ai/parse-source") else {
+            TextPipelineDiagnostics.log(
+                "后端响应",
+                "AI 后端未配置，跳过 remote parse-source，直接使用本地回退。",
+                severity: .warning
+            )
+            return localFallback
         }
 
         var request = URLRequest(url: endpointURL)

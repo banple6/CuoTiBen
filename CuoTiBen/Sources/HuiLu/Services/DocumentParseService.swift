@@ -42,8 +42,7 @@ enum DocumentParseService {
         let normalized = stored.trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         if !normalized.isEmpty { return normalized }
-        // 默认复用现有后端
-        return AIExplainSentenceService.storedBaseURL
+        return AIBackendConfig.resolvedBaseURL
     }
 
     static func saveBackendURL(_ value: String) {

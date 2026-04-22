@@ -43,7 +43,7 @@
 ## 当前前置阻塞
 
 - 本地环境变量缺失：`NOVAI_API_KEY`、`AI_PROVIDER`、`AI_MODEL`、`AI_BASE_URL`、`AI_API_KIND`、`AI_TIMEOUT_MS`、`AI_MAX_RETRIES`、`AI_CIRCUIT_BREAKER_ENABLED`
-- 服务器 `root@47.94.227.58` 当前无法通过现有 SSH key/配置登录
+- 生产服务器当前无法通过现有 SSH key/配置登录，具体地址见 deploy gate runbook
 
 这些阻塞项不会阻止前 6 个阶段的本地实现与本地验证，但会阻止线上部署收口。
 
@@ -936,7 +936,7 @@ xcodebuild -quiet \
 
 只有在拿到 SSH 权限后，才执行：
 ```bash
-ssh root@47.94.227.58
+ssh root@<PRODUCTION_SERVER_HOST>
 ```
 
 后续动作：

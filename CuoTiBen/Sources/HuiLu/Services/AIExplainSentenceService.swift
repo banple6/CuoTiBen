@@ -1339,7 +1339,7 @@ enum AIExplainSentenceServiceError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingBaseURL:
-            return "AI 服务地址未配置。"
+            return "AI 后端未配置，已展示本地解析骨架。"
         case .invalidBaseURL:
             return "AI 服务地址格式不正确。"
         case .invalidServerResponse:
@@ -1360,26 +1360,45 @@ enum AIExplainSentenceServiceError: LocalizedError {
     }
 }
 
-enum AIExplainSentenceService {
-    private static let baseURLStorageKey = "huiLu.aiBackendBaseURL"
-    private static let defaultBaseURL = "http://47.94.227.58"
-    private static let preferredAIPort = 3000
-    private static let explainSentenceTimeout: TimeInterval = 75
-    private static let aiRequestPolicy = AIRequestPolicy.default
-    private static let sentenceAnalysisCacheStore = SentenceAnalysisCacheStore()
-    private static let requestSingleFlight = AIRequestSingleFlight<AIExplainSentenceResult>()
+enum AIBackendConfig {
+    private static let runtimeBaseURLStorageKey = "huiLu.aiBackendBaseURL"
+    private static let infoPlistBaseURLKey = "AI_BACKEND_BASE_URL"
+    private static let debugLocalhostBaseURL = "http://127.0.0.1:3100"
 
-    static var storedBaseURL: String {
-        let stored = UserDefaults.standard.string(forKey: baseURLStorageKey) ?? ""
-        let normalizedStored = normalizeBaseURL(stored)
-        if !normalizedStored.isEmpty {
-            return normalizedStored
-        }
-        return defaultBaseURL
+    static var resolvedBaseURL: String {
+        resolveBaseURL()
     }
 
-    static func saveBaseURL(_ value: String) {
-        UserDefaults.standard.set(normalizeBaseURL(value), forKey: baseURLStorageKey)
+    static func saveRuntimeBaseURL(_ value: String) {
+        UserDefaults.standard.set(normalizeBaseURL(value), forKey: runtimeBaseURLStorageKey)
+    }
+
+    static func resolveBaseURL(overrideBaseURL: String? = nil) -> String {
+        if let normalizedOverride = normalizedNonEmpty(overrideBaseURL) {
+            return normalizedOverride
+        }
+
+        if let runtimeBaseURL = normalizedNonEmpty(UserDefaults.standard.string(forKey: runtimeBaseURLStorageKey)) {
+            return runtimeBaseURL
+        }
+
+        if let infoPlistBaseURL = normalizedInfoPlistBaseURL {
+            return infoPlistBaseURL
+        }
+
+        #if DEBUG
+        return debugLocalhostBaseURL
+        #else
+        return ""
+        #endif
+    }
+
+    static func endpointURL(path: String, overrideBaseURL: String? = nil) -> URL? {
+        let resolved = resolveBaseURL(overrideBaseURL: overrideBaseURL)
+        guard !resolved.isEmpty, let baseURL = URL(string: resolved) else {
+            return nil
+        }
+        return baseURL.appendingPathComponent(path)
     }
 
     static func normalizeBaseURL(_ value: String) -> String {
@@ -1388,12 +1407,41 @@ enum AIExplainSentenceService {
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
 
+    private static var normalizedInfoPlistBaseURL: String? {
+        normalizedNonEmpty(Bundle.main.object(forInfoDictionaryKey: infoPlistBaseURLKey) as? String)
+    }
+
+    private static func normalizedNonEmpty(_ value: String?) -> String? {
+        let normalized = normalizeBaseURL(value ?? "")
+        return normalized.isEmpty ? nil : normalized
+    }
+}
+
+enum AIExplainSentenceService {
+    private static let preferredAIPort = 3000
+    private static let explainSentenceTimeout: TimeInterval = 75
+    private static let aiRequestPolicy = AIRequestPolicy.default
+    private static let sentenceAnalysisCacheStore = SentenceAnalysisCacheStore()
+    private static let requestSingleFlight = AIRequestSingleFlight<AIExplainSentenceResult>()
+
+    static var storedBaseURL: String {
+        AIBackendConfig.resolvedBaseURL
+    }
+
+    static func saveBaseURL(_ value: String) {
+        AIBackendConfig.saveRuntimeBaseURL(value)
+    }
+
+    static func normalizeBaseURL(_ value: String) -> String {
+        AIBackendConfig.normalizeBaseURL(value)
+    }
+
     static func endpointCandidates(
         path: String,
         overrideBaseURL: String? = nil,
         preferredPort: Int? = preferredAIPort
     ) -> [URL] {
-        let normalizedBaseURL = normalizeBaseURL(overrideBaseURL ?? storedBaseURL)
+        let normalizedBaseURL = AIBackendConfig.resolveBaseURL(overrideBaseURL: overrideBaseURL)
         guard !normalizedBaseURL.isEmpty else { return [] }
 
         return candidateBaseURLs(
@@ -1690,10 +1738,10 @@ enum AIExplainSentenceService {
                 structuredError: AIStructuredError(
                     kind: .networkUnavailable,
                     requestID: nil,
-                    errorCode: "NETWORK_UNAVAILABLE",
+                    errorCode: "BACKEND_NOT_CONFIGURED",
                     retryable: true,
                     fallbackAvailable: true,
-                    message: "AI 服务地址未配置。"
+                    message: "AI 后端未配置，已展示本地解析骨架。"
                 )
             )
         }

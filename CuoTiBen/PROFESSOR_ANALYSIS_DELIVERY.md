@@ -244,7 +244,7 @@ PDF → PP-StructureV3 → NormalizedDocument
 - [x] AI 升级为非阻塞流程——用户立即看到基础分析，AI 结果异步替换
 - [x] AI 升级失败静默降级，不影响基础功能
 - [x] 所有 Swift 文件零编译错误
-- [ ] 后端部署到 47.94.227.58 并验证 `/ai/analyze-passage` 端点
+- [ ] 后端部署到生产服务器并验证 `/ai/analyze-passage` 端点（地址详见部署门禁文档）
 - [ ] 真实英语资料导入端到端验证：基础卡 → AI 升级 → UI 刷新
 
 ---

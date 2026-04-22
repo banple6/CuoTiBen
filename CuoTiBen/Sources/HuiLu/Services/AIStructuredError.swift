@@ -95,6 +95,9 @@ struct AIStructuredError: Error, Equatable, Hashable, LocalizedError {
         case .modelConfigMissing:
             return "AI 服务暂未配置，已展示本地解析骨架。"
         case .upstream503, .upstreamTimeout, .networkUnavailable:
+            if errorCode == "BACKEND_NOT_CONFIGURED" {
+                return "AI 后端未配置，已展示本地解析骨架。"
+            }
             return "AI 服务暂时繁忙，已展示本地解析骨架。"
         case .invalidModelResponse:
             return "AI 返回内容不可用，已展示本地解析骨架。"
@@ -114,6 +117,9 @@ struct AIStructuredError: Error, Equatable, Hashable, LocalizedError {
         case .modelConfigMissing:
             return "AI 地图分析暂未配置，已展示本地结构骨架。"
         case .upstream503, .upstreamTimeout, .networkUnavailable:
+            if errorCode == "BACKEND_NOT_CONFIGURED" {
+                return "AI 后端未配置，已展示本地结构骨架。"
+            }
             return "AI 地图分析暂不可用，已展示本地结构骨架。"
         case .invalidModelResponse:
             return "AI 地图分析返回内容不可用，已展示本地结构骨架。"

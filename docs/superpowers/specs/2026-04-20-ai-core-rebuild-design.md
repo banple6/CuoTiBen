@@ -21,7 +21,7 @@
 - 单句深讲和全文分析的 contract 仍旧新混杂，前后端边界不清
 - `NodeProvenance`、`AnchorConsistencyValidator`、hygiene 体系已存在，但还没有成为思维导图主导图唯一准入闸门
 - 本地 AI 环境变量当前缺失
-- 服务器 `47.94.227.58` 当前 SSH key/权限不可用，部署验证存在前置阻塞
+- 生产部署目标服务器详见 deploy gate runbook；当前 SSH key/权限不可用，部署验证存在前置阻塞
 - 仓库中存在明文 key 泄露风险，必须在实现中清理
 
 ## 2. 设计目标
@@ -65,7 +65,7 @@
 ### 3.3 当前前置阻塞
 
 - 本地环境变量缺失：`NOVAI_API_KEY`、`AI_PROVIDER`、`AI_MODEL`、`AI_BASE_URL`、`AI_API_KIND`、`AI_TIMEOUT_MS`、`AI_MAX_RETRIES`、`AI_CIRCUIT_BREAKER_ENABLED`
-- 服务器 `root@47.94.227.58` 当前无法通过现有 SSH 配置登录
+- 生产服务器当前无法通过现有 SSH 配置登录，具体地址见 deploy gate runbook
 
 这两个阻塞项必须在实施计划中显式列出，并在部署验证阶段单独检查。
 
@@ -541,7 +541,7 @@ iOS 日志必须覆盖：
 
 ### 16.1 服务器要求
 
-目标服务器：`47.94.227.58`
+目标服务器：详见 `ai-core-server-deploy-gate.md`
 
 部署流程必须包含：
 

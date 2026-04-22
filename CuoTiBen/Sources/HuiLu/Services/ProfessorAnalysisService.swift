@@ -144,10 +144,10 @@ enum ProfessorAnalysisService {
                 structuredError: AIStructuredError(
                     kind: .networkUnavailable,
                     requestID: identity.clientRequestID,
-                    errorCode: "NETWORK_UNAVAILABLE",
+                    errorCode: "BACKEND_NOT_CONFIGURED",
                     retryable: true,
                     fallbackAvailable: true,
-                    message: "AI 地图分析服务地址未配置。"
+                    message: "AI 后端未配置，已展示本地结构骨架。"
                 )
             )
         }
