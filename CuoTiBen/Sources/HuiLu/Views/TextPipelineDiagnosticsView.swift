@@ -649,6 +649,7 @@ struct ParseSourceDebugBadge: View {
         case .ppStructureV3:    return .green
         case .legacyRemote:     return .orange
         case .legacyLocal:      return .red
+        case .materialLocalFallback: return .blue
         }
     }
 

@@ -17,6 +17,7 @@ enum StructuredLoadingStage: String, Equatable {
     case partialReady   = "partialReady"    // 基础结构已可用，教授级 AI 分析尚未补齐
     case aiEnriching    = "aiEnriching"     // AI 教授级分析升级中
     case ready          = "ready"           // 完成
+    case localFallbackReady = "localFallbackReady" // 已生成本地学习资料结构
     case failed         = "failed"          // 失败
     case timedOut       = "timedOut"        // 超时
     case fallbackLegacy = "fallbackLegacy"  // 已回退到旧解析链路
@@ -36,6 +37,7 @@ enum StructuredLoadingStage: String, Equatable {
         case .partialReady:     return "基础结构已就绪"
         case .aiEnriching:      return "AI 教授级分析升级中…"
         case .ready:            return "加载完成"
+        case .localFallbackReady: return "本地学习资料结构已就绪"
         case .failed:           return "加载失败"
         case .timedOut:         return "加载超时"
         case .fallbackLegacy:   return "已回退到旧解析链路"
@@ -49,12 +51,12 @@ enum StructuredLoadingStage: String, Equatable {
 
     /// 是否为终态
     var isTerminal: Bool {
-        self == .partialReady || self == .ready || self == .failed || self == .timedOut || self == .fallbackLegacy
+        self == .partialReady || self == .ready || self == .localFallbackReady || self == .failed || self == .timedOut || self == .fallbackLegacy
     }
 
     /// 是否已有可展示内容
     var hasPreview: Bool {
-        self == .partialReady || self == .ready || self == .buildingTree || self == .fallbackLegacy || self == .aiEnriching
+        self == .partialReady || self == .ready || self == .localFallbackReady || self == .buildingTree || self == .fallbackLegacy || self == .aiEnriching
     }
 
     /// 中文失败回退消息
@@ -63,6 +65,7 @@ enum StructuredLoadingStage: String, Equatable {
         case .failed:           return "结构化预览生成失败，已展示基础预览"
         case .timedOut:         return "资料解析超时，请稍后重试"
         case .fallbackLegacy:   return "PP-StructureV3 不可用，已回退到旧解析链路"
+        case .localFallbackReady: return "已展示本地学习资料结构骨架"
         default:                return nil
         }
     }
@@ -77,6 +80,7 @@ struct ParseSessionInfo: Equatable {
         case ppStructureV3 = "PP-StructureV3"
         case legacyRemote = "Legacy-Remote"
         case legacyLocal = "Legacy-Local"
+        case materialLocalFallback = "Local-Material-Fallback"
     }
 
     /// 失败分类
@@ -481,7 +485,7 @@ final class AppViewModel: ObservableObject {
         defer {
             structuredSourceLoadingIDs.remove(document.id)
             let stage = structuredSourceStages[document.id]
-            if stage != .ready && stage != .failed && stage != .timedOut && stage != .fallbackLegacy && stage != .partialReady && stage != .aiEnriching {
+            if stage != .ready && stage != .localFallbackReady && stage != .failed && stage != .timedOut && stage != .fallbackLegacy && stage != .partialReady && stage != .aiEnriching {
                 TextPipelineDiagnostics.log("PP", "[PP] ⚠️ defer guard: stage=\(stage?.rawValue ?? "nil") 不是终态，强制设为 .failed doc=\(document.id)", severity: .error)
                 structuredSourceStages[document.id] = .failed
             }
@@ -496,17 +500,33 @@ final class AppViewModel: ObservableObject {
             let draft: SourceTextDraft = try await withTimeoutOrThrow(seconds: 60) { [chunkingService, document] in
                 try await chunkingService.extractSourceDraft(document: document)
             }
-            guard AISourceParsingService.shouldAttemptEnglishParsing(for: draft) || draft.isLikelyEnglish || Self.containsEnglishLetters(draft.rawText) else {
-                structuredSourceErrors[document.id] = "当前资料未识别为英语资料，暂不进入英语结构化理解流程。"
-                structuredSourceStages[document.id] = .failed
-                parseSessionInfos[document.id] = ParseSessionInfo(
-                    source: .ppStructureV3, requestURL: nil, jobID: nil,
-                    ppAttempted: false, ppSucceeded: false, fallbackUsed: false,
-                    fallbackReason: "非英语资料", failureClass: nil,
-                    qualityReasonCode: nil, schemaVersion: nil,
-                    normalizedBlockCount: 0, paragraphCount: 0, structureCandidateCount: 0,
-                    sentenceCount: 0, outlineNodeCount: 0, segmentCount: 0,
-                    parseDurationMs: nil, timestamp: Date()
+            let localFallbackPayload = AISourceParsingService.buildLocalFallbackPayload(
+                documentID: document.id,
+                title: document.title,
+                documentType: document.documentType,
+                pageCount: document.pageCount,
+                draft: draft
+            )
+            let earlyMaterialDecision = StructuredSourceMaterialGate.evaluate(
+                draft: draft,
+                bundle: localFallbackPayload.bundle
+            )
+            let englishGatePassed = AISourceParsingService.shouldAttemptEnglishParsing(for: draft)
+                || draft.isLikelyEnglish
+                || Self.containsEnglishLetters(draft.rawText)
+
+            if earlyMaterialDecision.shouldEnterFallbackPath || !englishGatePassed {
+                let resolvedDecision = !englishGatePassed && !earlyMaterialDecision.shouldEnterFallbackPath
+                    ? earlyMaterialDecision.withFallbackOverride(
+                        mode: .insufficientText,
+                        appendedReason: "englishGateRejected"
+                    )
+                    : earlyMaterialDecision
+                applyStructuredMaterialFallback(
+                    document: document,
+                    payload: localFallbackPayload,
+                    decision: resolvedDecision,
+                    convertedFromEarlyFail: !englishGatePassed
                 )
                 return
             }
@@ -739,6 +759,111 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    private func applyStructuredMaterialFallback(
+        document: SourceDocument,
+        payload: StructuredSourceParsePayload,
+        decision: StructuredSourceMaterialDecision,
+        convertedFromEarlyFail: Bool
+    ) {
+        let diagnostics = decision.asPassageDiagnostics(
+            documentID: document.id.uuidString,
+            activeCallPath: "AppViewModel.loadStructuredSource"
+        )
+        let localFallback = LocalPassageFallbackBuilder.build(
+            document: document,
+            bundle: payload.bundle,
+            diagnostics: diagnostics,
+            structuredError: AIStructuredError.invalidRequest(
+                message: decision.mode.fallbackMessage,
+                fallbackAvailable: true
+            ),
+            meta: AIServiceResponseMeta.localFallback()
+        )
+        let enrichedBundle = payload.bundle.applyingProfessorAnalysis(localFallback.delta)
+        let enrichedPayload = StructuredSourceParsePayload(
+            bundle: enrichedBundle,
+            sectionTitles: payload.sectionTitles,
+            topicTags: payload.topicTags,
+            candidateKnowledgePoints: payload.candidateKnowledgePoints
+        )
+
+        TextPipelineDiagnostics.log(
+            "PP",
+            [
+                "[PP][Gate]",
+                "doc=\(document.id)",
+                "material_mode=\(decision.mode.rawValue)",
+                "raw_text_length=\(decision.rawTextLength)",
+                "sentence_drafts=\(decision.sentenceDraftCount)",
+                String(format: "non_passage_ratio=%.2f", decision.nonPassageRatio),
+                "reason=\(decision.reasons.joined(separator: "||"))",
+                "early_fail_converted_to_fallback=\(convertedFromEarlyFail)"
+            ].joined(separator: " "),
+            severity: .info
+        )
+        TextPipelineDiagnostics.log(
+            "PP",
+            [
+                "[PP][Fallback]",
+                "doc=\(document.id)",
+                "generated local learning material bundle",
+                "material_mode=\(decision.mode.rawValue)",
+                "stage=\(StructuredLoadingStage.localFallbackReady.rawValue)"
+            ].joined(separator: " "),
+            severity: .info
+        )
+        TextPipelineDiagnostics.log(
+            "AI",
+            [
+                "[AI][PassageMap] local fallback",
+                "request_id=nil",
+                "client_request_id=nil",
+                "document_id=\(document.id.uuidString)",
+                "active_call_path=AppViewModel.loadStructuredSource",
+                "content_hash=nil",
+                "accepted_paragraph_count=\(diagnostics.acceptedParagraphCount)",
+                "rejected_paragraph_count=\(diagnostics.rejectedParagraphCount)",
+                String(format: "non_passage_ratio=%.2f", diagnostics.nonPassageRatio),
+                "material_mode=\(diagnostics.materialMode.rawValue)",
+                "reason=\(diagnostics.reasonFlags.joined(separator: "||"))",
+                "error_code=EARLY_MATERIAL_FALLBACK",
+                "retry_count=0",
+                "used_cache=false",
+                "used_fallback=true",
+                "circuit_state=closed",
+                "early_fail_converted_to_fallback=\(convertedFromEarlyFail)"
+            ].joined(separator: " "),
+            severity: .info
+        )
+
+        parseSessionInfos[document.id] = ParseSessionInfo(
+            source: .materialLocalFallback,
+            requestURL: nil,
+            jobID: nil,
+            ppAttempted: false,
+            ppSucceeded: false,
+            fallbackUsed: true,
+            fallbackReason: decision.reasons.joined(separator: " | "),
+            failureClass: nil,
+            qualityReasonCode: decision.primaryReason,
+            schemaVersion: nil,
+            normalizedBlockCount: 0,
+            paragraphCount: enrichedPayload.bundle.zoningSummary.passageParagraphCount,
+            structureCandidateCount: enrichedPayload.bundle.segments.count,
+            sentenceCount: enrichedPayload.bundle.sentences.count,
+            outlineNodeCount: enrichedPayload.bundle.source.outlineNodeCount,
+            segmentCount: enrichedPayload.bundle.segments.count,
+            parseDurationMs: nil,
+            timestamp: Date()
+        )
+
+        structuredSources[document.id] = enrichedPayload.bundle
+        mergeStructuredSourcePayload(enrichedPayload, into: document)
+        seedWorkbenchProgressIfNeeded(for: document, with: enrichedPayload.bundle)
+        structuredSourceErrors[document.id] = localFallback.message
+        structuredSourceStages[document.id] = .localFallbackReady
+    }
+
     private func baseStructuredStage(
         for document: SourceDocument,
         bundle: StructuredSourceBundle
@@ -752,6 +877,8 @@ final class AppViewModel: ObservableObject {
             return bundle.hasProfessorAnalysis ? .ready : .partialReady
         case .legacyLocal, .legacyRemote:
             return bundle.hasProfessorAnalysis ? .ready : .fallbackLegacy
+        case .materialLocalFallback:
+            return .localFallbackReady
         }
     }
 
