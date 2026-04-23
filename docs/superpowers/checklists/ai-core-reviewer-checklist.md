@@ -2,6 +2,11 @@
 
 本清单用于 AI Core Rebuild 的最终人工审阅入口，覆盖 backend、iOS、MindMap、安全和生产发布记录。
 
+审阅顺序要求：
+
+1. 先审 `Phase 9B: loadStructuredSource early-fail to material-fallback`
+2. 再审 `Phase 9A: analyze-passage request alignment + material mode gate`
+
 ## A. Backend AI Gateway
 
 - [ ] modelRegistry 只从环境变量读取 provider 配置
@@ -93,7 +98,34 @@
 - [ ] 记录了回滚路径
 - [ ] 没有写真实 key
 
-## H. Merge readiness
+## H. Phase 9B: loadStructuredSource early-fail to material-fallback
+
+- [ ] `loadStructuredSource` 不再因 `sentenceDrafts=0` 直接将文档标记为 `.failed`
+- [ ] 早期 English gate 已改为 fallback gate，而不是 failed gate
+- [ ] `StructuredSourceMaterialMode` 存在并命中真实活跃路径
+- [ ] 非正文资料会进入 `learningMaterial / vocabularyNotes / questionSheet / auxiliaryOnlyMap / insufficientText` 之一
+- [ ] 非正文资料可以生成最小可用的 `StructuredSourceBundle`
+- [ ] fallback 可生成时，日志不再出现 `finalStage=failed`
+- [ ] diagnostics 带 `materialMode / sentenceDrafts=0 / rawTextTooShort / noPassageBody`
+- [ ] 日志带 `[PP][Gate] material_mode=...`
+- [ ] 日志带 `early_fail_converted_to_fallback=true`
+- [ ] 日志带 `[PP][Fallback] generated local learning material bundle`
+- [ ] 页面展示本地学习资料结构骨架，不显示粗暴“解析失败”
+
+## I. Phase 9A: analyze-passage request alignment + material mode gate
+
+- [ ] 远端 `/ai/analyze-passage` 活跃调用只剩 `ProfessorAnalysisService`
+- [ ] 所有远端 analyze-passage 请求统一走 `AnalyzePassageRequestBuilder`
+- [ ] 不存在绕过 builder 的手写旧 JSON / 旧 DTO 活跃路径
+- [ ] builder 顶层输出 `client_request_id / document_id / content_hash`
+- [ ] builder 的 `paragraphs[*]` 输出 `segment_id / index / anchor_label / text / source_kind / hygiene_score`
+- [ ] `paragraphs` 只包含 `source_kind = passage_body`
+- [ ] `sentenceDrafts=0 / rawTextTooShort / noPassageBody / nonPassageRatioHigh` 时不请求远端
+- [ ] `MaterialAnalysisGate` 只允许 `passageReading` 请求远端 analyze-passage
+- [ ] 后端返回 `缺少 passage identity 字段` 时，必须被视为 builder 绕过 bug
+- [ ] diagnostics 带 `requestBuilderUsed / client_request_id / document_id / content_hash / acceptedParagraphCount / materialMode / activeCallPath`
+
+## J. Merge readiness
 
 - [ ] backend npm test 48/48 通过
 - [ ] localCurlSmoke 3/3 通过
