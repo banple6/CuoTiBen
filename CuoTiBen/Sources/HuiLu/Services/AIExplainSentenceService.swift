@@ -1525,7 +1525,7 @@ enum AIExplainSentenceServiceError: LocalizedError {
 enum AIBackendConfig {
     private static let runtimeBaseURLStorageKey = "huiLu.aiBackendBaseURL"
     private static let infoPlistBaseURLKey = "AI_BACKEND_BASE_URL"
-    private static let debugLocalhostBaseURL = "http://127.0.0.1:3100"
+    private static let debugLocalhostBaseURL = "http://127.0.0.1:3000"
 
     static var resolvedBaseURL: String {
         resolveBaseURL()
@@ -1540,7 +1540,7 @@ enum AIBackendConfig {
             return normalizedOverride
         }
 
-        if let runtimeBaseURL = normalizedNonEmpty(UserDefaults.standard.string(forKey: runtimeBaseURLStorageKey)) {
+        if let runtimeBaseURL = normalizedRuntimeBaseURL(UserDefaults.standard.string(forKey: runtimeBaseURLStorageKey)) {
             return runtimeBaseURL
         }
 
@@ -1576,6 +1576,26 @@ enum AIBackendConfig {
     private static func normalizedNonEmpty(_ value: String?) -> String? {
         let normalized = normalizeBaseURL(value ?? "")
         return normalized.isEmpty ? nil : normalized
+    }
+
+    private static func normalizedRuntimeBaseURL(_ value: String?) -> String? {
+        guard let normalized = normalizedNonEmpty(value) else { return nil }
+        #if targetEnvironment(simulator)
+        return normalized
+        #else
+        guard let components = URLComponents(string: normalized),
+              let host = components.host?.lowercased(),
+              host == "127.0.0.1" || host == "localhost"
+        else {
+            return normalized
+        }
+        TextPipelineDiagnostics.log(
+            "AI",
+            "[AI][Route] ignored_loopback_ai_backend_on_device=true saved_base_url=\(normalized)",
+            severity: .warning
+        )
+        return nil
+        #endif
     }
 }
 

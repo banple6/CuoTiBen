@@ -1338,7 +1338,11 @@ private struct ReviewWorkbenchSentencePanel: View {
 
     private var effectiveAnalysis: ProfessorSentenceAnalysis? {
         let bundled = bundledAnalysis
-        if let remote = visibleResult?.localFallbackAnalysis {
+        if let visibleResult {
+            let remote = visibleResult.localFallbackAnalysis
+            if visibleResult.usedFallback || visibleResult.fallbackAvailable {
+                return remote
+            }
             return remote.mergingFallback(bundled)
         }
         return bundled

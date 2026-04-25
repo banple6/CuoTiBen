@@ -92,7 +92,11 @@ struct SentenceExplainDetailSheet: View {
 
     private var effectiveAnalysis: ProfessorSentenceAnalysis? {
         let bundled = bundledAnalysis
-        if let remote = visibleResult?.localFallbackAnalysis {
+        if let visibleResult {
+            let remote = visibleResult.localFallbackAnalysis
+            if visibleResult.usedFallback || visibleResult.fallbackAvailable {
+                return remote
+            }
             return remote.mergingFallback(bundled)
         }
         return bundled
@@ -1891,76 +1895,105 @@ struct ProfessorAnalysisPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            if let sentenceFunction = conciseSentenceFunctionText(analysis.renderedSentenceFunction).nonEmpty {
-                SentenceExplainBlock(
-                    title: "句子定位",
-                    content: sentenceFunction,
-                    tone: .node
-                )
-            }
+            if !analysis.isAIGenerated {
+                LocalSkeletonAnalysisPanel(analysis: analysis)
+            } else {
+                if let sentenceFunction = conciseSentenceFunctionText(analysis.renderedSentenceFunction).nonEmpty {
+                    SentenceExplainBlock(
+                        title: "句子定位",
+                        content: sentenceFunction,
+                        tone: .node
+                    )
+                }
 
-            StructuredCoreSkeletonCard(analysis: analysis)
+                StructuredCoreSkeletonCard(analysis: analysis)
 
-            TranslationInterpretationGroup(
-                analysis: analysis,
-                highlightTokens: analysis.vocabularyInContext.map(\.term)
-            )
-
-            StructuredChunkLayerCard(analysis: analysis)
-
-            GrammarFocusLocalizedSection(analysis: analysis)
-
-            SentenceExplainListBlock(
-                title: "学生易错点",
-                items: analysis.renderedMisreadingTraps,
-                tone: .misread
-            )
-
-            SentenceExplainListBlock(
-                title: "出题改写点",
-                items: analysis.renderedExamParaphraseRoutes,
-                tone: .rewrite
-            )
-
-            if analysis.renderedSimplerRewrite.nonEmpty != nil {
-                RewriteCardSection(
-                    rewrite: analysis.renderedSimplerRewrite,
-                    rewriteExplanation: analysis.renderedSimplerRewriteTranslation.nonEmpty ?? "暂无改写译意。",
+                TranslationInterpretationGroup(
+                    analysis: analysis,
                     highlightTokens: analysis.vocabularyInContext.map(\.term)
                 )
-            }
 
-            if let miniExercise = analysis.renderedMiniCheck?.nonEmpty {
-                SentenceExplainBlock(
-                    title: "微练习",
-                    content: miniExercise,
-                    tone: .grammar
-                )
-            }
+                StructuredChunkLayerCard(analysis: analysis)
 
-            if !analysis.vocabularyInContext.isEmpty {
-                InteractiveKeywordSection(
-                    title: "词汇在句中义",
-                    minimumItemWidth: keywordMinimumWidth,
-                    selectedTerm: selectedTerm,
-                    keywords: analysis.vocabularyInContext.map {
-                        OutlineNodeKeyword(
-                            id: $0.term.lowercased(),
-                            term: $0.term,
-                            hint: $0.meaning
-                        )
-                    },
-                    onTap: onWordTap
-                )
-            }
+                GrammarFocusLocalizedSection(analysis: analysis)
 
-            if !relatedEvidenceItems.isEmpty {
                 SentenceExplainListBlock(
-                    title: "相关证据 / 知识点",
-                    items: relatedEvidenceItems,
-                    tone: .node
+                    title: "学生易错点",
+                    items: analysis.renderedMisreadingTraps,
+                    tone: .misread
                 )
+
+                SentenceExplainListBlock(
+                    title: "出题改写点",
+                    items: analysis.renderedExamParaphraseRoutes,
+                    tone: .rewrite
+                )
+
+                if analysis.renderedSimplerRewrite.nonEmpty != nil {
+                    RewriteCardSection(
+                        rewrite: analysis.renderedSimplerRewrite,
+                        rewriteExplanation: analysis.renderedSimplerRewriteTranslation.nonEmpty ?? "暂无改写译意。",
+                        highlightTokens: analysis.vocabularyInContext.map(\.term)
+                    )
+                }
+
+                if let miniExercise = analysis.renderedMiniCheck?.nonEmpty {
+                    SentenceExplainBlock(
+                        title: "微练习",
+                        content: miniExercise,
+                        tone: .grammar
+                    )
+                }
+
+                if !analysis.vocabularyInContext.isEmpty {
+                    InteractiveKeywordSection(
+                        title: "词汇在句中义",
+                        minimumItemWidth: keywordMinimumWidth,
+                        selectedTerm: selectedTerm,
+                        keywords: analysis.vocabularyInContext.map {
+                            OutlineNodeKeyword(
+                                id: $0.term.lowercased(),
+                                term: $0.term,
+                                hint: $0.meaning
+                            )
+                        },
+                        onTap: onWordTap
+                    )
+                }
+
+                if !relatedEvidenceItems.isEmpty {
+                    SentenceExplainListBlock(
+                        title: "相关证据 / 知识点",
+                        items: relatedEvidenceItems,
+                        tone: .node
+                    )
+                }
             }
+        }
+    }
+}
+private struct LocalSkeletonAnalysisPanel: View {
+    let analysis: ProfessorSentenceAnalysis
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            SentenceExplainBlock(
+                title: "本地结构骨架",
+                content: "远端 AI 精讲尚未成功获取。当前只保留选中句子的本地定位，不展示忠实翻译、句子主干拆分或语块断句，避免把粗略骨架误当成 AI 精讲。",
+                tone: .teaching
+            )
+
+            SentenceExplainBlock(
+                title: "当前选中句子",
+                content: analysis.originalSentence,
+                tone: .node
+            )
+
+            SentenceExplainBlock(
+                title: "AI 翻译暂不可用",
+                content: "请确认 AI 后端可连接后重新获取精讲。",
+                tone: .translation
+            )
         }
     }
 }

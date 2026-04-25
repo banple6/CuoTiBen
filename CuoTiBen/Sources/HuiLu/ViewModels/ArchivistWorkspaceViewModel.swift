@@ -79,6 +79,9 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
            let remote = analysisResult,
            isResultVisible(remote, for: sentence) {
             let remoteAnalysis = remote.localFallbackAnalysis
+            if remote.usedFallback || remote.fallbackAvailable {
+                return remoteAnalysis
+            }
             return remoteAnalysis.mergingFallback(bundled)
         }
         if analysisResult != nil {
