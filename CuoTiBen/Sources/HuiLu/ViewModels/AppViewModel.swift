@@ -676,14 +676,19 @@ final class AppViewModel: ObservableObject {
             let englishGatePassed = AISourceParsingService.shouldAttemptEnglishParsing(for: draft)
                 || draft.isLikelyEnglish
                 || Self.containsEnglishLetters(draft.rawText)
+            let routeBeforeRemoteParse = DocumentParseEndpointConfig.snapshot
 
-            if earlyMaterialDecision.shouldEnterFallbackPath || !englishGatePassed {
-                let resolvedDecision = !englishGatePassed && !earlyMaterialDecision.shouldEnterFallbackPath
+            let resolvedEarlyDecision: StructuredSourceMaterialDecision? =
+                (earlyMaterialDecision.shouldEnterFallbackPath || !englishGatePassed)
+                ? (!englishGatePassed && !earlyMaterialDecision.shouldEnterFallbackPath
                     ? earlyMaterialDecision.withFallbackOverride(
                         mode: .insufficientText,
                         appendedReason: "englishGateRejected"
                     )
-                    : earlyMaterialDecision
+                    : earlyMaterialDecision)
+                : nil
+
+            if let resolvedDecision = resolvedEarlyDecision, !routeBeforeRemoteParse.isConfigured {
                 applyStructuredMaterialFallback(
                     document: document,
                     payload: localFallbackPayload,
@@ -691,6 +696,21 @@ final class AppViewModel: ObservableObject {
                     convertedFromEarlyFail: !englishGatePassed
                 )
                 return
+            }
+
+            if let resolvedDecision = resolvedEarlyDecision {
+                TextPipelineDiagnostics.log(
+                    "PP",
+                    [
+                        "[PP][Gate]",
+                        "early_material_fallback_deferred_for_remote_document_parse=true",
+                        "doc=\(document.id)",
+                        "document_parse_endpoint=\(routeBeforeRemoteParse.endpointDescription)",
+                        "material_mode=\(resolvedDecision.mode.rawValue)",
+                        "reason=\(resolvedDecision.reasons.joined(separator: "||"))"
+                    ].joined(separator: " "),
+                    severity: .info
+                )
             }
 
             // ── 阶段2: 尝试 PP-StructureV3 后端解析（主路径） ──
@@ -737,6 +757,23 @@ final class AppViewModel: ObservableObject {
 
             // ── 阶段2b: PP-StructureV3 失败，显式回退到旧管线 ──
             let ppFailReason = structuredSourceErrors[document.id] ?? "PP-StructureV3 解析失败"
+            if let resolvedDecision = resolvedEarlyDecision {
+                TextPipelineDiagnostics.log(
+                    "PP",
+                    "[PP] remote document parse failed, fallback to local material skeleton because: \(ppFailReason) doc=\(document.id)",
+                    severity: .warning
+                )
+                applyStructuredMaterialFallback(
+                    document: document,
+                    payload: localFallbackPayload,
+                    decision: resolvedDecision,
+                    convertedFromEarlyFail: !englishGatePassed,
+                    ppAttempted: true,
+                    documentParseRemoteStatus: "failed_then_material_fallback",
+                    remoteFailureReason: ppFailReason
+                )
+                return
+            }
             TextPipelineDiagnostics.log("PP", "[PP] fallback to legacy pipeline because: \(ppFailReason) doc=\(document.id)", severity: .warning)
 
             #if DEBUG
@@ -992,8 +1029,12 @@ final class AppViewModel: ObservableObject {
         document: SourceDocument,
         payload: StructuredSourceParsePayload,
         decision: StructuredSourceMaterialDecision,
-        convertedFromEarlyFail: Bool
+        convertedFromEarlyFail: Bool,
+        ppAttempted: Bool = false,
+        documentParseRemoteStatus: String? = nil,
+        remoteFailureReason: String? = nil
     ) {
+        let route = DocumentParseEndpointConfig.snapshot
         let diagnostics = decision.asPassageDiagnostics(
             documentID: document.id.uuidString,
             activeCallPath: "AppViewModel.loadStructuredSource",
@@ -1028,6 +1069,8 @@ final class AppViewModel: ObservableObject {
                 "sentence_drafts=\(decision.sentenceDraftCount)",
                 String(format: "non_passage_ratio=%.2f", decision.nonPassageRatio),
                 "reason=\(decision.reasons.joined(separator: "||"))",
+                "pp_attempted=\(ppAttempted)",
+                "document_parse_remote_status=\(documentParseRemoteStatus ?? (route.isConfigured ? "not_attempted_material_fallback" : "skipped_unconfigured"))",
                 "early_fail_converted_to_fallback=\(convertedFromEarlyFail)"
             ].joined(separator: " "),
             severity: .info
@@ -1069,12 +1112,15 @@ final class AppViewModel: ObservableObject {
 
         parseSessionInfos[document.id] = ParseSessionInfo(
             source: .materialLocalFallback,
-            requestURL: nil,
+            requestURL: ppAttempted ? route.endpointURL?.absoluteString : nil,
             jobID: nil,
-            ppAttempted: false,
+            ppAttempted: ppAttempted,
             ppSucceeded: false,
             fallbackUsed: true,
-            fallbackReason: decision.reasons.joined(separator: " | "),
+            fallbackReason: ([remoteFailureReason] + [decision.reasons.joined(separator: " | ")])
+                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: " | "),
             failureClass: nil,
             qualityReasonCode: decision.primaryReason,
             schemaVersion: nil,
@@ -1086,10 +1132,10 @@ final class AppViewModel: ObservableObject {
             segmentCount: enrichedPayload.bundle.segments.count,
             parseDurationMs: nil,
             timestamp: Date(),
-            documentParseEndpointConfigured: DocumentParseEndpointConfig.isConfigured,
-            documentParseEndpointURL: DocumentParseEndpointConfig.parseEndpointURL?.absoluteString,
-            documentParseRemoteStatus: DocumentParseEndpointConfig.isConfigured ? "not_attempted_material_fallback" : "skipped_unconfigured",
-            skippedBecauseUnconfigured: !DocumentParseEndpointConfig.isConfigured
+            documentParseEndpointConfigured: route.isConfigured,
+            documentParseEndpointURL: route.endpointURL?.absoluteString,
+            documentParseRemoteStatus: documentParseRemoteStatus ?? (route.isConfigured ? "not_attempted_material_fallback" : "skipped_unconfigured"),
+            skippedBecauseUnconfigured: !route.isConfigured
         )
 
         structuredSources[document.id] = enrichedPayload.bundle
