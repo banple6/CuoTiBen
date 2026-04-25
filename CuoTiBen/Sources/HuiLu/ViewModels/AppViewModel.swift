@@ -635,6 +635,19 @@ final class AppViewModel: ObservableObject {
                 try await chunkingService.extractSourceDraft(document: document)
             }
             recoveredDraft = draft
+            TextPipelineDiagnostics.log(
+                "PP",
+                [
+                    "[PP][Gate]",
+                    "draft_extracted=true",
+                    "doc=\(document.id)",
+                    "raw_text_length=\(draft.rawText.count)",
+                    "anchors=\(draft.anchors.count)",
+                    "sentence_drafts=\(draft.sentenceDrafts.count)",
+                    "likely_english=\(draft.isLikelyEnglish)"
+                ].joined(separator: " "),
+                severity: .info
+            )
             let localFallbackPayload = AISourceParsingService.buildLocalFallbackPayload(
                 documentID: document.id,
                 title: document.title,
@@ -763,8 +776,11 @@ final class AppViewModel: ObservableObject {
                 severity: .info
             )
         } catch {
-            if let draft = recoveredDraft,
-               let payload = recoveredPayload {
+            if let draft = recoveredDraft {
+                let payload = recoveredPayload ?? buildLastResortMaterialFallbackPayload(
+                    document: document,
+                    draft: draft
+                )
                 TextPipelineDiagnostics.log(
                     "PP",
                     "[PP][Recovery] structured load error converted to local material fallback doc=\(document.id) error=\(error.localizedDescription)",
@@ -1099,14 +1115,18 @@ final class AppViewModel: ObservableObject {
             || (stage == .failed && !alreadyRecovered)
 
         guard needsRecovery,
-              let draft,
-              let payload else { return }
+              let draft else { return }
+        let recoveryPayload = payload ?? buildLastResortMaterialFallbackPayload(
+            document: document,
+            draft: draft
+        )
 
         TextPipelineDiagnostics.log(
             "PP",
             [
                 "[PP][Recovery]",
                 "non_terminal_stage_converted_to_local_fallback=true",
+                "last_resort_payload=\(payload == nil)",
                 "doc=\(document.id)",
                 "stage=\(stage?.rawValue ?? "nil")",
                 "raw_text_length=\(draft.rawText.count)",
@@ -1117,9 +1137,35 @@ final class AppViewModel: ObservableObject {
         forceStructuredMaterialFallback(
             document: document,
             draft: draft,
-            payload: payload,
+            payload: recoveryPayload,
             reason: "nonTerminalStage:\(stage?.rawValue ?? "nil")"
         )
+    }
+
+    private func buildLastResortMaterialFallbackPayload(
+        document: SourceDocument,
+        draft: SourceTextDraft
+    ) -> StructuredSourceParsePayload {
+        let payload = AISourceParsingService.buildLocalFallbackPayload(
+            documentID: document.id,
+            title: document.title,
+            documentType: document.documentType,
+            pageCount: document.pageCount,
+            draft: draft
+        )
+        TextPipelineDiagnostics.log(
+            "PP",
+            [
+                "[PP][Recovery]",
+                "last_resort_local_payload_built=true",
+                "doc=\(document.id)",
+                "segments=\(payload.bundle.segments.count)",
+                "sentences=\(payload.bundle.sentences.count)",
+                "source_kinds=\(Self.sourceKindSummary(for: payload.bundle))"
+            ].joined(separator: " "),
+            severity: .warning
+        )
+        return payload
     }
 
     private func forceStructuredMaterialFallback(
@@ -1162,6 +1208,15 @@ final class AppViewModel: ObservableObject {
             return .learningMaterial
         }
         return nonEmptySegments.isEmpty ? .insufficientText : .auxiliaryOnlyMap
+    }
+
+    private static func sourceKindSummary(for bundle: StructuredSourceBundle) -> String {
+        let counts = Dictionary(grouping: bundle.segments, by: { $0.provenance.sourceKind.rawValue })
+            .mapValues(\.count)
+        return counts
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key):\($0.value)" }
+            .joined(separator: ",")
     }
 
     private func baseStructuredStage(

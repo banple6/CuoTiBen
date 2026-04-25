@@ -224,7 +224,9 @@ enum AISourceParsingService {
                 text: segment.text,
                 anchorLabel: segment.anchorLabel,
                 page: segment.page,
-                sentenceIDs: sentenceIDsBySegment[segment.id] ?? []
+                sentenceIDs: sentenceIDsBySegment[segment.id] ?? [],
+                provenance: segment.provenance,
+                hygiene: segment.hygiene
             )
         }
         let outline = makeLocalOutline(
