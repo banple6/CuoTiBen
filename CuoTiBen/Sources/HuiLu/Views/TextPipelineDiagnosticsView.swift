@@ -18,7 +18,7 @@ struct TextPipelineDiagnosticsView: View {
 
     private var latestSentenceAIStatus: AIGatewayEventStatus? {
         events
-            .filter { $0.stage == "AI" && $0.message.contains("[AI][SentenceExplain]") }
+            .filter { $0.stage == "AI" && ($0.message.contains("[AI][SentenceExplain]") || $0.message.contains("[AI][Sentence]")) }
             .last
             .flatMap { event in
                 AIGatewayEventStatus(event: event)
@@ -197,6 +197,7 @@ private struct DocumentParseRouteStatus {
     let endpointURL: String
     let remoteStatus: String
     let skippedBecauseUnconfigured: Bool
+    let cloudDocumentParseAttempted: Bool
 
     init?(events: [TextPipelineDiagnostics.PipelineEvent]) {
         let routeEvents = events.filter { $0.stage == "PP" && $0.message.contains("[PP][Route]") }
@@ -210,7 +211,9 @@ private struct DocumentParseRouteStatus {
         endpointURL = endpoint
         skippedBecauseUnconfigured = routeEvents.contains { $0.message.contains("skip remote document parse") }
 
-        if routeEvents.contains(where: { $0.message.contains("remote parse request start") }) {
+        cloudDocumentParseAttempted = routeEvents.contains(where: { $0.message.contains("remote parse request start") })
+
+        if cloudDocumentParseAttempted {
             remoteStatus = "request_started"
         } else if skippedBecauseUnconfigured {
             remoteStatus = "skipped_unconfigured"
@@ -229,6 +232,7 @@ private struct DocumentParseRouteStatusCard: View {
             DiagnosticKeyValueRow(label: "documentParseEndpointURL", value: status.endpointURL)
             DiagnosticKeyValueRow(label: "documentParseRemoteStatus", value: status.remoteStatus)
             DiagnosticKeyValueRow(label: "skippedBecauseUnconfigured", value: status.skippedBecauseUnconfigured ? "true" : "false")
+            DiagnosticKeyValueRow(label: "cloudDocumentParseAttempted", value: status.cloudDocumentParseAttempted ? "true" : "false")
         }
         .padding(.vertical, 4)
     }
@@ -346,12 +350,21 @@ private struct AIGatewayEventStatus {
     let contentHash: String?
     let contractPreflightPassed: Bool?
     let missingFields: String?
+    let selectionKind: String?
+    let sentenceIdentityPresent: Bool?
+    let passageIdentityPresent: Bool?
+    let sentenceMissingFields: String?
+    let passageMissingFields: String?
+    let cloudExplainAttempted: Bool?
+    let cloudPassageAttempted: Bool?
+    let fallbackReason: String?
+    let currentResultSource: String?
 
     init?(event: TextPipelineDiagnostics.PipelineEvent) {
         guard event.stage == "AI" else { return nil }
 
         let scope: Scope
-        if event.message.contains("[AI][SentenceExplain]") {
+        if event.message.contains("[AI][SentenceExplain]") || event.message.contains("[AI][Sentence]") {
             scope = .sentence
         } else if event.message.contains("[AI][PassageMap]") {
             scope = .passage
@@ -360,7 +373,7 @@ private struct AIGatewayEventStatus {
         }
 
         let values = DiagnosticsEventParser.parseKeyValuePairs(from: event.message)
-        guard values["used_fallback"] != nil || values["material_mode"] != nil else { return nil }
+        guard values["used_fallback"] != nil || values["material_mode"] != nil || values["request_preflight_passed"] != nil else { return nil }
 
         self.scope = scope
         timestamp = event.timestamp
@@ -398,6 +411,16 @@ private struct AIGatewayEventStatus {
         contractPreflightPassed = (values["contract_preflight_passed"] ?? values["contractPreflightPassed"]).map { $0 == "true" }
         missingFields = (values["missing_fields"] ?? values["missingFields"])?
             .replacingOccurrences(of: ",", with: ", ")
+        selectionKind = values["selection_kind"]
+        sentenceIdentityPresent = values["sentence_identity_present"].map { $0 == "true" }
+        passageIdentityPresent = contractPreflightPassed
+        sentenceMissingFields = scope == .sentence ? missingFields : nil
+        passageMissingFields = scope == .passage ? missingFields : nil
+        cloudExplainAttempted = values["cloud_explain_attempted"].map { $0 == "true" }
+        cloudPassageAttempted = values["cloud_passage_attempted"].map { $0 == "true" }
+            ?? (scope == .passage ? (contractPreflightPassed ?? false) : nil)
+        fallbackReason = values["fallback_reason"] ?? values["skip_remote_reason"] ?? reason
+        currentResultSource = values["current_result_source"] ?? values["currentResultSource"]
         fallbackMessage = DiagnosticsEventParser.buildFallbackMessage(
             scope: scope,
             errorCode: errorCode,
@@ -421,14 +444,25 @@ private struct AIGatewayStatusCard: View {
             DiagnosticKeyValueRow(label: "used_cache", value: status.usedCache ? "true" : "false")
             DiagnosticKeyValueRow(label: "used_fallback", value: status.usedFallback ? "true" : "false")
             DiagnosticKeyValueRow(label: "circuit_state", value: status.circuitState)
+            DiagnosticKeyValueRow(label: "currentResultSource", value: status.currentResultSource ?? "nil")
+            DiagnosticKeyValueRow(label: "fallbackReason", value: status.fallbackReason ?? "nil")
+            if status.scope == .sentence {
+                DiagnosticKeyValueRow(label: "selectionKind", value: status.selectionKind ?? "nil")
+                DiagnosticKeyValueRow(label: "sentenceIdentityPresent", value: status.sentenceIdentityPresent.map { $0 ? "true" : "false" } ?? "nil")
+                DiagnosticKeyValueRow(label: "sentenceMissingFields", value: status.sentenceMissingFields ?? "nil")
+                DiagnosticKeyValueRow(label: "cloudExplainAttempted", value: status.cloudExplainAttempted.map { $0 ? "true" : "false" } ?? "nil")
+            }
             if status.scope == .passage {
                 DiagnosticKeyValueRow(label: "material_mode", value: status.materialMode ?? "nil")
                 DiagnosticKeyValueRow(label: "requestBuilderUsed", value: status.requestBuilderUsed.map { $0 ? "true" : "false" } ?? "nil")
                 DiagnosticKeyValueRow(label: "clientRequestID", value: status.clientRequestID ?? "nil")
                 DiagnosticKeyValueRow(label: "documentID", value: status.documentID ?? "nil")
                 DiagnosticKeyValueRow(label: "contentHash", value: status.contentHash ?? "nil")
+                DiagnosticKeyValueRow(label: "passageIdentityPresent", value: status.passageIdentityPresent.map { $0 ? "true" : "false" } ?? "nil")
                 DiagnosticKeyValueRow(label: "contractPreflightPassed", value: status.contractPreflightPassed.map { $0 ? "true" : "false" } ?? "nil")
+                DiagnosticKeyValueRow(label: "passageMissingFields", value: status.passageMissingFields ?? "nil")
                 DiagnosticKeyValueRow(label: "missingFields", value: status.missingFields ?? "nil")
+                DiagnosticKeyValueRow(label: "cloudPassageAttempted", value: status.cloudPassageAttempted.map { $0 ? "true" : "false" } ?? "nil")
                 DiagnosticKeyValueRow(label: "activeCallPath", value: status.activeCallPath ?? "nil")
                 DiagnosticKeyValueRow(label: "acceptedParagraphCount", value: status.acceptedParagraphCount.map(String.init) ?? "nil")
                 DiagnosticKeyValueRow(label: "rejectedParagraphCount", value: status.rejectedParagraphCount.map(String.init) ?? "nil")
@@ -515,13 +549,13 @@ private enum DiagnosticsEventParser {
 
         switch (scope, errorCode ?? "") {
         case (.sentence, "MODEL_CONFIG_MISSING"):
-            return "AI 服务暂未配置，已展示本地解析骨架。"
+            return "AI 精讲获取失败，已展示本地骨架。"
         case (.sentence, "UPSTREAM_503"), (.sentence, "UPSTREAM_TIMEOUT"), (.sentence, "NETWORK_UNAVAILABLE"):
-            return "AI 服务暂时繁忙，已展示本地解析骨架。"
+            return "AI 精讲获取失败，已展示本地骨架。"
         case (.sentence, "INVALID_MODEL_RESPONSE"):
-            return "AI 返回内容不可用，已展示本地解析骨架。"
+            return "AI 精讲获取失败，已展示本地骨架。"
         case (.sentence, _):
-            return "句子讲解已切回本地骨架。"
+            return "AI 精讲获取失败，已展示本地骨架。"
         case (.passage, _) where materialMode == MaterialAnalysisMode.learningMaterial.rawValue:
             return "这份资料主要是讲义、说明或中文解析，已展示本地学习资料结构骨架。"
         case (.passage, _) where materialMode == MaterialAnalysisMode.vocabularyNotes.rawValue:

@@ -126,6 +126,33 @@ struct ExplainSentenceContext: Equatable {
     let paragraphTheme: String
     let paragraphRole: String
     let questionPrompt: String
+    let selectionState: SourceSelectionState
+
+    init(
+        title: String,
+        documentID: String?,
+        sentenceID: String?,
+        segmentID: String?,
+        anchorLabel: String?,
+        sentence: String,
+        context: String,
+        paragraphTheme: String,
+        paragraphRole: String,
+        questionPrompt: String,
+        selectionState: SourceSelectionState = .unknown
+    ) {
+        self.title = title
+        self.documentID = documentID
+        self.sentenceID = sentenceID
+        self.segmentID = segmentID
+        self.anchorLabel = anchorLabel
+        self.sentence = sentence
+        self.context = context
+        self.paragraphTheme = paragraphTheme
+        self.paragraphRole = paragraphRole
+        self.questionPrompt = questionPrompt
+        self.selectionState = selectionState
+    }
 }
 
 enum AnalysisConsistencyGuard {
@@ -1320,6 +1347,139 @@ private struct ExplainSentenceRequest: Encodable {
     }
 }
 
+struct ExplainSentenceRequestBuilder {
+    struct PreparedRequest {
+        let requestIdentity: AIRequestIdentity?
+        let requestData: Data?
+        let preflightPassed: Bool
+        let missingFields: [String]
+        let selectionKind: SourceSelectionKind
+        let skipRemoteReason: String?
+    }
+
+    static func prepare(
+        context: ExplainSentenceContext,
+        requestIdentity: AIRequestIdentity?
+    ) throws -> PreparedRequest {
+        let selectionKind = context.selectionState.kind
+        let resolvedIdentity = requestIdentity ?? context.makeRequestIdentity()
+        var missingFields: [String] = []
+
+        appendMissingIdentityFields(
+            resolvedIdentity: resolvedIdentity,
+            context: context,
+            into: &missingFields
+        )
+
+        let containsEnglish = context.sentence.range(of: "[A-Za-z]", options: .regularExpression) != nil
+        let skipRemoteReason = selectionKind.skipRemoteReason ?? (containsEnglish ? nil : "notPassageSentence")
+        let preflightPassed = missingFields.isEmpty && skipRemoteReason == nil
+        logPreflight(
+            preflightPassed: preflightPassed,
+            selectionKind: selectionKind,
+            requestIdentity: resolvedIdentity,
+            missingFields: missingFields,
+            skipRemoteReason: skipRemoteReason
+        )
+
+        guard preflightPassed, let resolvedIdentity else {
+            return PreparedRequest(
+                requestIdentity: resolvedIdentity,
+                requestData: nil,
+                preflightPassed: false,
+                missingFields: missingFields,
+                selectionKind: selectionKind,
+                skipRemoteReason: skipRemoteReason
+            )
+        }
+
+        let request = ExplainSentenceRequest(
+            clientRequestID: resolvedIdentity.clientRequestID,
+            documentID: resolvedIdentity.documentID,
+            sentenceID: resolvedIdentity.sentenceID,
+            segmentID: resolvedIdentity.segmentID,
+            sentenceTextHash: resolvedIdentity.sentenceTextHash,
+            anchorLabel: resolvedIdentity.anchorLabel,
+            title: context.title,
+            sentence: context.sentence,
+            context: context.context,
+            paragraphTheme: context.paragraphTheme,
+            paragraphRole: context.paragraphRole,
+            questionPrompt: context.questionPrompt
+        )
+
+        return PreparedRequest(
+            requestIdentity: resolvedIdentity,
+            requestData: try JSONEncoder().encode(request),
+            preflightPassed: true,
+            missingFields: [],
+            selectionKind: selectionKind,
+            skipRemoteReason: nil
+        )
+    }
+
+    private static func appendMissingIdentityFields(
+        resolvedIdentity: AIRequestIdentity?,
+        context: ExplainSentenceContext,
+        into missingFields: inout [String]
+    ) {
+        if normalize(resolvedIdentity?.clientRequestID).isEmpty {
+            missingFields.append("client_request_id")
+        }
+        if normalize(resolvedIdentity?.documentID ?? context.documentID).isEmpty {
+            missingFields.append("document_id")
+        }
+        if normalize(resolvedIdentity?.sentenceID ?? context.sentenceID).isEmpty {
+            missingFields.append("sentence_id")
+        }
+        if normalize(resolvedIdentity?.segmentID ?? context.segmentID).isEmpty {
+            missingFields.append("segment_id")
+        }
+        if normalize(resolvedIdentity?.sentenceTextHash).isEmpty {
+            missingFields.append("sentence_text_hash")
+        }
+        if normalize(resolvedIdentity?.anchorLabel ?? context.anchorLabel).isEmpty {
+            missingFields.append("anchor_label")
+        }
+    }
+
+    private static func logPreflight(
+        preflightPassed: Bool,
+        selectionKind: SourceSelectionKind,
+        requestIdentity: AIRequestIdentity?,
+        missingFields: [String],
+        skipRemoteReason: String?
+    ) {
+        let normalizedMissingFields = missingFields.isEmpty ? "[]" : "[\(missingFields.joined(separator: ","))]"
+        TextPipelineDiagnostics.log(
+            "AI",
+            [
+                "[AI][Sentence]",
+                "request_preflight_passed=\(preflightPassed)",
+                "selection_kind=\(selectionKind.rawValue)",
+                "missingFields=\(normalizedMissingFields)",
+                "missing_fields=\(normalizedMissingFields)",
+                "requestBuilderUsed=true",
+                "request_builder_used=true",
+                "sentence_identity_present=\(requestIdentity != nil)",
+                "cloud_explain_attempted=\(preflightPassed)",
+                "used_fallback=\(!preflightPassed)",
+                "retry_count=0",
+                "currentResultSource=\(preflightPassed ? "remoteAI" : "localSkeleton")",
+                "current_result_source=\(preflightPassed ? "remoteAI" : "localSkeleton")",
+                "skip_remote_reason=\(skipRemoteReason ?? "nil")"
+            ].joined(separator: " "),
+            severity: preflightPassed ? .info : .warning
+        )
+    }
+
+    private static func normalize(_ value: String?) -> String {
+        (value ?? "")
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
 private struct ExplainSentenceResponseEnvelope {
     let success: Bool
     let requestID: String?
@@ -1555,7 +1715,8 @@ enum AIExplainSentenceService {
             context: validatedContext,
             paragraphTheme: context.paragraphTheme,
             paragraphRole: context.paragraphRole,
-            questionPrompt: context.questionPrompt
+            questionPrompt: context.questionPrompt,
+            selectionState: context.selectionState
         )
     }
 
@@ -1563,9 +1724,9 @@ enum AIExplainSentenceService {
         let message: String
         switch source {
         case .memory:
-            message = "[AI][SentenceExplain] memory cache hit"
+            message = "[AI][SentenceExplain] memory cache hit currentResultSource=cached current_result_source=cached used_cache=true used_fallback=false"
         case .disk:
-            message = "[AI][SentenceExplain] disk cache hit"
+            message = "[AI][SentenceExplain] disk cache hit currentResultSource=cached current_result_source=cached used_cache=true used_fallback=false"
         }
 
         TextPipelineDiagnostics.log("AI", message, severity: .info)
@@ -1649,8 +1810,10 @@ enum AIExplainSentenceService {
             baseURL: overrideBaseURL ?? storedBaseURL
         )
         let allowDiskCache = aiRequestPolicy.enableSentenceExplainDiskCache
+        let shouldBypassCache = !validatedExplainContext.selectionState.allowsCloudSentenceExplain || resolvedIdentity == nil
 
-        if !forceRefresh,
+        if !shouldBypassCache,
+           !forceRefresh,
            let cacheHit = await sentenceAnalysisCacheStore.lookup(
                forKey: requestKey,
                allowDisk: allowDiskCache
@@ -1669,7 +1832,8 @@ enum AIExplainSentenceService {
                 )
             }
         ) {
-            if !forceRefresh,
+            if !shouldBypassCache,
+               !forceRefresh,
                let cacheHit = await sentenceAnalysisCacheStore.lookup(
                    forKey: requestKey,
                    allowDisk: allowDiskCache
@@ -1699,11 +1863,21 @@ enum AIExplainSentenceService {
         requestIdentity: AIRequestIdentity?,
         baseURL overrideBaseURL: String?
     ) async throws -> AIExplainSentenceResult {
-        guard let resolvedIdentity = requestIdentity else {
+        let preparedRequest = try ExplainSentenceRequestBuilder.prepare(
+            context: context,
+            requestIdentity: requestIdentity
+        )
+
+        guard preparedRequest.preflightPassed,
+              let resolvedIdentity = preparedRequest.requestIdentity,
+              let requestData = preparedRequest.requestData else {
+            let reason = preparedRequest.skipRemoteReason == "notPassageSentence"
+                ? "当前选中内容不是正文句子，已展示本地骨架。"
+                : "缺少 sentence identity 字段。"
             return fallbackResult(
                 for: context,
-                requestIdentity: nil,
-                structuredError: .invalidRequest(message: "缺少 sentence identity 字段。")
+                requestIdentity: preparedRequest.requestIdentity,
+                structuredError: .invalidRequest(message: reason)
             )
         }
 
@@ -1745,23 +1919,6 @@ enum AIExplainSentenceService {
                 )
             )
         }
-
-        let requestData = try JSONEncoder().encode(
-            ExplainSentenceRequest(
-                clientRequestID: resolvedIdentity.clientRequestID,
-                documentID: resolvedIdentity.documentID,
-                sentenceID: resolvedIdentity.sentenceID,
-                segmentID: resolvedIdentity.segmentID,
-                sentenceTextHash: resolvedIdentity.sentenceTextHash,
-                anchorLabel: resolvedIdentity.anchorLabel,
-                title: context.title,
-                sentence: context.sentence,
-                context: context.context,
-                paragraphTheme: context.paragraphTheme,
-                paragraphRole: context.paragraphRole,
-                questionPrompt: context.questionPrompt
-            )
-        )
 
         return try await performFetchExplanation(
             for: context,
@@ -1910,7 +2067,9 @@ enum AIExplainSentenceService {
                                 "retry_count=\(decorated.retryCount)",
                                 "used_cache=\(decorated.usedCache)",
                                 "used_fallback=\(decorated.usedFallback)",
-                                "identity_match=true"
+                                "identity_match=true",
+                                "currentResultSource=remoteAI",
+                                "current_result_source=remoteAI"
                             ].joined(separator: " "),
                             severity: .info
                         )
@@ -2072,7 +2231,10 @@ enum AIExplainSentenceService {
                 "error_code=\(structuredError.errorCode)",
                 "retry_count=\(resolved.retryCount)",
                 "used_cache=\(resolved.usedCache)",
-                "used_fallback=\(resolved.usedFallback)"
+                "used_fallback=\(resolved.usedFallback)",
+                "currentResultSource=localSkeleton",
+                "current_result_source=localSkeleton",
+                "fallback_reason=\(structuredError.errorCode)"
             ].joined(separator: " "),
             severity: .warning
         )

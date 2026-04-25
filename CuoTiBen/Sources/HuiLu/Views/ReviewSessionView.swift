@@ -1282,7 +1282,7 @@ struct ReviewDetailOverlay: View {
 
             explanationSection(
                 title: "忠实翻译",
-                body: explanation.renderedFaithfulTranslation.isEmpty ? "暂无忠实翻译" : explanation.renderedFaithfulTranslation,
+                body: explanation.renderedFaithfulTranslation.isEmpty ? "AI 翻译暂不可用，可稍后重试。" : explanation.renderedFaithfulTranslation,
                 tint: AppPalette.paperHighlightMint,
                 rotation: -0.2
             )
@@ -1439,6 +1439,7 @@ struct ReviewDetailOverlay: View {
         defer { isLoading = false }
 
         guard let requestIdentity = viewModel.explainSentenceRequestIdentity(for: card) else {
+            _ = try? ExplainSentenceRequestBuilder.prepare(context: explainContext, requestIdentity: nil)
             let fallback = LocalSentenceFallbackBuilder.build(
                 context: explainContext,
                 requestIdentity: nil,

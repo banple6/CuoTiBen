@@ -597,7 +597,10 @@ enum ProfessorAnalysisService {
                 "final_segments_count=\(diagnostics.finalSegmentsCount)",
                 "final_sentences_count=\(diagnostics.finalSentencesCount)",
                 "passage_body_paragraph_count=\(diagnostics.passageBodyParagraphCount)",
-                "used_fallback=\(!diagnostics.contractPreflightPassed)"
+                "used_fallback=\(!diagnostics.contractPreflightPassed)",
+                "cloud_passage_attempted=\(diagnostics.contractPreflightPassed)",
+                "currentResultSource=\(diagnostics.contractPreflightPassed ? "remoteAI" : "localSkeleton")",
+                "current_result_source=\(diagnostics.contractPreflightPassed ? "remoteAI" : "localSkeleton")"
             ].joined(separator: " "),
             severity: diagnostics.requestBuilderUsed ? .info : .warning
         )
@@ -616,7 +619,11 @@ enum ProfessorAnalysisService {
                 "content_hash=\(diagnostics.contentHash ?? "nil")",
                 "accepted_paragraph_count=\(diagnostics.acceptedParagraphCount)",
                 "material_mode=\(diagnostics.materialMode.rawValue)",
-                "used_fallback=true"
+                "used_fallback=true",
+                "cloud_passage_attempted=false",
+                "currentResultSource=localSkeleton",
+                "current_result_source=localSkeleton",
+                "fallback_reason=contract_preflight_failed"
             ].joined(separator: " "),
             severity: .error
         )
@@ -640,7 +647,11 @@ enum ProfessorAnalysisService {
                 "request_builder_used=\(diagnostics.requestBuilderUsed)",
                 "missing_identity=true",
                 "used_fallback=true",
-                "error_code=\(structuredError.errorCode)"
+                "error_code=\(structuredError.errorCode)",
+                "cloud_passage_attempted=true",
+                "currentResultSource=localSkeleton",
+                "current_result_source=localSkeleton",
+                "fallback_reason=missing_passage_identity"
             ].joined(separator: " "),
             severity: .error
         )
@@ -671,7 +682,10 @@ enum ProfessorAnalysisService {
             "retry_count=\(meta.retryCount)",
             "used_cache=\(meta.usedCache)",
             "used_fallback=\(meta.usedFallback)",
-            "circuit_state=\(meta.circuitState)"
+            "circuit_state=\(meta.circuitState)",
+            "cloud_passage_attempted=true",
+            "currentResultSource=remoteAI",
+            "current_result_source=remoteAI"
         ]
     }
 
@@ -700,7 +714,11 @@ enum ProfessorAnalysisService {
             "retry_count=\(meta.retryCount)",
             "used_cache=\(meta.usedCache)",
             "used_fallback=\(meta.usedFallback)",
-            "circuit_state=\(meta.circuitState)"
+            "circuit_state=\(meta.circuitState)",
+            "cloud_passage_attempted=\(diagnostics.contractPreflightPassed)",
+            "currentResultSource=localSkeleton",
+            "current_result_source=localSkeleton",
+            "fallback_reason=\(errorCode)"
         ]
     }
 

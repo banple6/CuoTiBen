@@ -1230,6 +1230,11 @@ final class AppViewModel: ObservableObject {
     func explainSentenceContext(for sentence: Sentence, in document: SourceDocument) -> ExplainSentenceContext {
         guard let bundle = structuredSource(for: document),
               let segment = bundle.segment(id: sentence.segmentID) else {
+            let selectionState = SourceSelectionState.make(
+                document: document,
+                sentence: sentence,
+                segment: nil
+            )
             return ExplainSentenceContext(
                 title: document.title,
                 documentID: document.id.uuidString,
@@ -1240,10 +1245,16 @@ final class AppViewModel: ObservableObject {
                 context: sentence.text,
                 paragraphTheme: "",
                 paragraphRole: "",
-                questionPrompt: ""
+                questionPrompt: "",
+                selectionState: selectionState
             )
         }
 
+        let selectionState = SourceSelectionState.make(
+            document: document,
+            sentence: sentence,
+            segment: segment
+        )
         let segmentSentences = bundle.sentences(in: segment)
         let surrounding = segmentSentences.filter {
             abs($0.localIndex - sentence.localIndex) <= 1
@@ -1263,12 +1274,22 @@ final class AppViewModel: ObservableObject {
             context: context.isEmpty ? segment.text : context,
             paragraphTheme: paragraphCard?.theme ?? "",
             paragraphRole: paragraphCard?.argumentRole.displayName ?? "",
-            questionPrompt: linkedQuestion
+            questionPrompt: linkedQuestion,
+            selectionState: selectionState
         )
     }
 
     func explainSentenceRequestIdentity(for sentence: Sentence, in document: SourceDocument) -> AIRequestIdentity? {
         AIRequestIdentity.make(document: document, sentence: sentence)
+    }
+
+    func sourceSelectionState(for sentence: Sentence, in document: SourceDocument) -> SourceSelectionState {
+        let segment = structuredSource(for: document)?.segment(id: sentence.segmentID)
+        return SourceSelectionState.make(
+            document: document,
+            sentence: sentence,
+            segment: segment
+        )
     }
 
     func outlineAnchorSnippet(for node: OutlineNode, in document: SourceDocument) -> String {
@@ -1821,6 +1842,13 @@ final class AppViewModel: ObservableObject {
             candidates: sentenceCandidates,
             document: document
         )
+        let matchedSegment = structuredSource(for: document)?.segment(id: matchedSentence?.segmentID)
+        let selectionState = SourceSelectionState.make(
+            document: document,
+            text: sentence,
+            sentence: matchedSentence,
+            segment: matchedSegment
+        )
 
         let context = [
             chunk?.content,
@@ -1845,7 +1873,8 @@ final class AppViewModel: ObservableObject {
             context: context,
             paragraphTheme: "",
             paragraphRole: "",
-            questionPrompt: ""
+            questionPrompt: "",
+            selectionState: selectionState
         )
     }
 

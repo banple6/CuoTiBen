@@ -93,17 +93,17 @@ struct AIStructuredError: Error, Equatable, Hashable, LocalizedError {
     var sentenceFallbackMessage: String {
         switch kind {
         case .modelConfigMissing:
-            return "AI 服务暂未配置，已展示本地解析骨架。"
+            return "AI 精讲获取失败，已展示本地骨架。"
         case .upstream503, .upstreamTimeout, .networkUnavailable:
-            if errorCode == "BACKEND_NOT_CONFIGURED" {
-                return "AI 后端未配置，已展示本地解析骨架。"
-            }
-            return "AI 服务暂时繁忙，已展示本地解析骨架。"
+            return "AI 精讲获取失败，已展示本地骨架。"
         case .invalidModelResponse:
-            return "AI 返回内容不可用，已展示本地解析骨架。"
+            return "AI 精讲获取失败，已展示本地骨架。"
         case .payloadTooLarge:
             return "当前句子请求过大，已展示本地解析骨架。"
         case .invalidRequest:
+            if message.contains("不是正文句子") {
+                return message
+            }
             return "当前句缺少可用锚点，已展示本地解析骨架。"
         case .unknown:
             return fallbackAvailable

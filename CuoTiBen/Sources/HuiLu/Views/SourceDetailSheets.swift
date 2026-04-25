@@ -98,6 +98,10 @@ struct SentenceExplainDetailSheet: View {
         return bundled
     }
 
+    private var selectionState: SourceSelectionState {
+        viewModel.sourceSelectionState(for: activeSentence, in: document)
+    }
+
     private var visibleResult: AIExplainSentenceResult? {
         guard let result, isResultVisible(result, for: activeSentence) else {
             return nil
@@ -107,6 +111,7 @@ struct SentenceExplainDetailSheet: View {
 
     private var shouldAutoLoadRemoteExplanation: Bool {
         guard !isLoading, result == nil else { return false }
+        guard selectionState.allowsCloudSentenceExplain else { return false }
         guard let bundled = bundledAnalysis else { return true }
         return bundled.shouldPreferSentenceExplain(for: activeSentence.text)
     }
@@ -324,7 +329,18 @@ struct SentenceExplainDetailSheet: View {
 
     @ViewBuilder
     private func explanationContent(layout: AdaptiveSheetLayout) -> some View {
-        if let analysis = effectiveAnalysis {
+        let currentSelection = selectionState
+        if !currentSelection.allowsCloudSentenceExplain {
+            VStack(alignment: .leading, spacing: 16) {
+                SentenceExplainBlock(
+                    title: "本地骨架",
+                    content: "当前展示的是本地结构骨架，远端 AI 精讲尚未成功获取。",
+                    tone: .neutral
+                )
+                SourceSelectionSkeletonPanel(selectionState: currentSelection)
+                relatedContextPanel
+            }
+        } else if let analysis = effectiveAnalysis {
             VStack(alignment: .leading, spacing: 16) {
                 if isLoading {
                     ProgressView("正在获取教授式精讲…")
@@ -491,6 +507,7 @@ struct SentenceExplainDetailSheet: View {
         }
 
         guard let requestIdentity = viewModel.explainSentenceRequestIdentity(for: sentence, in: document) else {
+            _ = try? ExplainSentenceRequestBuilder.prepare(context: context, requestIdentity: nil)
             let fallback = LocalSentenceFallbackBuilder.build(
                 context: context,
                 requestIdentity: nil,
@@ -1697,6 +1714,160 @@ struct ProfessorTeachingStatusHeader: View {
     }
 }
 
+struct SourceSelectionSkeletonPanel: View {
+    let selectionState: SourceSelectionState
+
+    private var normalizedText: String {
+        selectionState.text
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var headingKeywords: [String] {
+        let lowered = normalizedText.lowercased()
+        let preferred = [
+            "securing",
+            "shared environment",
+            "trust",
+            "air",
+            "algorithms"
+        ].filter { lowered.contains($0) }
+
+        if !preferred.isEmpty {
+            return preferred
+        }
+
+        let stopwords: Set<String> = ["the", "and", "why", "now", "both", "on", "of", "a", "an", "to", "in"]
+        return normalizedText
+            .lowercased()
+            .split { !$0.isLetter }
+            .map(String.init)
+            .filter { $0.count > 3 && !stopwords.contains($0) }
+            .prefix(5)
+            .map { $0 }
+    }
+
+    private var headingThemePrediction: String {
+        let lowered = normalizedText.lowercased()
+        if lowered.contains("air"),
+           lowered.contains("algorithm"),
+           lowered.contains("trust"),
+           lowered.contains("shared environment") {
+            return "文章可能讨论空气和算法作为公共环境中的信任基础。"
+        }
+        return "文章可能围绕标题中的关键词展开，说明它们之间的因果、并列或转折关系。"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            switch selectionState.kind {
+            case .heading:
+                SentenceExplainBlock(
+                    title: "标题解读",
+                    content: normalizedText.isEmpty ? "当前标题文本为空，已保留标题结构骨架。" : "标题聚焦：\(normalizedText)",
+                    tone: .node
+                )
+                SentenceExplainBlock(
+                    title: "主题预测",
+                    content: headingThemePrediction,
+                    tone: .teaching
+                )
+                SentenceExplainListBlock(
+                    title: "关键词",
+                    items: headingKeywords,
+                    tone: .vocabulary
+                )
+                SentenceExplainListBlock(
+                    title: "可能考点",
+                    items: [
+                        "标题中的核心名词可能对应全文主线。",
+                        "并列对象之间的关系可能成为段落推进或主旨题线索。"
+                    ],
+                    tone: .rewrite
+                )
+            case .question:
+                SentenceExplainBlock(
+                    title: "题目结构",
+                    content: normalizedText.isEmpty ? "当前题干文本为空。" : normalizedText,
+                    tone: .node
+                )
+                SentenceExplainListBlock(
+                    title: "本地提示",
+                    items: ["先识别题干问法，再回到正文定位证据。"],
+                    tone: .teaching
+                )
+            case .option:
+                SentenceExplainBlock(
+                    title: "选项/答案块",
+                    content: normalizedText.isEmpty ? "当前选项或答案区文本为空。" : normalizedText,
+                    tone: .node
+                )
+                SentenceExplainListBlock(
+                    title: "本地提示",
+                    items: ["先判断该块是选项、答案线索还是解析说明，再与正文证据绑定。"],
+                    tone: .teaching
+                )
+            case .vocabulary:
+                SentenceExplainBlock(
+                    title: "词汇讲义",
+                    content: normalizedText.isEmpty ? "当前词汇块文本为空。" : normalizedText,
+                    tone: .vocabulary
+                )
+                SentenceExplainListBlock(
+                    title: "本地提示",
+                    items: ["优先整理词义、搭配和例句，不进入句子主干精讲。"],
+                    tone: .teaching
+                )
+            case .chineseInstruction:
+                SentenceExplainBlock(
+                    title: "学习提示",
+                    content: normalizedText.isEmpty ? "当前中文说明为空。" : normalizedText,
+                    tone: .teaching
+                )
+            case .bilingualNote:
+                SentenceExplainBlock(
+                    title: "双语注释结构",
+                    content: normalizedText.isEmpty ? "当前双语注释为空。" : normalizedText,
+                    tone: .translation
+                )
+                SentenceExplainListBlock(
+                    title: "本地提示",
+                    items: ["这类内容用于辅助理解，不直接进入句子精讲云请求。"],
+                    tone: .teaching
+                )
+            case .passageParagraph:
+                SentenceExplainBlock(
+                    title: "段落结构",
+                    content: normalizedText.isEmpty ? "当前段落文本为空。" : normalizedText,
+                    tone: .node
+                )
+                SentenceExplainListBlock(
+                    title: "本地提示",
+                    items: ["段落应进入全文地图或段落结构分析，不直接进入单句精讲。"],
+                    tone: .teaching
+                )
+            case .passageSentence:
+                SentenceExplainBlock(
+                    title: "句子结构",
+                    content: normalizedText.isEmpty ? "当前句子文本为空。" : normalizedText,
+                    tone: .node
+                )
+            case .unknown:
+                SentenceExplainBlock(
+                    title: "本地结构",
+                    content: normalizedText.isEmpty ? "当前选中内容来源未知。" : normalizedText,
+                    tone: .neutral
+                )
+                SentenceExplainListBlock(
+                    title: "本地提示",
+                    items: ["来源类型未确认前，只展示本地骨架，不请求云端句子精讲。"],
+                    tone: .teaching
+                )
+            }
+        }
+    }
+}
+
 struct ProfessorAnalysisPanel: View {
     let analysis: ProfessorSentenceAnalysis
     var keywordMinimumWidth: CGFloat = 120
@@ -1785,7 +1956,10 @@ private struct TranslationInterpretationGroup: View {
     let highlightTokens: [String]
 
     private var faithfulTranslationText: String {
-        analysis.renderedFaithfulTranslation.nonEmpty ?? "暂无忠实翻译"
+        if let faithfulTranslation = analysis.renderedFaithfulTranslation.nonEmpty {
+            return faithfulTranslation
+        }
+        return analysis.isAIGenerated ? "暂无忠实翻译" : "AI 翻译暂不可用，可稍后重试。"
     }
 
     private var teachingInterpretationText: String {

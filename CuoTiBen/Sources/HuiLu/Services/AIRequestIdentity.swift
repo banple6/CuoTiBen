@@ -1,5 +1,152 @@
 import Foundation
 
+enum SourceSelectionKind: String, Codable, CaseIterable, Equatable, Hashable {
+    case passageSentence
+    case passageParagraph
+    case heading
+    case question
+    case option
+    case vocabulary
+    case chineseInstruction
+    case bilingualNote
+    case unknown
+
+    var allowsCloudSentenceExplain: Bool {
+        self == .passageSentence
+    }
+
+    var skipRemoteReason: String? {
+        allowsCloudSentenceExplain ? nil : "notPassageSentence"
+    }
+
+    var displayName: String {
+        switch self {
+        case .passageSentence:
+            return "正文句子"
+        case .passageParagraph:
+            return "正文段落"
+        case .heading:
+            return "标题块"
+        case .question:
+            return "题干块"
+        case .option:
+            return "选项/答案块"
+        case .vocabulary:
+            return "词汇块"
+        case .chineseInstruction:
+            return "中文说明"
+        case .bilingualNote:
+            return "双语注释"
+        case .unknown:
+            return "未知块"
+        }
+    }
+
+    static func make(
+        sourceKind: SourceContentKind,
+        hasSentenceID: Bool,
+        preferParagraph: Bool = false
+    ) -> SourceSelectionKind {
+        switch sourceKind {
+        case .passageBody:
+            return hasSentenceID && !preferParagraph ? .passageSentence : .passageParagraph
+        case .passageHeading:
+            return .heading
+        case .question:
+            return .question
+        case .answerKey:
+            return .option
+        case .vocabularySupport:
+            return .vocabulary
+        case .chineseInstruction:
+            return .chineseInstruction
+        case .bilingualNote:
+            return .bilingualNote
+        case .noise, .synthetic, .unknown:
+            return .unknown
+        }
+    }
+}
+
+struct SourceSelectionState: Codable, Equatable, Hashable {
+    let kind: SourceSelectionKind
+    let documentID: String?
+    let segmentID: String?
+    let sentenceID: String?
+    let anchorLabel: String?
+    let sourceKind: SourceContentKind
+    let text: String
+    let sourceTitle: String
+
+    static let unknown = SourceSelectionState(
+        kind: .unknown,
+        documentID: nil,
+        segmentID: nil,
+        sentenceID: nil,
+        anchorLabel: nil,
+        sourceKind: .unknown,
+        text: "",
+        sourceTitle: ""
+    )
+
+    static func make(
+        document: SourceDocument,
+        sentence: Sentence,
+        segment: Segment?
+    ) -> SourceSelectionState {
+        let sourceKind = segment?.provenance.sourceKind ?? sentence.provenance.sourceKind
+        return SourceSelectionState(
+            kind: SourceSelectionKind.make(
+                sourceKind: sourceKind,
+                hasSentenceID: !normalize(sentence.id).isEmpty
+            ),
+            documentID: document.id.uuidString,
+            segmentID: sentence.segmentID,
+            sentenceID: sentence.id,
+            anchorLabel: sentence.anchorLabel,
+            sourceKind: sourceKind,
+            text: sentence.text,
+            sourceTitle: document.title
+        )
+    }
+
+    static func make(
+        document: SourceDocument,
+        text: String,
+        sentence: Sentence?,
+        segment: Segment?
+    ) -> SourceSelectionState {
+        let sourceKind = segment?.provenance.sourceKind ?? sentence?.provenance.sourceKind ?? .unknown
+        return SourceSelectionState(
+            kind: SourceSelectionKind.make(
+                sourceKind: sourceKind,
+                hasSentenceID: sentence.map { !normalize($0.id).isEmpty } ?? false
+            ),
+            documentID: document.id.uuidString,
+            segmentID: sentence?.segmentID ?? segment?.id,
+            sentenceID: sentence?.id,
+            anchorLabel: sentence?.anchorLabel ?? segment?.anchorLabel,
+            sourceKind: sourceKind,
+            text: normalize(text),
+            sourceTitle: document.title
+        )
+    }
+
+    var allowsCloudSentenceExplain: Bool {
+        kind.allowsCloudSentenceExplain
+    }
+
+    var skipRemoteReason: String? {
+        kind.skipRemoteReason
+    }
+
+    private static func normalize(_ value: String?) -> String {
+        (value ?? "")
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
 struct AIRequestIdentity: Codable, Equatable, Hashable, CustomDebugStringConvertible {
     let clientRequestID: String
     let documentID: String

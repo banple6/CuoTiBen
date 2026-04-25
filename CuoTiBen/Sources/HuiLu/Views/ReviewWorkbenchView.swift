@@ -1344,6 +1344,10 @@ private struct ReviewWorkbenchSentencePanel: View {
         return bundled
     }
 
+    private var selectionState: SourceSelectionState {
+        viewModel.sourceSelectionState(for: sentence, in: document)
+    }
+
     private var visibleResult: AIExplainSentenceResult? {
         guard let result, isResultVisible(result, for: sentence) else {
             return nil
@@ -1353,6 +1357,7 @@ private struct ReviewWorkbenchSentencePanel: View {
 
     private var shouldAutoLoadRemoteExplanation: Bool {
         guard !isLoading, result == nil else { return false }
+        guard selectionState.allowsCloudSentenceExplain else { return false }
         guard let bundled = bundledAnalysis else { return true }
         return bundled.shouldPreferSentenceExplain(for: sentence.text)
     }
@@ -1492,7 +1497,17 @@ private struct ReviewWorkbenchSentencePanel: View {
 
     @ViewBuilder
     private var explanationSection: some View {
-        if let analysis = effectiveAnalysis {
+        let currentSelection = selectionState
+        if !currentSelection.allowsCloudSentenceExplain {
+            VStack(alignment: .leading, spacing: 14) {
+                SentenceExplainBlock(
+                    title: "本地骨架",
+                    content: "当前展示的是本地结构骨架，远端 AI 精讲尚未成功获取。",
+                    tone: .neutral
+                )
+                SourceSelectionSkeletonPanel(selectionState: currentSelection)
+            }
+        } else if let analysis = effectiveAnalysis {
             VStack(alignment: .leading, spacing: 14) {
                 if isLoading {
                     ProgressView("正在获取教授式精讲…")
@@ -1624,6 +1639,7 @@ private struct ReviewWorkbenchSentencePanel: View {
         }
 
         guard let requestIdentity = viewModel.explainSentenceRequestIdentity(for: currentSentence, in: document) else {
+            _ = try? ExplainSentenceRequestBuilder.prepare(context: context, requestIdentity: nil)
             let fallback = LocalSentenceFallbackBuilder.build(
                 context: context,
                 requestIdentity: nil,

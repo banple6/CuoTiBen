@@ -14,7 +14,7 @@ enum LocalSentenceFallbackBuilder {
         let grammarFocus = roughGrammarFocus(for: normalizedSentence)
         let requestID = structuredError?.requestID ?? requestIdentity?.clientRequestID
         let resolvedMeta = meta ?? .localFallback()
-        let fallbackMessage = structuredError?.sentenceFallbackMessage ?? "AI 服务暂时繁忙，已展示本地解析骨架。"
+        let fallbackMessage = structuredError?.sentenceFallbackMessage ?? "AI 精讲获取失败，已展示本地骨架。"
 
         return AIExplainSentenceResult(
             originalSentence: normalizedSentence,

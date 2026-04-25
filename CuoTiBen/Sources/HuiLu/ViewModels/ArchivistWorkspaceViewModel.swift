@@ -180,8 +180,10 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
         }
 
         guard let targetIdentity = appViewModel.explainSentenceRequestIdentity(for: sentence, in: document) else {
+            let context = appViewModel.explainSentenceContext(for: sentence, in: document)
+            _ = try? ExplainSentenceRequestBuilder.prepare(context: context, requestIdentity: nil)
             analysisResult = LocalSentenceFallbackBuilder.build(
-                context: appViewModel.explainSentenceContext(for: sentence, in: document),
+                context: context,
                 requestIdentity: nil,
                 structuredError: AIStructuredError.invalidRequest(message: "缺少 sentence identity 字段。")
             )
