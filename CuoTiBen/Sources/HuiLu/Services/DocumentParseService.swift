@@ -8,6 +8,7 @@ enum DocumentParseServiceError: LocalizedError {
     case remoteUnavailable
     case missingBackendURL
     case invalidBackendURL
+    case localNetworkProhibited(String)
     case uploadFailed(String)
     case parseFailed(String)
     case legacySchema(String)
@@ -21,6 +22,7 @@ enum DocumentParseServiceError: LocalizedError {
         case .remoteUnavailable: return "文档解析云接口未配置，已使用本地解析。"
         case .missingBackendURL:    return "后端地址未配置"
         case .invalidBackendURL:    return "后端地址格式无效"
+        case .localNetworkProhibited(let m): return m
         case .uploadFailed(let m):  return "上传失败：\(m)"
         case .parseFailed(let m):   return "解析失败：\(m)"
         case .legacySchema(let m):  return "后端仍返回旧版结构：\(m)"
@@ -241,7 +243,13 @@ enum DocumentParseService {
 
         TextPipelineDiagnostics.log("PP", "[PP] parse request start doc=\(documentID) url=\(url.absoluteString) fileSize=\(fileData.count)字节 fileName=\(fileName)", severity: .info)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            throw mapNetworkError(error, url: url, phase: "submit")
+        }
 
         guard let httpResponse = response as? HTTPURLResponse else {
             TextPipelineDiagnostics.log("PP", "[PP] parse request failed: 无效的 HTTP 响应", severity: .error)
@@ -304,7 +312,13 @@ enum DocumentParseService {
             var request = URLRequest(url: url)
             request.timeoutInterval = httpTimeoutSeconds
 
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let data: Data
+            let response: URLResponse
+            do {
+                (data, response) = try await URLSession.shared.data(for: request)
+            } catch {
+                throw mapNetworkError(error, url: url, phase: "poll")
+            }
             guard let httpResponse = response as? HTTPURLResponse,
                   (200...299).contains(httpResponse.statusCode) else {
                 // 404 → 任务不存在
@@ -373,6 +387,67 @@ enum DocumentParseService {
     }
 
     // MARK: - Private
+
+    private static func mapNetworkError(_ error: Error, url: URL, phase: String) -> DocumentParseServiceError {
+        if let urlError = error as? URLError,
+           isLocalNetworkProhibited(urlError, url: url) {
+            let message = "iOS 已阻止本地网络访问。请在系统设置中为错题本开启“本地网络”权限，然后重试远端文档解析。"
+            TextPipelineDiagnostics.log(
+                "PP",
+                [
+                    "[PP][Route]",
+                    "local_network_prohibited=true",
+                    "phase=\(phase)",
+                    "url=\(url.absoluteString)",
+                    "error_code=\(urlError.errorCode)",
+                    "recovery=enable_iOS_Local_Network_permission"
+                ].joined(separator: " "),
+                severity: .error
+            )
+            return .localNetworkProhibited(message)
+        }
+
+        TextPipelineDiagnostics.log(
+            "PP",
+            [
+                "[PP][Route]",
+                "network_error=true",
+                "phase=\(phase)",
+                "url=\(url.absoluteString)",
+                "error=\(error.localizedDescription)"
+            ].joined(separator: " "),
+            severity: .warning
+        )
+        return .uploadFailed(error.localizedDescription)
+    }
+
+    private static func isLocalNetworkProhibited(_ error: URLError, url: URL) -> Bool {
+        let details = "\(error) \(error.userInfo)"
+        if details.localizedCaseInsensitiveContains("Local network prohibited") {
+            return true
+        }
+        guard error.code == .notConnectedToInternet,
+              let host = url.host?.lowercased()
+        else {
+            return false
+        }
+        return host == "localhost"
+            || host.hasPrefix("127.")
+            || host.hasPrefix("10.")
+            || host.hasPrefix("192.168.")
+            || isPrivate172Address(host)
+    }
+
+    private static func isPrivate172Address(_ host: String) -> Bool {
+        let parts = host.split(separator: ".")
+        guard parts.count == 4,
+              parts[0] == "172",
+              let second = Int(parts[1])
+        else {
+            return false
+        }
+        return (16...31).contains(second)
+    }
 
     private static func mimeType(for fileName: String) -> String {
         let ext = (fileName as NSString).pathExtension.lowercased()
