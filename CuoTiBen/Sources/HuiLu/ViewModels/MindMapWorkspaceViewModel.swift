@@ -146,9 +146,15 @@ final class MindMapWorkspaceViewModel: ObservableObject {
     }
 
     private func rebuildDomainState() {
-        let resolvedPassageMap = bundle.passageMap ?? MindMapAdmissionService.buildPassageMap(from: bundle)
-        let resolvedAdmission = bundle.mindMapAdmissionResult
-            ?? MindMapAdmissionService.admit(bundle: bundle, passageMap: resolvedPassageMap)
+        let cachedPassageMap = bundle.passageMap
+        let cachedMapMatchesCurrentSource = cachedPassageMap?.documentID == bundle.source.id
+            && cachedPassageMap?.sourceID == bundle.source.id
+        let resolvedPassageMap = cachedMapMatchesCurrentSource
+            ? cachedPassageMap!
+            : MindMapAdmissionService.buildPassageMap(from: bundle)
+        let resolvedAdmission = cachedMapMatchesCurrentSource
+            ? (bundle.mindMapAdmissionResult ?? MindMapAdmissionService.admit(bundle: bundle, passageMap: resolvedPassageMap))
+            : MindMapAdmissionService.admit(bundle: bundle, passageMap: resolvedPassageMap)
 
         passageMap = resolvedPassageMap
         admissionResult = resolvedAdmission

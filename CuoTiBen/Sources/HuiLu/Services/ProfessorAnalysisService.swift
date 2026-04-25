@@ -24,6 +24,7 @@ enum ProfessorAnalysisService {
         let requestID: String?
         let meta: AIServiceResponseMeta
         let data: AnalyzePassagePayload?
+        let identity: PassageAnalysisIdentity?
         let structuredError: AIStructuredError?
     }
 
@@ -50,6 +51,10 @@ enum ProfessorAnalysisService {
         )
 
         logRequestPreparation(requestBuild.diagnostics)
+        if requestBuild.diagnostics.requestBuilderUsed,
+           !requestBuild.diagnostics.contractPreflightPassed {
+            logContractPreflightFailure(requestBuild.diagnostics)
+        }
 
         guard let requestBody = requestBuild.payload else {
             return fallbackResult(
@@ -158,7 +163,7 @@ enum ProfessorAnalysisService {
                            structuredError.message.contains("缺少 passage identity 字段") {
                             logMissingIdentityBug(
                                 diagnostics: requestBuild.diagnostics.withFlags(
-                                    requestBuilderUsed: false,
+                                    requestBuilderUsed: true,
                                     missingIdentity: true
                                 ),
                                 structuredError: structuredError
@@ -167,7 +172,7 @@ enum ProfessorAnalysisService {
                                 document: document,
                                 bundle: bundle,
                                 diagnostics: requestBuild.diagnostics.withFlags(
-                                    requestBuilderUsed: false,
+                                    requestBuilderUsed: true,
                                     missingIdentity: true
                                 ),
                                 structuredError: structuredError,
@@ -207,6 +212,37 @@ enum ProfessorAnalysisService {
                     )
 
                     if decoded.success, let payload = decoded.data {
+                        let expectedIdentity = requestBuild.expectedIdentity ?? PassageAnalysisIdentity.make(
+                            document: document,
+                            bundle: bundle,
+                            materialMode: requestBuild.diagnostics.materialMode,
+                            acceptedParagraphCount: requestBuild.diagnostics.acceptedParagraphCount,
+                            contentHash: requestBuild.diagnostics.contentHash
+                        )
+                        let actualIdentity = decoded.identity ?? expectedIdentity
+                        let identityDecision = PassageAnalysisIdentityGuard.validate(
+                            expected: expectedIdentity,
+                            actual: actualIdentity
+                        )
+                        PassageAnalysisIdentityGuard.logDecision(
+                            requestID: decoded.requestID,
+                            expected: expectedIdentity,
+                            actual: actualIdentity,
+                            decision: identityDecision
+                        )
+                        guard identityDecision.isAllowed else {
+                            return fallbackResult(
+                                document: document,
+                                bundle: bundle,
+                                diagnostics: requestBuild.diagnostics,
+                                structuredError: AIStructuredError.invalidModelResponse(
+                                    message: "AI 地图分析身份与当前资料不一致，已展示本地结构骨架。",
+                                    requestID: decoded.requestID
+                                ),
+                                meta: AIServiceResponseMeta.localFallback()
+                            )
+                        }
+
                         await aiServiceAvailabilityGate.recordSuccess(for: .professorAnalysis)
                         let delta = ProfessorAnalysisDelta(
                             schemaVersion: ProfessorAnalysisCacheStore.analysisSchemaVersion,
@@ -214,7 +250,8 @@ enum ProfessorAnalysisService {
                             passageOverview: payload.overview,
                             paragraphCards: payload.paragraphCards,
                             sentenceCards: [],
-                            passageAnalysisDiagnostics: requestBuild.diagnostics
+                            passageAnalysisDiagnostics: requestBuild.diagnostics,
+                            passageAnalysisIdentity: expectedIdentity
                         )
                         TextPipelineDiagnostics.log(
                             "AI",
@@ -229,7 +266,8 @@ enum ProfessorAnalysisService {
                             overview: payload.overview,
                             paragraphCards: payload.paragraphCards,
                             sentenceCards: [],
-                            passageAnalysisDiagnostics: requestBuild.diagnostics
+                            passageAnalysisDiagnostics: requestBuild.diagnostics,
+                            passageAnalysisIdentity: expectedIdentity
                         )
                         return ProfessorAnalysisServiceResult(
                             delta: delta,
@@ -391,6 +429,7 @@ enum ProfessorAnalysisService {
                 requestID: requestID,
                 meta: meta,
                 data: nil,
+                identity: responseIdentity(from: dictionary, payloadDictionary: nil),
                 structuredError: structuredError
             )
         }
@@ -405,6 +444,7 @@ enum ProfessorAnalysisService {
             requestID: requestID,
             meta: meta,
             data: payload,
+            identity: responseIdentity(from: dictionary, payloadDictionary: payloadDictionary),
             structuredError: structuredError
         )
     }
@@ -552,9 +592,33 @@ enum ProfessorAnalysisService {
                 "material_mode=\(diagnostics.materialMode.rawValue)",
                 "reason=\(diagnostics.reasonFlags.isEmpty ? diagnostics.reason : diagnostics.reasonFlags.joined(separator: "||"))",
                 "request_builder_used=\(diagnostics.requestBuilderUsed)",
-                "used_fallback=\(!diagnostics.requestBuilderUsed)"
+                "contract_preflight_passed=\(diagnostics.contractPreflightPassed)",
+                "missing_fields=\(formatMissingFields(diagnostics.missingFields))",
+                "final_segments_count=\(diagnostics.finalSegmentsCount)",
+                "final_sentences_count=\(diagnostics.finalSentencesCount)",
+                "passage_body_paragraph_count=\(diagnostics.passageBodyParagraphCount)",
+                "used_fallback=\(!diagnostics.contractPreflightPassed)"
             ].joined(separator: " "),
             severity: diagnostics.requestBuilderUsed ? .info : .warning
+        )
+    }
+
+    private static func logContractPreflightFailure(_ diagnostics: PassageAnalysisDiagnostics) {
+        TextPipelineDiagnostics.log(
+            "AI",
+            [
+                "[AI][PassageMap] contract_preflight_failed",
+                "missingFields=\(formatMissingFields(diagnostics.missingFields))",
+                "requestBuilderUsed=true",
+                "activeCallPath=\(diagnostics.activeCallPath)",
+                "client_request_id=\(diagnostics.clientRequestID ?? "nil")",
+                "document_id=\(diagnostics.documentID)",
+                "content_hash=\(diagnostics.contentHash ?? "nil")",
+                "accepted_paragraph_count=\(diagnostics.acceptedParagraphCount)",
+                "material_mode=\(diagnostics.materialMode.rawValue)",
+                "used_fallback=true"
+            ].joined(separator: " "),
+            severity: .error
         )
     }
 
@@ -573,7 +637,7 @@ enum ProfessorAnalysisService {
                 "content_hash=\(diagnostics.contentHash ?? "nil")",
                 "accepted_paragraph_count=\(diagnostics.acceptedParagraphCount)",
                 "material_mode=\(diagnostics.materialMode.rawValue)",
-                "request_builder_used=false",
+                "request_builder_used=\(diagnostics.requestBuilderUsed)",
                 "missing_identity=true",
                 "used_fallback=true",
                 "error_code=\(structuredError.errorCode)"
@@ -599,6 +663,9 @@ enum ProfessorAnalysisService {
             String(format: "non_passage_ratio=%.2f", diagnostics.nonPassageRatio),
             "material_mode=\(diagnostics.materialMode.rawValue)",
             "reason=\(diagnostics.reasonFlags.isEmpty ? diagnostics.reason : diagnostics.reasonFlags.joined(separator: "||"))",
+            "request_builder_used=\(diagnostics.requestBuilderUsed)",
+            "contract_preflight_passed=\(diagnostics.contractPreflightPassed)",
+            "missing_fields=\(formatMissingFields(diagnostics.missingFields))",
             "provider=\(meta.provider ?? "nil")",
             "model=\(meta.model ?? "nil")",
             "retry_count=\(meta.retryCount)",
@@ -626,6 +693,9 @@ enum ProfessorAnalysisService {
             String(format: "non_passage_ratio=%.2f", diagnostics.nonPassageRatio),
             "material_mode=\(diagnostics.materialMode.rawValue)",
             "reason=\(diagnostics.reasonFlags.isEmpty ? diagnostics.reason : diagnostics.reasonFlags.joined(separator: "||"))",
+            "request_builder_used=\(diagnostics.requestBuilderUsed)",
+            "contract_preflight_passed=\(diagnostics.contractPreflightPassed)",
+            "missing_fields=\(formatMissingFields(diagnostics.missingFields))",
             "error_code=\(errorCode)",
             "retry_count=\(meta.retryCount)",
             "used_cache=\(meta.usedCache)",
@@ -649,6 +719,18 @@ enum ProfessorAnalysisService {
     private static func normalizedString(_ value: String?) -> String? {
         let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func responseIdentity(
+        from dictionary: [String: Any],
+        payloadDictionary: [String: Any]?
+    ) -> PassageAnalysisIdentity? {
+        PassageAnalysisIdentity(dictionary: dictionary["identity"] as? [String: Any])
+            ?? PassageAnalysisIdentity(dictionary: payloadDictionary?["identity"] as? [String: Any])
+    }
+
+    private static func formatMissingFields(_ fields: [String]) -> String {
+        fields.isEmpty ? "[]" : "[\(fields.joined(separator: ","))]"
     }
 
     private static func truncated(_ text: String, limit: Int) -> String {

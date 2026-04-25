@@ -513,7 +513,8 @@ private extension AISourceParsingService {
             zoningSummary: bundle.zoningSummary,
             passageMap: passageMap.withDiagnostics(admissionResult.diagnostics),
             mindMapAdmissionResult: admissionResult,
-            passageAnalysisDiagnostics: bundle.passageAnalysisDiagnostics
+            passageAnalysisDiagnostics: bundle.passageAnalysisDiagnostics,
+            passageAnalysisIdentity: bundle.passageAnalysisIdentity
         )
     }
 

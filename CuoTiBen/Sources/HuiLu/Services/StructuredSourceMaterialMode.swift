@@ -35,6 +35,9 @@ struct StructuredSourceMaterialDecision: Codable, Equatable, Hashable {
     let rawTextLength: Int
     let anchorCount: Int
     let sentenceDraftCount: Int
+    let finalSegmentsCount: Int
+    let finalSentencesCount: Int
+    let passageBodyParagraphCount: Int
     let candidateParagraphCount: Int
     let passageParagraphCount: Int
     let questionParagraphCount: Int
@@ -42,6 +45,7 @@ struct StructuredSourceMaterialDecision: Codable, Equatable, Hashable {
     let vocabularyParagraphCount: Int
     let learningParagraphCount: Int
     let nonPassageRatio: Double
+    let sourceKindDistribution: [String: Int]
     let reasons: [String]
 
     var primaryReason: String {
@@ -61,6 +65,9 @@ struct StructuredSourceMaterialDecision: Codable, Equatable, Hashable {
             rawTextLength: rawTextLength,
             anchorCount: anchorCount,
             sentenceDraftCount: sentenceDraftCount,
+            finalSegmentsCount: finalSegmentsCount,
+            finalSentencesCount: finalSentencesCount,
+            passageBodyParagraphCount: passageBodyParagraphCount,
             candidateParagraphCount: candidateParagraphCount,
             passageParagraphCount: passageParagraphCount,
             questionParagraphCount: questionParagraphCount,
@@ -68,23 +75,27 @@ struct StructuredSourceMaterialDecision: Codable, Equatable, Hashable {
             vocabularyParagraphCount: vocabularyParagraphCount,
             learningParagraphCount: learningParagraphCount,
             nonPassageRatio: nonPassageRatio,
+            sourceKindDistribution: sourceKindDistribution,
             reasons: Array(Set(reasons + [appendedReason])).sorted()
         )
     }
 
     func asPassageDiagnostics(
         documentID: String,
-        activeCallPath: String
+        activeCallPath: String,
+        bundle: StructuredSourceBundle,
+        sourceTitle: String
     ) -> PassageAnalysisDiagnostics {
         let acceptedParagraphCount = mode == .passageReading ? passageParagraphCount : 0
         let rejectedParagraphCount = max(candidateParagraphCount - acceptedParagraphCount, 0)
+        let analysisMode = mode.analysisMode
         return PassageAnalysisDiagnostics(
-            materialMode: mode.analysisMode,
+            materialMode: analysisMode,
             candidateParagraphCount: candidateParagraphCount,
             acceptedParagraphCount: acceptedParagraphCount,
             rejectedParagraphCount: rejectedParagraphCount,
             rejectedReasons: reasons,
-            contentHash: nil,
+            contentHash: PassageAnalysisIdentity.contentHash(for: bundle, materialMode: analysisMode),
             nonPassageRatio: nonPassageRatio,
             reason: primaryReason,
             reasonFlags: reasons,
@@ -94,7 +105,14 @@ struct StructuredSourceMaterialDecision: Codable, Equatable, Hashable {
             requestBuilderUsed: false,
             missingIdentity: false,
             rawTextLength: rawTextLength,
-            sentenceDraftCount: sentenceDraftCount
+            sentenceDraftCount: sentenceDraftCount,
+            finalSegmentsCount: finalSegmentsCount,
+            finalSentencesCount: finalSentencesCount,
+            passageBodyParagraphCount: passageBodyParagraphCount,
+            sourceKindDistribution: sourceKindDistribution,
+            contractPreflightPassed: false,
+            missingFields: [],
+            sourceTitle: sourceTitle
         )
     }
 }
@@ -124,20 +142,32 @@ enum StructuredSourceMaterialGate {
         let totalSegmentCount = max(nonEmptySegments.count, 1)
         let nonPassageCount = max(nonEmptySegments.count - passageSegments.count, 0)
         let nonPassageRatio = Double(nonPassageCount) / Double(totalSegmentCount)
+        let rawTextLength = draft.rawText.count
+        let finalSegmentsCount = nonEmptySegments.count
+        let finalSentencesCount = bundle.sentences.count
+        let sourceKindDistribution = Dictionary(
+            grouping: nonEmptySegments,
+            by: { $0.provenance.sourceKind.rawValue }
+        ).mapValues(\.count)
 
         var reasons: [String] = []
+        var blockingReasons: [String] = []
         if draft.sentenceDrafts.isEmpty {
             reasons.append("sentenceDrafts=0")
         }
-        if draft.rawText.count < minimumRawTextLength {
-            reasons.append("rawTextTooShort")
+        if rawTextLength < minimumRawTextLength {
+            blockingReasons.append("rawTextTooShort")
         }
         if passageSegments.count < minimumPassageParagraphCount {
-            reasons.append("noPassageBody")
+            blockingReasons.append("noPassageBody")
+        }
+        if finalSentencesCount == 0 {
+            blockingReasons.append("finalSentences=0")
         }
         if nonPassageRatio > maximumNonPassageRatio {
-            reasons.append("nonPassageRatioHigh")
+            blockingReasons.append("nonPassageRatioHigh")
         }
+        reasons.append(contentsOf: blockingReasons)
 
         let questionLikeCount = questionSegments.count + answerSegments.count
         let vocabularyLikeCount = vocabularySegments.count
@@ -147,7 +177,7 @@ enum StructuredSourceMaterialGate {
         let learningLikeRatio = Double(learningLikeCount) / Double(totalSegmentCount)
 
         let mode: StructuredSourceMaterialMode
-        if reasons.isEmpty {
+        if blockingReasons.isEmpty {
             mode = .passageReading
         } else if questionLikeCount > 0,
                   questionLikeRatio >= 0.35,
@@ -173,9 +203,12 @@ enum StructuredSourceMaterialGate {
 
         return StructuredSourceMaterialDecision(
             mode: mode,
-            rawTextLength: draft.rawText.count,
+            rawTextLength: rawTextLength,
             anchorCount: draft.anchors.count,
             sentenceDraftCount: draft.sentenceDrafts.count,
+            finalSegmentsCount: finalSegmentsCount,
+            finalSentencesCount: finalSentencesCount,
+            passageBodyParagraphCount: passageSegments.count,
             candidateParagraphCount: nonEmptySegments.count,
             passageParagraphCount: passageSegments.count,
             questionParagraphCount: questionSegments.count,
@@ -183,6 +216,7 @@ enum StructuredSourceMaterialGate {
             vocabularyParagraphCount: vocabularyLikeCount,
             learningParagraphCount: learningLikeCount,
             nonPassageRatio: nonPassageRatio,
+            sourceKindDistribution: sourceKindDistribution,
             reasons: Array(Set(reasons)).sorted()
         )
     }

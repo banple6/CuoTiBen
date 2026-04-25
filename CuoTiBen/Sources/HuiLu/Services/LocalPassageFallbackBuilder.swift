@@ -166,7 +166,14 @@ enum LocalPassageFallbackBuilder {
             passageOverview: overview,
             paragraphCards: paragraphCards,
             sentenceCards: [],
-            passageAnalysisDiagnostics: diagnostics
+            passageAnalysisDiagnostics: diagnostics,
+            passageAnalysisIdentity: PassageAnalysisIdentity.make(
+                document: document,
+                bundle: bundle,
+                materialMode: diagnostics.materialMode,
+                acceptedParagraphCount: diagnostics.acceptedParagraphCount,
+                contentHash: diagnostics.contentHash
+            )
         )
 
         return LocalPassageFallbackBuildResult(

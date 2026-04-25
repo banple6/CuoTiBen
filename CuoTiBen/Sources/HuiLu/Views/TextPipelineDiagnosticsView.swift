@@ -34,6 +34,10 @@ struct TextPipelineDiagnosticsView: View {
             }
     }
 
+    private var latestDocumentParseRouteStatus: DocumentParseRouteStatus? {
+        DocumentParseRouteStatus(events: events)
+    }
+
     private var latestAIGatewayStatus: AIGatewayEventStatus? {
         [latestSentenceAIStatus, latestPassageAIStatus]
             .compactMap { $0 }
@@ -80,6 +84,12 @@ struct TextPipelineDiagnosticsView: View {
                 }
 
                 List {
+                    if let documentParseStatus = latestDocumentParseRouteStatus {
+                        Section("Document parse") {
+                            DocumentParseRouteStatusCard(status: documentParseStatus)
+                        }
+                    }
+
                     if let gatewayStatus = latestAIGatewayStatus {
                         Section("AI Gateway") {
                             AIGatewayStatusCard(status: gatewayStatus)
@@ -179,6 +189,48 @@ struct TextPipelineDiagnosticsView: View {
         case .error: return .red
         case .repaired: return .green
         }
+    }
+}
+
+private struct DocumentParseRouteStatus {
+    let endpointConfigured: Bool
+    let endpointURL: String
+    let remoteStatus: String
+    let skippedBecauseUnconfigured: Bool
+
+    init?(events: [TextPipelineDiagnostics.PipelineEvent]) {
+        let routeEvents = events.filter { $0.stage == "PP" && $0.message.contains("[PP][Route]") }
+        guard !routeEvents.isEmpty else { return nil }
+
+        let endpointEvent = routeEvents.last { $0.message.contains("document_parse_endpoint=") }
+        let endpointValues = endpointEvent.map { DiagnosticsEventParser.parseKeyValuePairs(from: $0.message) } ?? [:]
+        let endpoint = endpointValues["document_parse_endpoint"] ?? "unknown"
+
+        endpointConfigured = endpoint != "unconfigured" && endpoint != "unknown"
+        endpointURL = endpoint
+        skippedBecauseUnconfigured = routeEvents.contains { $0.message.contains("skip remote document parse") }
+
+        if routeEvents.contains(where: { $0.message.contains("remote parse request start") }) {
+            remoteStatus = "request_started"
+        } else if skippedBecauseUnconfigured {
+            remoteStatus = "skipped_unconfigured"
+        } else {
+            remoteStatus = "unknown"
+        }
+    }
+}
+
+private struct DocumentParseRouteStatusCard: View {
+    let status: DocumentParseRouteStatus
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            DiagnosticKeyValueRow(label: "documentParseEndpointConfigured", value: status.endpointConfigured ? "true" : "false")
+            DiagnosticKeyValueRow(label: "documentParseEndpointURL", value: status.endpointURL)
+            DiagnosticKeyValueRow(label: "documentParseRemoteStatus", value: status.remoteStatus)
+            DiagnosticKeyValueRow(label: "skippedBecauseUnconfigured", value: status.skippedBecauseUnconfigured ? "true" : "false")
+        }
+        .padding(.vertical, 4)
     }
 }
 
@@ -288,6 +340,12 @@ private struct AIGatewayEventStatus {
     let rejectedParagraphCount: Int?
     let nonPassageRatio: String?
     let reason: String?
+    let requestBuilderUsed: Bool?
+    let clientRequestID: String?
+    let documentID: String?
+    let contentHash: String?
+    let contractPreflightPassed: Bool?
+    let missingFields: String?
 
     init?(event: TextPipelineDiagnostics.PipelineEvent) {
         guard event.stage == "AI" else { return nil }
@@ -333,6 +391,13 @@ private struct AIGatewayEventStatus {
         rejectedParagraphCount = Int(values["rejected_paragraph_count"] ?? "")
         nonPassageRatio = values["non_passage_ratio"]
         reason = values["reason"]?.replacingOccurrences(of: "||", with: " | ")
+        requestBuilderUsed = (values["request_builder_used"] ?? values["requestBuilderUsed"]).map { $0 == "true" }
+        clientRequestID = values["client_request_id"]
+        documentID = values["document_id"]
+        contentHash = values["content_hash"]
+        contractPreflightPassed = (values["contract_preflight_passed"] ?? values["contractPreflightPassed"]).map { $0 == "true" }
+        missingFields = (values["missing_fields"] ?? values["missingFields"])?
+            .replacingOccurrences(of: ",", with: ", ")
         fallbackMessage = DiagnosticsEventParser.buildFallbackMessage(
             scope: scope,
             errorCode: errorCode,
@@ -358,6 +423,12 @@ private struct AIGatewayStatusCard: View {
             DiagnosticKeyValueRow(label: "circuit_state", value: status.circuitState)
             if status.scope == .passage {
                 DiagnosticKeyValueRow(label: "material_mode", value: status.materialMode ?? "nil")
+                DiagnosticKeyValueRow(label: "requestBuilderUsed", value: status.requestBuilderUsed.map { $0 ? "true" : "false" } ?? "nil")
+                DiagnosticKeyValueRow(label: "clientRequestID", value: status.clientRequestID ?? "nil")
+                DiagnosticKeyValueRow(label: "documentID", value: status.documentID ?? "nil")
+                DiagnosticKeyValueRow(label: "contentHash", value: status.contentHash ?? "nil")
+                DiagnosticKeyValueRow(label: "contractPreflightPassed", value: status.contractPreflightPassed.map { $0 ? "true" : "false" } ?? "nil")
+                DiagnosticKeyValueRow(label: "missingFields", value: status.missingFields ?? "nil")
                 DiagnosticKeyValueRow(label: "activeCallPath", value: status.activeCallPath ?? "nil")
                 DiagnosticKeyValueRow(label: "acceptedParagraphCount", value: status.acceptedParagraphCount.map(String.init) ?? "nil")
                 DiagnosticKeyValueRow(label: "rejectedParagraphCount", value: status.rejectedParagraphCount.map(String.init) ?? "nil")
@@ -688,6 +759,9 @@ struct ParseSourceDebugBadge: View {
                     if let info {
                         debugRow("来源", info.source.rawValue)
                         debugRow("阶段", stage.displayName)
+                        debugRow("PP端点", info.documentParseEndpointConfigured ? "configured" : "unconfigured")
+                        debugRow("PP状态", info.documentParseRemoteStatus ?? "nil")
+                        debugRow("跳过PP", info.skippedBecauseUnconfigured ? "true" : "false")
                         if info.ppAttempted {
                             debugRow("PP尝试", info.ppSucceeded ? "✅ 成功" : "❌ 失败")
                         }
@@ -706,7 +780,7 @@ struct ParseSourceDebugBadge: View {
                         if let d = info.parseDurationMs {
                             debugRow("耗时", "\(d)ms")
                         }
-                        if let url = info.requestURL {
+                        if let url = info.requestURL ?? info.documentParseEndpointURL {
                             debugRow("URL", url)
                         }
                     } else {

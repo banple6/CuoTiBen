@@ -85,6 +85,9 @@ struct MaterialAnalysisDecision: Codable, Equatable, Hashable {
     let mode: MaterialAnalysisMode
     let rawTextLength: Int
     let sentenceDraftCount: Int
+    let finalSegmentsCount: Int
+    let finalSentencesCount: Int
+    let passageBodyParagraphCount: Int
     let passageParagraphCount: Int
     let questionParagraphCount: Int
     let answerParagraphCount: Int
@@ -92,6 +95,7 @@ struct MaterialAnalysisDecision: Codable, Equatable, Hashable {
     let learningParagraphCount: Int
     let nonPassageRatio: Double
     let averagePassageHygiene: Double
+    let sourceKindDistribution: [String: Int]
     let reasons: [String]
 
     var primaryReason: String {
@@ -124,27 +128,35 @@ enum MaterialAnalysisGate {
         let nonPassageCount = nonEmptySegments.count - passageSegments.count
         let nonPassageRatio = Double(max(nonPassageCount, 0)) / Double(totalSegmentCount)
         let rawTextLength = bundle.source.cleanedText.normalizedForPassageAnalysis.count
-        let sentenceDraftCount = bundle.sentences.count
+        let finalSegmentsCount = nonEmptySegments.count
+        let finalSentencesCount = bundle.sentences.count
+        let sentenceDraftCount = finalSentencesCount
+        let sourceKindDistribution = Dictionary(
+            grouping: nonEmptySegments,
+            by: { $0.provenance.sourceKind.rawValue }
+        ).mapValues(\.count)
         let averagePassageHygiene = passageSegments.isEmpty
             ? 0
             : passageSegments.map(\.hygiene.score).reduce(0, +) / Double(passageSegments.count)
 
         var reasons: [String] = []
-        if sentenceDraftCount == 0 {
-            reasons.append("sentenceDrafts=0")
-        }
+        var blockingReasons: [String] = []
         if rawTextLength < minimumRawTextLength {
-            reasons.append("rawTextTooShort")
+            blockingReasons.append("rawTextTooShort")
         }
         if passageSegments.count < minimumPassageParagraphCount {
-            reasons.append("noPassageBody")
+            blockingReasons.append("noPassageBody")
+        }
+        if finalSentencesCount == 0 {
+            blockingReasons.append("finalSentences=0")
         }
         if nonPassageRatio > maximumNonPassageRatio {
-            reasons.append("nonPassageRatioHigh")
+            blockingReasons.append("nonPassageRatioHigh")
         }
         if !passageSegments.isEmpty, averagePassageHygiene < minimumPassageHygiene {
-            reasons.append("lowPassageHygiene")
+            blockingReasons.append("lowPassageHygiene")
         }
+        reasons.append(contentsOf: blockingReasons)
 
         let questionLikeCount = questionSegments.count + answerSegments.count
         let vocabularyLikeCount = vocabularySegments.count
@@ -154,7 +166,7 @@ enum MaterialAnalysisGate {
         let learningLikeRatio = Double(learningLikeCount) / Double(totalSegmentCount)
 
         let mode: MaterialAnalysisMode
-        if reasons.isEmpty {
+        if blockingReasons.isEmpty {
             mode = .passageReading
         } else if questionLikeCount > 0,
                   questionLikeRatio >= 0.35,
@@ -191,6 +203,9 @@ enum MaterialAnalysisGate {
             mode: mode,
             rawTextLength: rawTextLength,
             sentenceDraftCount: sentenceDraftCount,
+            finalSegmentsCount: finalSegmentsCount,
+            finalSentencesCount: finalSentencesCount,
+            passageBodyParagraphCount: passageSegments.count,
             passageParagraphCount: passageSegments.count,
             questionParagraphCount: questionSegments.count,
             answerParagraphCount: answerSegments.count,
@@ -198,6 +213,7 @@ enum MaterialAnalysisGate {
             learningParagraphCount: learningSegments.count,
             nonPassageRatio: nonPassageRatio,
             averagePassageHygiene: averagePassageHygiene,
+            sourceKindDistribution: sourceKindDistribution,
             reasons: Array(Set(reasons)).sorted()
         )
     }

@@ -17,6 +17,118 @@ struct PassageAnalysisDiagnostics: Codable, Equatable, Hashable {
     let missingIdentity: Bool
     let rawTextLength: Int
     let sentenceDraftCount: Int
+    let finalSegmentsCount: Int
+    let finalSentencesCount: Int
+    let passageBodyParagraphCount: Int
+    let sourceKindDistribution: [String: Int]
+    let contractPreflightPassed: Bool
+    let missingFields: [String]
+    let sourceTitle: String
+
+    init(
+        materialMode: MaterialAnalysisMode,
+        candidateParagraphCount: Int,
+        acceptedParagraphCount: Int,
+        rejectedParagraphCount: Int,
+        rejectedReasons: [String],
+        contentHash: String?,
+        nonPassageRatio: Double,
+        reason: String,
+        reasonFlags: [String],
+        clientRequestID: String?,
+        documentID: String,
+        activeCallPath: String,
+        requestBuilderUsed: Bool,
+        missingIdentity: Bool,
+        rawTextLength: Int,
+        sentenceDraftCount: Int,
+        finalSegmentsCount: Int = 0,
+        finalSentencesCount: Int = 0,
+        passageBodyParagraphCount: Int = 0,
+        sourceKindDistribution: [String: Int] = [:],
+        contractPreflightPassed: Bool = false,
+        missingFields: [String] = [],
+        sourceTitle: String = ""
+    ) {
+        self.materialMode = materialMode
+        self.candidateParagraphCount = candidateParagraphCount
+        self.acceptedParagraphCount = acceptedParagraphCount
+        self.rejectedParagraphCount = rejectedParagraphCount
+        self.rejectedReasons = rejectedReasons
+        self.contentHash = contentHash
+        self.nonPassageRatio = nonPassageRatio
+        self.reason = reason
+        self.reasonFlags = reasonFlags
+        self.clientRequestID = clientRequestID
+        self.documentID = documentID
+        self.activeCallPath = activeCallPath
+        self.requestBuilderUsed = requestBuilderUsed
+        self.missingIdentity = missingIdentity
+        self.rawTextLength = rawTextLength
+        self.sentenceDraftCount = sentenceDraftCount
+        self.finalSegmentsCount = finalSegmentsCount
+        self.finalSentencesCount = finalSentencesCount
+        self.passageBodyParagraphCount = passageBodyParagraphCount
+        self.sourceKindDistribution = sourceKindDistribution
+        self.contractPreflightPassed = contractPreflightPassed
+        self.missingFields = missingFields
+        self.sourceTitle = sourceTitle
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case materialMode
+        case candidateParagraphCount
+        case acceptedParagraphCount
+        case rejectedParagraphCount
+        case rejectedReasons
+        case contentHash
+        case nonPassageRatio
+        case reason
+        case reasonFlags
+        case clientRequestID
+        case documentID
+        case activeCallPath
+        case requestBuilderUsed
+        case missingIdentity
+        case rawTextLength
+        case sentenceDraftCount
+        case finalSegmentsCount
+        case finalSentencesCount
+        case passageBodyParagraphCount
+        case sourceKindDistribution
+        case contractPreflightPassed
+        case missingFields
+        case sourceTitle
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            materialMode: try container.decode(MaterialAnalysisMode.self, forKey: .materialMode),
+            candidateParagraphCount: try container.decode(Int.self, forKey: .candidateParagraphCount),
+            acceptedParagraphCount: try container.decode(Int.self, forKey: .acceptedParagraphCount),
+            rejectedParagraphCount: try container.decode(Int.self, forKey: .rejectedParagraphCount),
+            rejectedReasons: try container.decodeIfPresent([String].self, forKey: .rejectedReasons) ?? [],
+            contentHash: try container.decodeIfPresent(String.self, forKey: .contentHash),
+            nonPassageRatio: try container.decode(Double.self, forKey: .nonPassageRatio),
+            reason: try container.decode(String.self, forKey: .reason),
+            reasonFlags: try container.decodeIfPresent([String].self, forKey: .reasonFlags) ?? [],
+            clientRequestID: try container.decodeIfPresent(String.self, forKey: .clientRequestID),
+            documentID: try container.decode(String.self, forKey: .documentID),
+            activeCallPath: try container.decode(String.self, forKey: .activeCallPath),
+            requestBuilderUsed: try container.decode(Bool.self, forKey: .requestBuilderUsed),
+            missingIdentity: try container.decode(Bool.self, forKey: .missingIdentity),
+            rawTextLength: try container.decode(Int.self, forKey: .rawTextLength),
+            sentenceDraftCount: try container.decode(Int.self, forKey: .sentenceDraftCount),
+            finalSegmentsCount: try container.decodeIfPresent(Int.self, forKey: .finalSegmentsCount) ?? 0,
+            finalSentencesCount: try container.decodeIfPresent(Int.self, forKey: .finalSentencesCount) ?? 0,
+            passageBodyParagraphCount: try container.decodeIfPresent(Int.self, forKey: .passageBodyParagraphCount) ?? 0,
+            sourceKindDistribution: try container.decodeIfPresent([String: Int].self, forKey: .sourceKindDistribution) ?? [:],
+            contractPreflightPassed: try container.decodeIfPresent(Bool.self, forKey: .contractPreflightPassed) ?? false,
+            missingFields: try container.decodeIfPresent([String].self, forKey: .missingFields) ?? [],
+            sourceTitle: try container.decodeIfPresent(String.self, forKey: .sourceTitle) ?? ""
+        )
+    }
 
     var statusTitle: String {
         materialMode.statusTitle
@@ -32,7 +144,9 @@ struct PassageAnalysisDiagnostics: Codable, Equatable, Hashable {
 
     func withFlags(
         requestBuilderUsed: Bool? = nil,
-        missingIdentity: Bool? = nil
+        missingIdentity: Bool? = nil,
+        contractPreflightPassed: Bool? = nil,
+        missingFields: [String]? = nil
     ) -> PassageAnalysisDiagnostics {
         PassageAnalysisDiagnostics(
             materialMode: materialMode,
@@ -50,7 +164,14 @@ struct PassageAnalysisDiagnostics: Codable, Equatable, Hashable {
             requestBuilderUsed: requestBuilderUsed ?? self.requestBuilderUsed,
             missingIdentity: missingIdentity ?? self.missingIdentity,
             rawTextLength: rawTextLength,
-            sentenceDraftCount: sentenceDraftCount
+            sentenceDraftCount: sentenceDraftCount,
+            finalSegmentsCount: finalSegmentsCount,
+            finalSentencesCount: finalSentencesCount,
+            passageBodyParagraphCount: passageBodyParagraphCount,
+            sourceKindDistribution: sourceKindDistribution,
+            contractPreflightPassed: contractPreflightPassed ?? self.contractPreflightPassed,
+            missingFields: missingFields ?? self.missingFields,
+            sourceTitle: sourceTitle
         )
     }
 }
@@ -58,6 +179,7 @@ struct PassageAnalysisDiagnostics: Codable, Equatable, Hashable {
 struct AnalyzePassageRequestBuildResult {
     let payload: AnalyzePassageRequestPayload?
     let diagnostics: PassageAnalysisDiagnostics
+    let expectedIdentity: PassageAnalysisIdentity?
 }
 
 struct AnalyzePassageRequestPayload: Encodable {
@@ -163,17 +285,37 @@ enum AnalyzePassageRequestBuilder {
                     anchorLabel: segment.anchorLabel,
                     text: clippedText,
                     sourceKind: SourceContentKind.passageBody.rawValue,
-                    hygieneScore: min(max(segment.hygiene.score, 0), 1)
+                    hygieneScore: normalizedHygieneScore(segment.hygiene.score)
                 )
             )
         }
 
         let contentHash = acceptedParagraphs.isEmpty
             ? nil
-            : AIRequestIdentity.hash(
-                text: acceptedParagraphs.map(\.text).joined(separator: "\n\n")
-            )
+            : PassageAnalysisIdentity.contentHash(forParagraphTexts: acceptedParagraphs.map(\.text))
         let missingIdentity = normalizedDocumentID.isEmpty || (contentHash?.isEmpty ?? true)
+        let expectedIdentity = PassageAnalysisIdentity.make(
+            document: document,
+            bundle: bundle,
+            materialMode: decision.mode,
+            acceptedParagraphCount: acceptedParagraphs.count,
+            contentHash: contentHash
+        )
+        let candidatePayload = AnalyzePassageRequestPayload(
+            clientRequestID: clientRequestID,
+            documentID: normalizedDocumentID,
+            contentHash: contentHash ?? "",
+            title: title.trimmingCharacters(in: .whitespacesAndNewlines),
+            paragraphs: acceptedParagraphs,
+            questionBlocks: auxiliaryBlocks(in: candidateSegments, kinds: [.question], limit: 8),
+            answerBlocks: auxiliaryBlocks(in: candidateSegments, kinds: [.answerKey], limit: 8),
+            vocabularyBlocks: auxiliaryBlocks(
+                in: candidateSegments,
+                kinds: [.vocabularySupport, .bilingualNote, .chineseInstruction],
+                limit: 8
+            )
+        )
+        let preflight = contractPreflight(payload: candidatePayload, shouldRequestRemote: decision.mode.shouldRequestRemote)
 
         let diagnostics = PassageAnalysisDiagnostics(
             materialMode: decision.mode,
@@ -188,38 +330,32 @@ enum AnalyzePassageRequestBuilder {
             clientRequestID: clientRequestID,
             documentID: normalizedDocumentID,
             activeCallPath: activeCallPath,
-            requestBuilderUsed: decision.mode.shouldRequestRemote && !acceptedParagraphs.isEmpty && !missingIdentity,
+            requestBuilderUsed: decision.mode.shouldRequestRemote,
             missingIdentity: missingIdentity,
             rawTextLength: decision.rawTextLength,
-            sentenceDraftCount: decision.sentenceDraftCount
+            sentenceDraftCount: decision.sentenceDraftCount,
+            finalSegmentsCount: decision.finalSegmentsCount,
+            finalSentencesCount: decision.finalSentencesCount,
+            passageBodyParagraphCount: decision.passageBodyParagraphCount,
+            sourceKindDistribution: decision.sourceKindDistribution,
+            contractPreflightPassed: preflight.passed,
+            missingFields: preflight.missingFields,
+            sourceTitle: title.trimmingCharacters(in: .whitespacesAndNewlines)
         )
 
         guard decision.mode.shouldRequestRemote,
-              !acceptedParagraphs.isEmpty,
-              !missingIdentity,
-              let resolvedContentHash = contentHash else {
+              preflight.passed else {
             return AnalyzePassageRequestBuildResult(
                 payload: nil,
-                diagnostics: diagnostics
+                diagnostics: diagnostics,
+                expectedIdentity: expectedIdentity
             )
         }
 
         return AnalyzePassageRequestBuildResult(
-            payload: AnalyzePassageRequestPayload(
-                clientRequestID: clientRequestID,
-                documentID: normalizedDocumentID,
-                contentHash: resolvedContentHash,
-                title: title.trimmingCharacters(in: .whitespacesAndNewlines),
-                paragraphs: acceptedParagraphs,
-                questionBlocks: auxiliaryBlocks(in: candidateSegments, kinds: [.question], limit: 8),
-                answerBlocks: auxiliaryBlocks(in: candidateSegments, kinds: [.answerKey], limit: 8),
-                vocabularyBlocks: auxiliaryBlocks(
-                    in: candidateSegments,
-                    kinds: [.vocabularySupport, .bilingualNote, .chineseInstruction],
-                    limit: 8
-                )
-            ),
-            diagnostics: diagnostics
+            payload: candidatePayload,
+            diagnostics: diagnostics,
+            expectedIdentity: expectedIdentity
         )
     }
 
@@ -239,6 +375,65 @@ enum AnalyzePassageRequestBuilder {
                     text: String(segment.text.normalizedForPassageRequest.prefix(maxAuxiliaryCharacters))
                 )
             }
+    }
+
+    private static func normalizedHygieneScore(_ score: Double) -> Double {
+        guard score.isFinite else { return 0.9 }
+        return min(max(score, 0), 1)
+    }
+
+    private struct ContractPreflightResult {
+        let passed: Bool
+        let missingFields: [String]
+    }
+
+    private static func contractPreflight(
+        payload: AnalyzePassageRequestPayload,
+        shouldRequestRemote: Bool
+    ) -> ContractPreflightResult {
+        guard shouldRequestRemote else {
+            return ContractPreflightResult(passed: false, missingFields: [])
+        }
+
+        var missingFields: [String] = []
+        if payload.clientRequestID.normalizedForPassageRequest.isEmpty {
+            missingFields.append("client_request_id")
+        }
+        if payload.documentID.normalizedForPassageRequest.isEmpty {
+            missingFields.append("document_id")
+        }
+        if payload.contentHash.normalizedForPassageRequest.isEmpty {
+            missingFields.append("content_hash")
+        }
+        if payload.paragraphs.isEmpty {
+            missingFields.append("paragraphs")
+        }
+
+        for (index, paragraph) in payload.paragraphs.enumerated() {
+            if paragraph.segmentID.normalizedForPassageRequest.isEmpty {
+                missingFields.append("paragraphs[\(index)].segment_id")
+            }
+            if paragraph.index < 0 {
+                missingFields.append("paragraphs[\(index)].index")
+            }
+            if paragraph.anchorLabel.normalizedForPassageRequest.isEmpty {
+                missingFields.append("paragraphs[\(index)].anchor_label")
+            }
+            if paragraph.text.normalizedForPassageRequest.isEmpty {
+                missingFields.append("paragraphs[\(index)].text")
+            }
+            if paragraph.sourceKind.normalizedForPassageRequest.isEmpty {
+                missingFields.append("paragraphs[\(index)].source_kind")
+            }
+            if !paragraph.hygieneScore.isFinite || paragraph.hygieneScore < 0 || paragraph.hygieneScore > 1 {
+                missingFields.append("paragraphs[\(index)].hygiene_score")
+            }
+        }
+
+        return ContractPreflightResult(
+            passed: missingFields.isEmpty,
+            missingFields: missingFields
+        )
     }
 }
 

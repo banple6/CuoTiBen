@@ -133,6 +133,8 @@
 		B0000000000000000000007C /* AnchorConsistencyValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000007C /* AnchorConsistencyValidator.swift */; };
 		B0000000000000000000007D /* AIRequestIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000007D /* AIRequestIdentity.swift */; };
 		B0000000000000000000007E /* AIResponseIdentityGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000007E /* AIResponseIdentityGuard.swift */; };
+		B00000000000000000000092 /* PassageAnalysisIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000092 /* PassageAnalysisIdentity.swift */; };
+		B00000000000000000000093 /* PassageAnalysisIdentityGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000093 /* PassageAnalysisIdentityGuard.swift */; };
 		B0000000000000000000007F /* AIStructuredError.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000007F /* AIStructuredError.swift */; };
 		B00000000000000000000080 /* LocalSentenceFallbackBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000080 /* LocalSentenceFallbackBuilder.swift */; };
 		B00000000000000000000081 /* LocalPassageFallbackBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000081 /* LocalPassageFallbackBuilder.swift */; };
@@ -282,6 +284,8 @@
 		C0000000000000000000007C /* AnchorConsistencyValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnchorConsistencyValidator.swift; sourceTree = "<group>"; };
 		C0000000000000000000007D /* AIRequestIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIRequestIdentity.swift; sourceTree = "<group>"; };
 		C0000000000000000000007E /* AIResponseIdentityGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIResponseIdentityGuard.swift; sourceTree = "<group>"; };
+		C00000000000000000000092 /* PassageAnalysisIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PassageAnalysisIdentity.swift; sourceTree = "<group>"; };
+		C00000000000000000000093 /* PassageAnalysisIdentityGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PassageAnalysisIdentityGuard.swift; sourceTree = "<group>"; };
 		C0000000000000000000007F /* AIStructuredError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIStructuredError.swift; sourceTree = "<group>"; };
 		C00000000000000000000080 /* LocalSentenceFallbackBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalSentenceFallbackBuilder.swift; sourceTree = "<group>"; };
 		C00000000000000000000081 /* LocalPassageFallbackBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalPassageFallbackBuilder.swift; sourceTree = "<group>"; };
@@ -408,6 +412,8 @@
 				C0000000000000000000007D /* AIRequestIdentity.swift */,
 				C00000000000000000000078 /* AIRequestSingleFlight.swift */,
 				C0000000000000000000007E /* AIResponseIdentityGuard.swift */,
+				C00000000000000000000092 /* PassageAnalysisIdentity.swift */,
+				C00000000000000000000093 /* PassageAnalysisIdentityGuard.swift */,
 				C0000000000000000000007F /* AIStructuredError.swift */,
 				C0000000000000000000001B /* AISourceParsingService.swift */,
 				C0000000000000000000000C /* CardGenerationService.swift */,
@@ -778,6 +784,8 @@
 				B00000000000000000000077 /* AIRequestPolicy.swift in Sources */,
 				B00000000000000000000078 /* AIRequestSingleFlight.swift in Sources */,
 				B0000000000000000000007E /* AIResponseIdentityGuard.swift in Sources */,
+				B00000000000000000000092 /* PassageAnalysisIdentity.swift in Sources */,
+				B00000000000000000000093 /* PassageAnalysisIdentityGuard.swift in Sources */,
 				B0000000000000000000007F /* AIStructuredError.swift in Sources */,
 				B0000000000000000000001B /* AISourceParsingService.swift in Sources */,
 				B00000000000000000000017 /* ReviewListView.swift in Sources */,

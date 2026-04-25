@@ -113,6 +113,58 @@ struct ParseSessionInfo: Equatable {
     let segmentCount: Int
     let parseDurationMs: Int?
     let timestamp: Date
+    let documentParseEndpointConfigured: Bool
+    let documentParseEndpointURL: String?
+    let documentParseRemoteStatus: String?
+    let skippedBecauseUnconfigured: Bool
+
+    init(
+        source: ParseSource,
+        requestURL: String?,
+        jobID: String?,
+        ppAttempted: Bool,
+        ppSucceeded: Bool,
+        fallbackUsed: Bool,
+        fallbackReason: String?,
+        failureClass: FailureClass?,
+        qualityReasonCode: String?,
+        schemaVersion: String?,
+        normalizedBlockCount: Int,
+        paragraphCount: Int,
+        structureCandidateCount: Int,
+        sentenceCount: Int,
+        outlineNodeCount: Int,
+        segmentCount: Int,
+        parseDurationMs: Int?,
+        timestamp: Date,
+        documentParseEndpointConfigured: Bool = DocumentParseEndpointConfig.isConfigured,
+        documentParseEndpointURL: String? = DocumentParseEndpointConfig.parseEndpointURL?.absoluteString,
+        documentParseRemoteStatus: String? = nil,
+        skippedBecauseUnconfigured: Bool = false
+    ) {
+        self.source = source
+        self.requestURL = requestURL
+        self.jobID = jobID
+        self.ppAttempted = ppAttempted
+        self.ppSucceeded = ppSucceeded
+        self.fallbackUsed = fallbackUsed
+        self.fallbackReason = fallbackReason
+        self.failureClass = failureClass
+        self.qualityReasonCode = qualityReasonCode
+        self.schemaVersion = schemaVersion
+        self.normalizedBlockCount = normalizedBlockCount
+        self.paragraphCount = paragraphCount
+        self.structureCandidateCount = structureCandidateCount
+        self.sentenceCount = sentenceCount
+        self.outlineNodeCount = outlineNodeCount
+        self.segmentCount = segmentCount
+        self.parseDurationMs = parseDurationMs
+        self.timestamp = timestamp
+        self.documentParseEndpointConfigured = documentParseEndpointConfigured
+        self.documentParseEndpointURL = documentParseEndpointURL
+        self.documentParseRemoteStatus = documentParseRemoteStatus
+        self.skippedBecauseUnconfigured = skippedBecauseUnconfigured
+    }
 
     /// debug 摘要文本
     var debugSummary: String {
@@ -123,6 +175,9 @@ struct ParseSessionInfo: Equatable {
         if let jid = jobID { parts.append("Job: \(jid)") }
         parts.append("PP尝试: \(ppAttempted ? "是" : "否")")
         parts.append("PP成功: \(ppSucceeded ? "是" : "否")")
+        parts.append("文档解析端点: \(documentParseEndpointConfigured ? (documentParseEndpointURL ?? "configured") : "unconfigured")")
+        if let documentParseRemoteStatus { parts.append("文档解析状态: \(documentParseRemoteStatus)") }
+        if skippedBecauseUnconfigured { parts.append("PP远端解析: 未配置，已跳过") }
         if fallbackUsed, let reason = fallbackReason {
             parts.append("回退原因: \(reason)")
         }
@@ -542,7 +597,7 @@ final class AppViewModel: ObservableObject {
 
                 parseSessionInfos[document.id] = ParseSessionInfo(
                     source: .ppStructureV3,
-                    requestURL: "\(DocumentParseService.backendBaseURL)/api/document/parse",
+                    requestURL: DocumentParseEndpointConfig.parseEndpointURL?.absoluteString,
                     jobID: document.id.uuidString,
                     ppAttempted: true, ppSucceeded: true, fallbackUsed: false,
                     fallbackReason: nil, failureClass: nil,
@@ -553,7 +608,11 @@ final class AppViewModel: ObservableObject {
                     sentenceCount: ppPayload.bundle.sentences.count,
                     outlineNodeCount: ppPayload.bundle.source.outlineNodeCount,
                     segmentCount: ppPayload.bundle.segments.count,
-                    parseDurationMs: elapsed, timestamp: Date()
+                    parseDurationMs: elapsed, timestamp: Date(),
+                    documentParseEndpointConfigured: true,
+                    documentParseEndpointURL: DocumentParseEndpointConfig.parseEndpointURL?.absoluteString,
+                    documentParseRemoteStatus: "success",
+                    skippedBecauseUnconfigured: false
                 )
 
                 structuredSources[document.id] = ppPayload.bundle
@@ -581,18 +640,23 @@ final class AppViewModel: ObservableObject {
             let legacyPayload = await fallbackToLegacyPipeline(for: document, draft: draft)
             TextPipelineDiagnostics.log("PP", "[PP] fallback returned: sentences=\(legacyPayload.bundle.sentences.count) segments=\(legacyPayload.bundle.segments.count) doc=\(document.id)", severity: .info)
             let legacySource: ParseSessionInfo.ParseSource = structuredSourceStages[document.id] == .buildingTree ? .legacyLocal : .legacyRemote
+            let route = DocumentParseEndpointConfig.snapshot
 
             parseSessionInfos[document.id] = ParseSessionInfo(
                 source: legacySource,
                 requestURL: nil, jobID: nil,
-                ppAttempted: true, ppSucceeded: false, fallbackUsed: true,
+                ppAttempted: route.isConfigured, ppSucceeded: false, fallbackUsed: true,
                 fallbackReason: ppFailReason, failureClass: classifyPPFailure(ppFailReason),
                 qualityReasonCode: nil, schemaVersion: nil,
                 normalizedBlockCount: 0, paragraphCount: 0, structureCandidateCount: 0,
                 sentenceCount: legacyPayload.bundle.sentences.count,
                 outlineNodeCount: legacyPayload.bundle.source.outlineNodeCount,
                 segmentCount: legacyPayload.bundle.segments.count,
-                parseDurationMs: nil, timestamp: Date()
+                parseDurationMs: nil, timestamp: Date(),
+                documentParseEndpointConfigured: route.isConfigured,
+                documentParseEndpointURL: route.endpointURL?.absoluteString,
+                documentParseRemoteStatus: route.isConfigured ? "failed" : "skipped_unconfigured",
+                skippedBecauseUnconfigured: !route.isConfigured
             )
 
             structuredSources[document.id] = legacyPayload.bundle
@@ -613,15 +677,20 @@ final class AppViewModel: ObservableObject {
                 errorMessage = "结构化解析失败：\(error.localizedDescription)"
                 structuredSourceStages[document.id] = .failed
             }
+            let route = DocumentParseEndpointConfig.snapshot
             structuredSourceErrors[document.id] = errorMessage
             parseSessionInfos[document.id] = ParseSessionInfo(
                 source: .ppStructureV3, requestURL: nil, jobID: nil,
-                ppAttempted: true, ppSucceeded: false, fallbackUsed: false,
+                ppAttempted: route.isConfigured, ppSucceeded: false, fallbackUsed: false,
                 fallbackReason: errorMessage, failureClass: error is TimeoutError ? .parseTimeout : nil,
                 qualityReasonCode: nil, schemaVersion: nil,
                 normalizedBlockCount: 0, paragraphCount: 0, structureCandidateCount: 0,
                 sentenceCount: 0, outlineNodeCount: 0, segmentCount: 0,
-                parseDurationMs: nil, timestamp: Date()
+                parseDurationMs: nil, timestamp: Date(),
+                documentParseEndpointConfigured: route.isConfigured,
+                documentParseEndpointURL: route.endpointURL?.absoluteString,
+                documentParseRemoteStatus: route.isConfigured ? "failed" : "skipped_unconfigured",
+                skippedBecauseUnconfigured: !route.isConfigured
             )
             TextPipelineDiagnostics.log("PP", "[PP] loadStructuredSource failed doc=\(document.id): \(errorMessage)", severity: .error)
         }
@@ -644,9 +713,34 @@ final class AppViewModel: ObservableObject {
             return
         }
 
-        guard let initialBundle = structuredSource(for: document) else { return }
-        if !force && initialBundle.hasProfessorAnalysis {
-            return
+        guard let loadedBundle = structuredSource(for: document) else { return }
+        var initialBundle = loadedBundle
+        if !force && loadedBundle.hasProfessorAnalysis {
+            let expected = PassageAnalysisIdentity.make(
+                document: document,
+                bundle: loadedBundle,
+                materialMode: loadedBundle.passageAnalysisDiagnostics?.materialMode ?? .passageReading
+            )
+            let decision = PassageAnalysisIdentityGuard.validate(
+                expected: expected,
+                actual: loadedBundle.passageAnalysisIdentity
+            )
+            PassageAnalysisIdentityGuard.logDecision(
+                requestID: nil,
+                expected: expected,
+                actual: loadedBundle.passageAnalysisIdentity,
+                decision: decision
+            )
+            if decision.isAllowed {
+                return
+            }
+            initialBundle = loadedBundle.removingProfessorAnalysis()
+            structuredSources[document.id] = initialBundle
+            TextPipelineDiagnostics.log(
+                "AI",
+                "[AI][ProfessorAnalysis] existing analysis discarded by passage identity guard doc=\(document.id)",
+                severity: .warning
+            )
         }
 
         let requestKey = ProfessorAnalysisCacheStore.cacheKey(
@@ -668,10 +762,23 @@ final class AppViewModel: ObservableObject {
                 severity: .info
             )
             let latestBundle = structuredSource(for: document) ?? initialBundle
-            structuredSources[document.id] = latestBundle.applyingProfessorAnalysis(cacheHit.delta)
-            structuredSourceStages[document.id] = .ready
-            structuredSourceErrors[document.id] = nil
-            return
+            if isProfessorDeltaCurrent(
+                cacheHit.delta,
+                document: document,
+                bundle: latestBundle,
+                requestID: nil
+            ) {
+                structuredSources[document.id] = latestBundle.applyingProfessorAnalysis(cacheHit.delta)
+                structuredSourceStages[document.id] = .ready
+                structuredSourceErrors[document.id] = nil
+                return
+            } else {
+                TextPipelineDiagnostics.log(
+                    "AI",
+                    "[AI][ProfessorAnalysis] cache discarded by passage identity guard doc=\(document.id)",
+                    severity: .warning
+                )
+            }
         }
 
         structuredSourceStages[document.id] = .aiEnriching
@@ -690,19 +797,6 @@ final class AppViewModel: ObservableObject {
                     )
                 }
             ) {
-                if !force,
-                   let cacheHit = await Self.professorAnalysisCacheStore.lookup(
-                       forKey: requestKey,
-                       allowDisk: allowDiskCache
-                   ) {
-                    TextPipelineDiagnostics.log(
-                        "AI",
-                        "[AI][ProfessorAnalysis] cache hit",
-                        severity: .info
-                    )
-                    return cacheHit.delta
-                }
-
                 let analysisResult = try await ProfessorAnalysisService.enrichBundle(
                     initialBundle,
                     document: document,
@@ -734,6 +828,16 @@ final class AppViewModel: ObservableObject {
             }
 
             let latestBundle = structuredSource(for: document) ?? initialBundle
+            guard isProfessorDeltaCurrent(
+                delta,
+                document: document,
+                bundle: latestBundle,
+                requestID: nil
+            ) else {
+                structuredSourceStages[document.id] = fallbackStage
+                structuredSourceErrors[document.id] = nil
+                return
+            }
             let mergedBundle = latestBundle.applyingProfessorAnalysis(delta)
             structuredSources[document.id] = mergedBundle
             let hasAIGeneratedAnalysis = delta.paragraphCards.contains(where: \.isAIGenerated)
@@ -767,7 +871,9 @@ final class AppViewModel: ObservableObject {
     ) {
         let diagnostics = decision.asPassageDiagnostics(
             documentID: document.id.uuidString,
-            activeCallPath: "AppViewModel.loadStructuredSource"
+            activeCallPath: "AppViewModel.loadStructuredSource",
+            bundle: payload.bundle,
+            sourceTitle: document.title
         )
         let localFallback = LocalPassageFallbackBuilder.build(
             document: document,
@@ -820,7 +926,7 @@ final class AppViewModel: ObservableObject {
                 "client_request_id=nil",
                 "document_id=\(document.id.uuidString)",
                 "active_call_path=AppViewModel.loadStructuredSource",
-                "content_hash=nil",
+                "content_hash=\(diagnostics.contentHash ?? "nil")",
                 "accepted_paragraph_count=\(diagnostics.acceptedParagraphCount)",
                 "rejected_paragraph_count=\(diagnostics.rejectedParagraphCount)",
                 String(format: "non_passage_ratio=%.2f", diagnostics.nonPassageRatio),
@@ -854,7 +960,11 @@ final class AppViewModel: ObservableObject {
             outlineNodeCount: enrichedPayload.bundle.source.outlineNodeCount,
             segmentCount: enrichedPayload.bundle.segments.count,
             parseDurationMs: nil,
-            timestamp: Date()
+            timestamp: Date(),
+            documentParseEndpointConfigured: DocumentParseEndpointConfig.isConfigured,
+            documentParseEndpointURL: DocumentParseEndpointConfig.parseEndpointURL?.absoluteString,
+            documentParseRemoteStatus: DocumentParseEndpointConfig.isConfigured ? "not_attempted_material_fallback" : "skipped_unconfigured",
+            skippedBecauseUnconfigured: !DocumentParseEndpointConfig.isConfigured
         )
 
         structuredSources[document.id] = enrichedPayload.bundle
@@ -882,6 +992,32 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    private func isProfessorDeltaCurrent(
+        _ delta: ProfessorAnalysisDelta,
+        document: SourceDocument,
+        bundle: StructuredSourceBundle,
+        requestID: String?
+    ) -> Bool {
+        let mode = delta.passageAnalysisDiagnostics?.materialMode
+            ?? MaterialAnalysisGate.evaluate(document: document, bundle: bundle).mode
+        let expected = PassageAnalysisIdentity.make(
+            document: document,
+            bundle: bundle,
+            materialMode: mode
+        )
+        let decision = PassageAnalysisIdentityGuard.validate(
+            expected: expected,
+            actual: delta.passageAnalysisIdentity
+        )
+        PassageAnalysisIdentityGuard.logDecision(
+            requestID: requestID,
+            expected: expected,
+            actual: delta.passageAnalysisIdentity,
+            decision: decision
+        )
+        return decision.isAllowed
+    }
+
     /// PP 失败原因分类
     private func classifyPPFailure(_ reason: String) -> ParseSessionInfo.FailureClass? {
         let lower = reason.lowercased()
@@ -903,6 +1039,14 @@ final class AppViewModel: ObservableObject {
     /// 尝试通过 PP-StructureV3 后端解析文档
     /// 返回 (payload, normalizedDocument) 或 nil（不可用/失败）
     private func attemptPPStructureParse(for document: SourceDocument) async -> (StructuredSourceParsePayload, NormalizedDocument)? {
+        let route = DocumentParseEndpointConfig.snapshot
+        guard route.isConfigured else {
+            DocumentParseService.logRemoteUnavailableRoute()
+            let reason = DocumentParseServiceError.remoteUnavailable.localizedDescription
+            structuredSourceErrors[document.id] = reason
+            return nil
+        }
+
         // 检查是否有本地文件可上传
         guard let filePath = document.filePath else {
             let reason = "无本地文件路径，跳过 PP-StructureV3"
