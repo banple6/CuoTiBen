@@ -6,6 +6,8 @@ struct ProfessorAnalysisDelta: Codable {
     let passageOverview: PassageOverview?
     let paragraphCards: [ParagraphTeachingCard]
     let sentenceCards: [ProfessorSentenceCard]
+    let passageAnalysisDiagnostics: PassageAnalysisDiagnostics?
+    let passageAnalysisIdentity: PassageAnalysisIdentity?
 }
 
 actor ProfessorAnalysisCacheStore {
@@ -147,7 +149,9 @@ actor ProfessorAnalysisCacheStore {
             storedAt: Date(),
             passageOverview: enrichedBundle.passageOverview,
             paragraphCards: enrichedBundle.paragraphTeachingCards.filter(\.isAIGenerated),
-            sentenceCards: enrichedBundle.professorSentenceCards.filter { $0.analysis.isAIGenerated }
+            sentenceCards: enrichedBundle.professorSentenceCards.filter { $0.analysis.isAIGenerated },
+            passageAnalysisDiagnostics: enrichedBundle.passageAnalysisDiagnostics,
+            passageAnalysisIdentity: enrichedBundle.passageAnalysisIdentity
         )
     }
 
@@ -171,11 +175,34 @@ actor ProfessorAnalysisCacheStore {
 }
 
 extension StructuredSourceBundle {
+    func removingProfessorAnalysis() -> StructuredSourceBundle {
+        let provisionalBundle = StructuredSourceBundle(
+            source: source,
+            segments: segments,
+            sentences: sentences,
+            outline: outline,
+            zoningSummary: zoningSummary
+        )
+        let passageMap = MindMapAdmissionService.buildPassageMap(from: provisionalBundle)
+        let admissionResult = MindMapAdmissionService.admit(bundle: provisionalBundle, passageMap: passageMap)
+        return StructuredSourceBundle(
+            source: provisionalBundle.source,
+            segments: provisionalBundle.segments,
+            sentences: provisionalBundle.sentences,
+            outline: provisionalBundle.outline,
+            zoningSummary: provisionalBundle.zoningSummary,
+            passageMap: passageMap.withDiagnostics(admissionResult.diagnostics),
+            mindMapAdmissionResult: admissionResult
+        )
+    }
+
     func applyingProfessorAnalysis(_ delta: ProfessorAnalysisDelta) -> StructuredSourceBundle {
         enrichedWithAIAnalysis(
             overview: delta.passageOverview,
             paragraphCards: delta.paragraphCards,
-            sentenceCards: delta.sentenceCards
+            sentenceCards: delta.sentenceCards,
+            passageAnalysisDiagnostics: delta.passageAnalysisDiagnostics,
+            passageAnalysisIdentity: delta.passageAnalysisIdentity
         )
     }
 }

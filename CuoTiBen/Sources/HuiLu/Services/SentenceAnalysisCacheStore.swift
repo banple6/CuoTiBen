@@ -17,7 +17,7 @@ actor SentenceAnalysisCacheStore {
         let result: AIExplainSentenceResult
     }
 
-    static let promptVersion = "sentence-explain.v2"
+    static let promptVersion = "sentence-explain.v1"
 
     private let fileManager: FileManager
     private let encoder: JSONEncoder
@@ -142,12 +142,24 @@ actor SentenceAnalysisCacheStore {
     ) -> String {
         let normalizedBaseURL = normalize(baseURL)
         let identity = identityPayload(for: context)
+        let fallbackFingerprint = [
+            normalize(context.title),
+            normalize(context.sentenceID),
+            normalize(context.anchorLabel),
+            normalize(context.sentence),
+            normalize(context.context),
+            normalize(context.paragraphTheme),
+            normalize(context.paragraphRole),
+            normalize(context.questionPrompt)
+        ].joined(separator: "\u{1F}")
+
         let rawKey = [
             promptVersion,
             normalizedBaseURL,
             identity.sourceSentenceID,
             identity.sourceSentenceTextHash,
-            identity.sourceAnchorLabel
+            identity.sourceAnchorLabel,
+            stableHash(of: fallbackFingerprint)
         ].joined(separator: "\u{1E}")
 
         return stableHash(of: rawKey)

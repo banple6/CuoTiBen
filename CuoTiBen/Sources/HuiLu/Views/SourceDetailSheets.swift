@@ -63,6 +63,7 @@ struct SentenceExplainDetailSheet: View {
     @State private var activeRelatedNote: Note?
     @State private var activeKnowledgePoint: KnowledgePoint?
     @State private var explanationTask: Task<Void, Never>?
+    @State private var activeExplanationRequestID: String?
 
     init(document: SourceDocument, sentence: Sentence) {
         self.document = document
@@ -97,6 +98,10 @@ struct SentenceExplainDetailSheet: View {
         return bundled
     }
 
+    private var selectionState: SourceSelectionState {
+        viewModel.sourceSelectionState(for: activeSentence, in: document)
+    }
+
     private var visibleResult: AIExplainSentenceResult? {
         guard let result, isResultVisible(result, for: activeSentence) else {
             return nil
@@ -106,6 +111,7 @@ struct SentenceExplainDetailSheet: View {
 
     private var shouldAutoLoadRemoteExplanation: Bool {
         guard !isLoading, result == nil else { return false }
+        guard selectionState.allowsCloudSentenceExplain else { return false }
         guard let bundled = bundledAnalysis else { return true }
         return bundled.shouldPreferSentenceExplain(for: activeSentence.text)
     }
@@ -226,6 +232,7 @@ struct SentenceExplainDetailSheet: View {
             result = nil
             errorMessage = nil
             isLoading = false
+            activeExplanationRequestID = nil
             maybeAutoLoadExplanation()
         }
         .onAppear {
@@ -234,6 +241,7 @@ struct SentenceExplainDetailSheet: View {
         .onDisappear {
             explanationTask?.cancel()
             explanationTask = nil
+            activeExplanationRequestID = nil
         }
     }
 
@@ -321,15 +329,33 @@ struct SentenceExplainDetailSheet: View {
 
     @ViewBuilder
     private func explanationContent(layout: AdaptiveSheetLayout) -> some View {
-        if let analysis = effectiveAnalysis {
+        let currentSelection = selectionState
+        if !currentSelection.allowsCloudSentenceExplain {
+            VStack(alignment: .leading, spacing: 16) {
+                SentenceExplainBlock(
+                    title: "本地骨架",
+                    content: "当前展示的是本地结构骨架，远端 AI 精讲尚未成功获取。",
+                    tone: .neutral
+                )
+                SourceSelectionSkeletonPanel(selectionState: currentSelection)
+                relatedContextPanel
+            }
+        } else if let analysis = effectiveAnalysis {
             VStack(alignment: .leading, spacing: 16) {
                 if isLoading {
                     ProgressView("正在获取教授式精讲…")
                         .font(.system(size: 14, weight: .medium))
+                } else if let visibleResult, visibleResult.shouldShowFallbackBanner {
+                    SentenceExplainBlock(
+                        title: "提示",
+                        content: visibleResult.displayFallbackMessage,
+                        tone: .neutral
+                    )
+                    debugTransportSection(for: visibleResult)
                 } else if let errorMessage, result == nil {
                     SentenceExplainBlock(
                         title: "提示",
-                        content: errorMessage,
+                        content: "当前展示的是本地教学卡骨架；远端教授式精讲获取失败：\(errorMessage)",
                         tone: .neutral
                     )
                 }
@@ -364,7 +390,7 @@ struct SentenceExplainDetailSheet: View {
                 }
 
                 if !isLoading, result == nil {
-                    remoteExplanationButton(title: "补充云端精讲（会消耗额度）")
+                    remoteExplanationButton(title: "重新获取 AI 精讲")
                 }
 
                 relatedContextPanel
@@ -397,7 +423,7 @@ struct SentenceExplainDetailSheet: View {
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(Color.black.opacity(0.62))
 
-                remoteExplanationButton(title: "获取云端精讲（会消耗额度）")
+                remoteExplanationButton(title: "获取 AI 精讲")
             }
         }
     }
@@ -471,52 +497,102 @@ struct SentenceExplainDetailSheet: View {
         for sentence: Sentence,
         forceRefresh: Bool
     ) async {
+        let context = viewModel.explainSentenceContext(for: sentence, in: document)
         await MainActor.run {
             guard activeSentence.id == sentence.id else { return }
             isLoading = true
             errorMessage = nil
             result = nil
+            activeExplanationRequestID = nil
+        }
+
+        guard let requestIdentity = viewModel.explainSentenceRequestIdentity(for: sentence, in: document) else {
+            _ = try? ExplainSentenceRequestBuilder.prepare(context: context, requestIdentity: nil)
+            let fallback = LocalSentenceFallbackBuilder.build(
+                context: context,
+                requestIdentity: nil,
+                structuredError: AIStructuredError.invalidRequest(message: "缺少 sentence identity 字段。")
+            )
+            await MainActor.run {
+                guard activeSentence.id == sentence.id else { return }
+                result = fallback
+                errorMessage = fallback.displayFallbackMessage
+                isLoading = false
+                activeExplanationRequestID = nil
+            }
+            return
+        }
+
+        await MainActor.run {
+            guard activeSentence.id == sentence.id else { return }
+            activeExplanationRequestID = requestIdentity.clientRequestID
         }
 
         do {
-            let context = viewModel.explainSentenceContext(for: sentence, in: document)
             let fetched = try await AIExplainSentenceService.fetchExplanationWithCache(
                 for: context,
+                requestIdentity: requestIdentity,
                 forceRefresh: forceRefresh
             )
             try Task.checkCancellation()
 
             guard isResultVisible(fetched, for: sentence) else {
-                throw AIExplainSentenceServiceError.requestFailed(
-                    AIServiceFailureContext(
-                        message: "返回结果与当前句不一致",
-                        errorCode: "GEMINI_INVALID_RESPONSE",
-                        requestID: nil,
-                        retryable: false,
-                        fallbackAvailable: false,
-                        usedCache: false,
-                        usedFallback: false,
-                        retryCount: 0
-                    )
+                TextPipelineDiagnostics.log(
+                    "AI",
+                    "[AI][SentenceExplain] discard stale result request_id=\(requestIdentity.clientRequestID) sentence_id=\(requestIdentity.sentenceID)",
+                    severity: .warning
                 )
+                await MainActor.run {
+                    guard activeSentence.id == sentence.id else { return }
+                    guard activeExplanationRequestID == requestIdentity.clientRequestID else { return }
+                    isLoading = false
+                }
+                return
             }
 
             await MainActor.run {
                 guard activeSentence.id == sentence.id else { return }
+                guard activeExplanationRequestID == requestIdentity.clientRequestID else {
+                    TextPipelineDiagnostics.log(
+                        "AI",
+                        "[AI][SentenceExplain] discard stale request request_id=\(requestIdentity.clientRequestID) discard_reason=requestSuperseded",
+                        severity: .warning
+                    )
+                    return
+                }
                 result = fetched
+                errorMessage = fetched.shouldShowFallbackBanner ? fetched.displayFallbackMessage : nil
                 isLoading = false
+                activeExplanationRequestID = nil
             }
         } catch is CancellationError {
             await MainActor.run {
                 guard activeSentence.id == sentence.id else { return }
                 isLoading = false
+                if activeExplanationRequestID == requestIdentity.clientRequestID {
+                    activeExplanationRequestID = nil
+                }
             }
         } catch {
+            let fallback = LocalSentenceFallbackBuilder.build(
+                context: context,
+                requestIdentity: requestIdentity,
+                structuredError: AIStructuredError.invalidModelResponse(message: error.localizedDescription)
+            )
             await MainActor.run {
                 guard activeSentence.id == sentence.id else { return }
-                result = nil
-                errorMessage = error.localizedDescription
+                guard activeExplanationRequestID == requestIdentity.clientRequestID else {
+                    TextPipelineDiagnostics.log(
+                        "AI",
+                        "[AI][SentenceExplain] discard stale fallback request_id=\(requestIdentity.clientRequestID) discard_reason=requestSuperseded",
+                        severity: .warning
+                    )
+                    return
+                }
+                result = fallback
+                errorMessage = fallback.displayFallbackMessage
                 isLoading = false
+                activeExplanationRequestID = nil
             }
         }
     }
@@ -558,18 +634,44 @@ struct SentenceExplainDetailSheet: View {
     }
 
     private func isResultVisible(_ result: AIExplainSentenceResult, for sentence: Sentence) -> Bool {
-        guard let identity = result.analysisIdentity else { return false }
-        let expectedIdentity = SentenceAnalysisIdentity(
-            sentenceID: sentence.id,
+        guard let expectedIdentity = AIRequestIdentity.make(document: document, sentence: sentence) else {
+            return false
+        }
+        return AIResponseIdentityGuard.validate(
+            expected: expectedIdentity,
+            actual: result.analysisIdentity
+        ).isAllowed && AnalysisConsistencyGuard.warnings(
+            expectedIdentity: expectedIdentity,
             sentenceText: sentence.text,
-            anchorLabel: sentence.anchorLabel
-        )
-        return identity == expectedIdentity &&
-            AnalysisConsistencyGuard.warnings(
-                identity: expectedIdentity,
-                sentenceText: sentence.text,
-                analysis: result
-            ).isEmpty
+            analysis: result
+        ).isEmpty
+    }
+
+    @ViewBuilder
+    private func debugTransportSection(for result: AIExplainSentenceResult) -> some View {
+        #if DEBUG
+        let debugLines = [
+            result.requestID.map { "request_id：\($0)" },
+            result.errorCode.map { "error_code：\($0)" },
+            "used_fallback：\(result.usedFallback ? "true" : "false")",
+            "used_cache：\(result.usedCache ? "true" : "false")",
+            "retry_count：\(result.retryCount)"
+        ].compactMap { $0 }
+
+        if !debugLines.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("DEBUG")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Color.black.opacity(0.55))
+
+                ForEach(debugLines, id: \.self) { line in
+                    Text(line)
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Color.black.opacity(0.55))
+                }
+            }
+        }
+        #endif
     }
 }
 
@@ -1612,6 +1714,170 @@ struct ProfessorTeachingStatusHeader: View {
     }
 }
 
+struct SourceSelectionSkeletonPanel: View {
+    let selectionState: SourceSelectionState
+
+    private var normalizedText: String {
+        selectionState.text
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var headingKeywords: [String] {
+        let lowered = normalizedText.lowercased()
+        let preferred = [
+            "securing",
+            "shared environment",
+            "trust",
+            "air",
+            "algorithms"
+        ].filter { lowered.contains($0) }
+
+        if !preferred.isEmpty {
+            return preferred
+        }
+
+        let stopwords: Set<String> = ["the", "and", "why", "now", "both", "on", "of", "a", "an", "to", "in"]
+        return normalizedText
+            .lowercased()
+            .split { !$0.isLetter }
+            .map(String.init)
+            .filter { $0.count > 3 && !stopwords.contains($0) }
+            .prefix(5)
+            .map { $0 }
+    }
+
+    private var headingThemePrediction: String {
+        let lowered = normalizedText.lowercased()
+        if lowered.contains("air"),
+           lowered.contains("algorithm"),
+           lowered.contains("trust"),
+           lowered.contains("shared environment") {
+            return "文章可能讨论公共环境中的信任基础如何从现实空气质量扩展到算法信息环境。"
+        }
+        return "文章可能围绕标题中的关键词展开，说明它们之间的因果、并列或转折关系。"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            switch selectionState.kind {
+            case .heading:
+                SentenceExplainBlock(
+                    title: "标题解读",
+                    content: "这是一句标题，不是正文句子，因此不会做句子主干解析。",
+                    tone: .node
+                )
+                SentenceExplainBlock(
+                    title: "标题含义",
+                    content: normalizedText.isEmpty ? "当前标题文本为空，已保留标题结构骨架。" : headingThemePrediction,
+                    tone: .translation
+                )
+                SentenceExplainBlock(
+                    title: "主题预测",
+                    content: headingThemePrediction,
+                    tone: .teaching
+                )
+                SentenceExplainListBlock(
+                    title: "关键词",
+                    items: headingKeywords,
+                    tone: .vocabulary
+                )
+                SentenceExplainListBlock(
+                    title: "可能考点",
+                    items: [
+                        "标题中的核心名词可能对应全文主线。",
+                        "并列对象之间的关系可能成为段落推进或主旨题线索。"
+                    ],
+                    tone: .rewrite
+                )
+                SentenceExplainListBlock(
+                    title: "学习提示",
+                    items: ["如果要做句子精讲，请选择正文段落中的完整英文句子。"],
+                    tone: .teaching
+                )
+            case .question:
+                SentenceExplainBlock(
+                    title: "题目结构",
+                    content: normalizedText.isEmpty ? "当前题干文本为空。" : normalizedText,
+                    tone: .node
+                )
+                SentenceExplainListBlock(
+                    title: "本地提示",
+                    items: ["先识别题干问法，再回到正文定位证据。"],
+                    tone: .teaching
+                )
+            case .option:
+                SentenceExplainBlock(
+                    title: "选项/答案块",
+                    content: normalizedText.isEmpty ? "当前选项或答案区文本为空。" : normalizedText,
+                    tone: .node
+                )
+                SentenceExplainListBlock(
+                    title: "本地提示",
+                    items: ["先判断该块是选项、答案线索还是解析说明，再与正文证据绑定。"],
+                    tone: .teaching
+                )
+            case .vocabulary:
+                SentenceExplainBlock(
+                    title: "词汇讲义",
+                    content: normalizedText.isEmpty ? "当前词汇块文本为空。" : normalizedText,
+                    tone: .vocabulary
+                )
+                SentenceExplainListBlock(
+                    title: "本地提示",
+                    items: ["优先整理词义、搭配和例句，不进入句子主干精讲。"],
+                    tone: .teaching
+                )
+            case .chineseInstruction:
+                SentenceExplainBlock(
+                    title: "学习提示",
+                    content: normalizedText.isEmpty ? "当前中文说明为空。" : normalizedText,
+                    tone: .teaching
+                )
+            case .bilingualNote:
+                SentenceExplainBlock(
+                    title: "双语注释结构",
+                    content: normalizedText.isEmpty ? "当前双语注释为空。" : normalizedText,
+                    tone: .translation
+                )
+                SentenceExplainListBlock(
+                    title: "本地提示",
+                    items: ["这类内容用于辅助理解，不直接进入句子精讲云请求。"],
+                    tone: .teaching
+                )
+            case .passageParagraph:
+                SentenceExplainBlock(
+                    title: "段落结构",
+                    content: normalizedText.isEmpty ? "当前段落文本为空。" : normalizedText,
+                    tone: .node
+                )
+                SentenceExplainListBlock(
+                    title: "本地提示",
+                    items: ["段落应进入全文地图或段落结构分析，不直接进入单句精讲。"],
+                    tone: .teaching
+                )
+            case .passageSentence:
+                SentenceExplainBlock(
+                    title: "句子结构",
+                    content: normalizedText.isEmpty ? "当前句子文本为空。" : normalizedText,
+                    tone: .node
+                )
+            case .unknown:
+                SentenceExplainBlock(
+                    title: "本地结构",
+                    content: normalizedText.isEmpty ? "当前选中内容来源未知。" : normalizedText,
+                    tone: .neutral
+                )
+                SentenceExplainListBlock(
+                    title: "本地提示",
+                    items: ["来源类型未确认前，只展示本地骨架，不请求云端句子精讲。"],
+                    tone: .teaching
+                )
+            }
+        }
+    }
+}
+
 struct ProfessorAnalysisPanel: View {
     let analysis: ProfessorSentenceAnalysis
     var keywordMinimumWidth: CGFloat = 120
@@ -1700,7 +1966,10 @@ private struct TranslationInterpretationGroup: View {
     let highlightTokens: [String]
 
     private var faithfulTranslationText: String {
-        analysis.renderedFaithfulTranslation.nonEmpty ?? "暂无忠实翻译"
+        if let faithfulTranslation = analysis.renderedFaithfulTranslation.nonEmpty {
+            return faithfulTranslation
+        }
+        return analysis.isAIGenerated ? "暂无忠实翻译" : "AI 翻译暂不可用，可稍后重试。"
     }
 
     private var teachingInterpretationText: String {

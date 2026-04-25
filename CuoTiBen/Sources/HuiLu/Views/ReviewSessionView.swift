@@ -1045,6 +1045,7 @@ struct ReviewDetailOverlay: View {
     @State private var explanation: AIExplainSentenceResult?
     @State private var isLoading = false
     @State private var errorMessage: String?
+    @State private var activeExplanationRequestID: String?
 
     private var explainContext: ExplainSentenceContext? {
         viewModel.explainSentenceContext(for: card)
@@ -1199,7 +1200,13 @@ struct ReviewDetailOverlay: View {
         if isLoading {
             loadingCard
         } else if let explanation {
-            explanationSections(explanation)
+            VStack(alignment: .leading, spacing: 14) {
+                if explanation.shouldShowFallbackBanner {
+                    errorCard(message: explanation.displayFallbackMessage)
+                    debugTransportSection(for: explanation)
+                }
+                explanationSections(explanation)
+            }
         } else if let errorMessage {
             errorCard(message: errorMessage)
         } else {
@@ -1229,7 +1236,7 @@ struct ReviewDetailOverlay: View {
                 .foregroundStyle(AppPalette.paperInk.opacity(0.7))
                 .lineSpacing(4)
 
-            manualExplainButton(title: "重新获取云端讲解（会消耗额度）")
+            manualExplainButton(title: "重新获取 AI 精讲")
         }
     }
 
@@ -1244,7 +1251,7 @@ struct ReviewDetailOverlay: View {
                 .font(.system(size: 13, weight: .semibold, design: .serif))
                 .foregroundStyle(AppPalette.paperMuted)
 
-            manualExplainButton(title: "生成云端讲解（会消耗额度）")
+            manualExplainButton(title: "获取 AI 精讲")
         }
     }
 
@@ -1275,7 +1282,7 @@ struct ReviewDetailOverlay: View {
 
             explanationSection(
                 title: "忠实翻译",
-                body: explanation.renderedFaithfulTranslation.isEmpty ? "暂无忠实翻译" : explanation.renderedFaithfulTranslation,
+                body: explanation.renderedFaithfulTranslation.isEmpty ? "AI 翻译暂不可用，可稍后重试。" : explanation.renderedFaithfulTranslation,
                 tint: AppPalette.paperHighlightMint,
                 rotation: -0.2
             )
@@ -1419,6 +1426,7 @@ struct ReviewDetailOverlay: View {
     private func reloadExplanation() async {
         explanation = nil
         errorMessage = nil
+        activeExplanationRequestID = nil
         await fetchExplanationIfPossible(forceRefresh: true)
     }
 
@@ -1430,17 +1438,93 @@ struct ReviewDetailOverlay: View {
         isLoading = true
         defer { isLoading = false }
 
+        guard let requestIdentity = viewModel.explainSentenceRequestIdentity(for: card) else {
+            _ = try? ExplainSentenceRequestBuilder.prepare(context: explainContext, requestIdentity: nil)
+            let fallback = LocalSentenceFallbackBuilder.build(
+                context: explainContext,
+                requestIdentity: nil,
+                structuredError: AIStructuredError.invalidRequest(message: "缺少 sentence identity 字段。")
+            )
+            explanation = fallback
+            errorMessage = fallback.displayFallbackMessage
+            activeExplanationRequestID = nil
+            return
+        }
+
+        activeExplanationRequestID = requestIdentity.clientRequestID
+
         do {
             let result = try await AIExplainSentenceService.fetchExplanationWithCache(
                 for: explainContext,
+                requestIdentity: requestIdentity,
                 forceRefresh: forceRefresh
             )
+            let decision = AIResponseIdentityGuard.validate(
+                expected: requestIdentity,
+                actual: result.analysisIdentity
+            )
+            guard decision.isAllowed else {
+                if let reason = decision.reason {
+                    AIResponseIdentityGuard.logDiscard(
+                        requestID: result.requestID,
+                        expected: requestIdentity,
+                        actual: result.analysisIdentity,
+                        reason: reason
+                    )
+                }
+                return
+            }
+            guard activeExplanationRequestID == requestIdentity.clientRequestID else {
+                TextPipelineDiagnostics.log(
+                    "AI",
+                    "[AI][SentenceExplain] discard stale request request_id=\(requestIdentity.clientRequestID) sentence_id=\(requestIdentity.sentenceID) discard_reason=requestSuperseded",
+                    severity: .warning
+                )
+                return
+            }
             explanation = result
-            errorMessage = nil
+            errorMessage = result.shouldShowFallbackBanner ? result.displayFallbackMessage : nil
+            activeExplanationRequestID = nil
+        } catch is CancellationError {
+            if activeExplanationRequestID == requestIdentity.clientRequestID {
+                activeExplanationRequestID = nil
+            }
         } catch {
-            explanation = nil
-            errorMessage = error.localizedDescription
+            guard activeExplanationRequestID == requestIdentity.clientRequestID else { return }
+            let fallback = LocalSentenceFallbackBuilder.build(
+                context: explainContext,
+                requestIdentity: requestIdentity,
+                structuredError: AIStructuredError.invalidModelResponse(message: error.localizedDescription)
+            )
+            explanation = fallback
+            errorMessage = fallback.displayFallbackMessage
+            activeExplanationRequestID = nil
         }
+    }
+
+    @ViewBuilder
+    private func debugTransportSection(for result: AIExplainSentenceResult) -> some View {
+        #if DEBUG
+        let debugLines = [
+            result.requestID.map { "request_id：\($0)" },
+            result.errorCode.map { "error_code：\($0)" },
+            "used_fallback：\(result.usedFallback ? "true" : "false")",
+            "used_cache：\(result.usedCache ? "true" : "false")",
+            "retry_count：\(result.retryCount)"
+        ].compactMap { $0 }
+
+        if !debugLines.isEmpty {
+            ReviewSectionPaper(title: "DEBUG", tint: AppPalette.paperTapeBlue.opacity(0.7), rotation: 0.06) {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(debugLines, id: \.self) { line in
+                        Text(line)
+                            .font(.system(size: 12, weight: .medium, design: .monospaced))
+                            .foregroundStyle(AppPalette.paperInk.opacity(0.65))
+                    }
+                }
+            }
+        }
+        #endif
     }
 }
 

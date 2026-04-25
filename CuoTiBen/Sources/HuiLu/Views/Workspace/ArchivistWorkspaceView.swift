@@ -71,10 +71,25 @@ struct ArchivistWorkspaceView: View {
                         .padding(.top, 12)
 
                         ArchivistFloatingNavigator(
-                            nodes: bundle.outline,
-                            selectedNodeID: workspaceViewModel.selectedNodeID,
+                            documentTitle: document.title,
+                            bundle: bundle,
+                            focusSentenceID: workspaceViewModel.selectedSentenceID,
                             currentAnchorLabel: workspaceViewModel.anchorLabel(for: workspaceViewModel.selectedNode),
-                            onNodeTap: { workspaceViewModel.selectNode($0) }
+                            onNodeTap: { node in
+                                if node.kind == .anchorSentence,
+                                   let sentence = bundle.sentence(id: node.provenance.sourceSentenceID) {
+                                    workspaceViewModel.selectSentence(sentence)
+                                    return
+                                }
+                                if let outlineNode = bundle.bestOutlineNode(forSentenceID: node.provenance.sourceSentenceID)
+                                    ?? bundle.bestOutlineNode(forSegmentID: node.provenance.sourceSegmentID) {
+                                    workspaceViewModel.selectNode(outlineNode)
+                                    return
+                                }
+                                if let sentence = bundle.sentences.first(where: { $0.segmentID == node.provenance.sourceSegmentID }) {
+                                    workspaceViewModel.selectSentence(sentence)
+                                }
+                            }
                         )
                         .frame(width: layout.navigatorWidth)
                         .frame(maxHeight: .infinity, alignment: .top)
@@ -329,10 +344,21 @@ private struct ArchivistSideRail: View {
 }
 
 private struct ArchivistFloatingNavigator: View {
-    let nodes: [OutlineNode]
-    let selectedNodeID: String?
+    let documentTitle: String
+    let bundle: StructuredSourceBundle
+    let focusSentenceID: String?
     let currentAnchorLabel: String
-    let onNodeTap: (OutlineNode) -> Void
+    let onNodeTap: (MindMapNode) -> Void
+
+    private var focusSegmentIDs: Set<String> {
+        guard let focusSentenceID,
+              let sentence = bundle.sentence(id: focusSentenceID) else { return [] }
+        return [sentence.segmentID]
+    }
+
+    private var hasMindMapContent: Bool {
+        !(bundle.mindMapAdmissionResult?.mainlineNodes.isEmpty ?? true)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -349,23 +375,19 @@ private struct ArchivistFloatingNavigator: View {
                 .font(ArchivistTypography.annotationSmall)
                 .foregroundStyle(ArchivistColors.softInk)
 
-            if nodes.isEmpty {
+            if !hasMindMapContent {
                 Text("当前还没有可展示的导图节点。")
                     .font(ArchivistTypography.annotation)
                     .foregroundStyle(ArchivistColors.softInk)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else {
-                StructureTreePreviewView(
-                    nodes: nodes,
-                    highlightedNodeID: selectedNodeID,
-                    jumpTargetNodeID: selectedNodeID,
-                    ancestorNodeIDs: [],
-                    onNodeTap: onNodeTap,
-                    onJumpHandled: {},
-                    onClose: nil,
-                    fillsAvailableHeight: true,
-                    showsToolbar: false,
-                    initialDensityMode: .compact
+                MindMapWorkspaceView(
+                    documentTitle: documentTitle,
+                    bundle: bundle,
+                    focusSentenceID: focusSentenceID,
+                    focusSegmentIDs: focusSegmentIDs,
+                    displayMode: .sidebar,
+                    onNodeTap: onNodeTap
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }

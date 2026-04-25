@@ -158,106 +158,12 @@ enum AISourceParsingService {
             "本地回退已构建: \(localFallback.bundle.sentences.count)句 \(localFallback.bundle.segments.count)段"
         )
 
-        let baseURLString = AIExplainSentenceService.storedBaseURL
-        guard let endpointURL = URL(string: "\(baseURLString)/ai/parse-source") else {
-            throw AISourceParsingServiceError.invalidBaseURL
-        }
-
-        var request = URLRequest(url: endpointURL)
-        request.httpMethod = "POST"
-        request.timeoutInterval = parseSourceTimeout
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(
-            ParseSourceRequest(
-                sourceID: documentID.uuidString,
-                title: title,
-                rawText: draft.rawText,
-                sourceType: documentType.rawValue.lowercased(),
-                pageCount: pageCount,
-                anchors: draft.anchors.map {
-                    ParseSourceRequestAnchor(
-                        anchorID: $0.anchorID,
-                        page: $0.page,
-                        label: $0.label,
-                        text: $0.text
-                    )
-                }
-            )
+        TextPipelineDiagnostics.log(
+            "后端响应",
+            "运行路径锁定：remote parse-source 已关闭，AIBackendConfig 不再用于资料解析，直接使用本地回退。",
+            severity: .warning
         )
-
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw AISourceParsingServiceError.invalidServerResponse
-            }
-
-            TextPipelineDiagnostics.log(
-                "后端响应",
-                "HTTP \(httpResponse.statusCode) 数据量=\(data.count)字节"
-            )
-
-            let decoded = try JSONDecoder().decode(ParseSourceResponseEnvelope.self, from: data)
-
-            if httpResponse.statusCode == 200, decoded.success, let payload = decoded.data {
-                TextPipelineDiagnostics.log(
-                    "后端响应",
-                    "解析成功: \(payload.sentences.count)句 \(payload.segments.count)段 \(payload.outline.count)大纲节点"
-                )
-
-                // 检测后端返回的句子是否存在反转
-                let reversedSentences = payload.sentences.filter {
-                    TextPipelineValidator.isLikelyReversedEnglish($0.text)
-                }
-                if !reversedSentences.isEmpty {
-                    TextPipelineDiagnostics.log(
-                        "后端响应",
-                        "⚠️ 检测到 \(reversedSentences.count)/\(payload.sentences.count) 条后端句子疑似反转，将在合并时自动修复",
-                        severity: .warning
-                    )
-                }
-
-                let remotePayload = StructuredSourceParsePayload(
-                    bundle: StructuredSourceBundle(
-                        source: payload.source,
-                        segments: payload.segments,
-                        sentences: payload.sentences,
-                        outline: payload.outline
-                    ),
-                    sectionTitles: payload.sectionTitles ?? [],
-                    topicTags: payload.topicTags ?? [],
-                    candidateKnowledgePoints: payload.candidateKnowledgePoints ?? []
-                )
-                let result = mergeRemotePayload(
-                    remotePayload,
-                    withLocalFallback: localFallback,
-                    draft: draft
-                )
-
-                TextPipelineDiagnostics.log(
-                    "合并完成",
-                    "最终输出: \(result.bundle.sentences.count)句 \(result.bundle.segments.count)段"
-                )
-
-                return result
-            }
-
-            if let message = decoded.error, !message.isEmpty {
-                TextPipelineDiagnostics.log("后端响应", "服务端错误: \(message)", severity: .error)
-                throw AISourceParsingServiceError.requestFailed(message)
-            }
-
-            throw AISourceParsingServiceError.invalidServerResponse
-        } catch let error as AISourceParsingServiceError {
-            TextPipelineDiagnostics.log("解析异常", "服务异常: \(error.localizedDescription)", severity: .error)
-            throw error
-        } catch let error as DecodingError {
-            TextPipelineDiagnostics.log("解析异常", "JSON解码失败: \(error)", severity: .error)
-            print("[AISourceParsingService] decode failed: \(error)")
-            throw AISourceParsingServiceError.invalidServerResponse
-        } catch {
-            TextPipelineDiagnostics.log("解析异常", "网络错误: \(error.localizedDescription)", severity: .error)
-            throw AISourceParsingServiceError.transport(error.localizedDescription)
-        }
+        return localFallback
     }
 
     static func materialProfile(for draft: SourceTextDraft) -> EnglishMaterialProfile {
@@ -318,7 +224,9 @@ enum AISourceParsingService {
                 text: segment.text,
                 anchorLabel: segment.anchorLabel,
                 page: segment.page,
-                sentenceIDs: sentenceIDsBySegment[segment.id] ?? []
+                sentenceIDs: sentenceIDsBySegment[segment.id] ?? [],
+                provenance: segment.provenance,
+                hygiene: segment.hygiene
             )
         }
         let outline = makeLocalOutline(
@@ -327,14 +235,25 @@ enum AISourceParsingService {
             segments: localSegments,
             sentences: sentences
         )
+        let zoningSummary = DocumentZoningSummary(
+            passageParagraphCount: localSegments.filter { $0.provenance.sourceKind == .passageBody }.count,
+            questionParagraphCount: localSegments.filter { $0.provenance.sourceKind == .question }.count,
+            answerKeyParagraphCount: localSegments.filter { $0.provenance.sourceKind == .answerKey }.count,
+            vocabularyParagraphCount: localSegments.filter {
+                $0.provenance.sourceKind == .vocabularySupport || $0.provenance.sourceKind == .bilingualNote
+            }.count,
+            metaInstructionParagraphCount: localSegments.filter {
+                $0.provenance.sourceKind == .chineseInstruction || $0.provenance.sourceKind == .passageHeading
+            }.count
+        )
 
-        let bundle = StructuredSourceBundle(
+        let bundle = bundleWithAdmission(StructuredSourceBundle(
             source: Source(
                 id: sourceID,
                 title: title.isEmpty ? "未命名资料" : title,
                 sourceType: documentType.rawValue.lowercased(),
                 language: profile.languageCode,
-                isEnglish: true,
+                isEnglish: profile.isEnglishEligible,
                 cleanedText: normalizedWhitespace(draft.rawText),
                 pageCount: max(pageCount, draft.anchors.compactMap(\.page).max() ?? 1),
                 segmentCount: localSegments.count,
@@ -343,8 +262,9 @@ enum AISourceParsingService {
             ),
             segments: localSegments,
             sentences: sentences,
-            outline: outline
-        )
+            outline: outline,
+            zoningSummary: zoningSummary
+        ))
 
         let mergedBundle = mergeSentenceGeometry(into: bundle, using: draft)
         let metadata = makeLocalMetadata(bundle: mergedBundle)
@@ -385,6 +305,8 @@ private extension AISourceParsingService {
         let anchorLabel: String
         let page: Int?
         let text: String
+        let provenance: NodeProvenance
+        let hygiene: SourceHygieneSnapshot
     }
 
     static func mergeSentenceGeometry(
@@ -415,12 +337,12 @@ private extension AISourceParsingService {
             print("[AISourceParsingService] merged OCR geometry for \(mergedCount)/\(bundle.sentences.count) sentences")
         }
 
-        return StructuredSourceBundle(
+        return bundleWithAdmission(StructuredSourceBundle(
             source: bundle.source,
             segments: bundle.segments,
             sentences: mergedSentences,
             outline: bundle.outline
-        )
+        ))
     }
 
     static func mergeRemotePayload(
@@ -446,7 +368,7 @@ private extension AISourceParsingService {
             segments: mergedSegments,
             sentences: mergedSentences
         )
-        let mergedBundle = StructuredSourceBundle(
+        let mergedBundle = bundleWithAdmission(StructuredSourceBundle(
             source: mergeSource(
                 remote: remoteWithGeometry.source,
                 fallback: fallback.bundle.source,
@@ -457,7 +379,7 @@ private extension AISourceParsingService {
             segments: mergedSegments,
             sentences: mergedSentences,
             outline: mergedOutline
-        )
+        ))
         let localMetadata = makeLocalMetadata(bundle: mergedBundle)
 
         return StructuredSourceParsePayload(
@@ -477,6 +399,26 @@ private extension AISourceParsingService {
                 fallback: fallback.candidateKnowledgePoints + localMetadata.candidateKnowledgePoints,
                 limit: 12
             )
+        )
+    }
+
+    private static func bundleWithAdmission(_ bundle: StructuredSourceBundle) -> StructuredSourceBundle {
+        let passageMap = MindMapAdmissionService.buildPassageMap(from: bundle)
+        let admissionResult = MindMapAdmissionService.admit(bundle: bundle, passageMap: passageMap)
+        return StructuredSourceBundle(
+            source: bundle.source,
+            segments: bundle.segments,
+            sentences: bundle.sentences,
+            outline: bundle.outline,
+            passageOverview: bundle.passageOverview,
+            paragraphTeachingCards: bundle.paragraphTeachingCards,
+            professorSentenceCards: bundle.professorSentenceCards,
+            questionLinks: bundle.questionLinks,
+            zoningSummary: bundle.zoningSummary,
+            passageMap: passageMap.withDiagnostics(admissionResult.diagnostics),
+            mindMapAdmissionResult: admissionResult,
+            passageAnalysisDiagnostics: bundle.passageAnalysisDiagnostics,
+            passageAnalysisIdentity: bundle.passageAnalysisIdentity
         )
     }
 
@@ -939,22 +881,42 @@ private extension AISourceParsingService {
             }
 
             if paragraphs.count == 1 {
+                let paragraph = normalizedInlineWhitespace(paragraphs[0])
+                let diagnostics = localSegmentDiagnostics(
+                    id: "seg_\(String(anchorIndex + 1).leftPadded(to: 3))",
+                    anchorLabel: baseLabel,
+                    page: anchor.page,
+                    text: paragraph
+                )
                 return [
                     LocalSegmentSeed(
-                        id: "seg_\(String(anchorIndex + 1).leftPadded(to: 3))",
+                        id: diagnostics.id,
                         anchorLabel: baseLabel,
                         page: anchor.page,
-                        text: paragraphs[0]
+                        text: paragraph,
+                        provenance: diagnostics.provenance,
+                        hygiene: diagnostics.hygiene
                     )
                 ]
             }
 
             return paragraphs.enumerated().map { paragraphIndex, paragraph in
-                LocalSegmentSeed(
-                    id: "seg_\(String(anchorIndex + 1).leftPadded(to: 3))_\(paragraphIndex + 1)",
-                    anchorLabel: "\(baseLabel) 第\(paragraphIndex + 1)段",
+                let paragraphID = "seg_\(String(anchorIndex + 1).leftPadded(to: 3))_\(paragraphIndex + 1)"
+                let anchorLabel = "\(baseLabel) 第\(paragraphIndex + 1)段"
+                let normalizedParagraph = normalizedInlineWhitespace(paragraph)
+                let diagnostics = localSegmentDiagnostics(
+                    id: paragraphID,
+                    anchorLabel: anchorLabel,
                     page: anchor.page,
-                    text: paragraph
+                    text: normalizedParagraph
+                )
+                return LocalSegmentSeed(
+                    id: diagnostics.id,
+                    anchorLabel: anchorLabel,
+                    page: anchor.page,
+                    text: normalizedParagraph,
+                    provenance: diagnostics.provenance,
+                    hygiene: diagnostics.hygiene
                 )
             }
         }
@@ -967,7 +929,9 @@ private extension AISourceParsingService {
                 text: seed.text,
                 anchorLabel: seed.anchorLabel,
                 page: seed.page,
-                sentenceIDs: []
+                sentenceIDs: [],
+                provenance: seed.provenance,
+                hygiene: seed.hygiene
             )
         }
     }
@@ -1010,7 +974,17 @@ private extension AISourceParsingService {
                         localIndex: localIndex,
                         text: normalizedText,
                         anchorLabel: anchorLabel,
-                        page: segment.page
+                        page: segment.page,
+                        provenance: NodeProvenance(
+                            sourceSegmentID: segment.id,
+                            sourceSentenceID: sentenceID,
+                            sourcePage: segment.page,
+                            sourceKind: segment.provenance.sourceKind,
+                            generatedFrom: segment.provenance.generatedFrom,
+                            hygieneScore: segment.hygiene.score,
+                            consistencyScore: max(segment.provenance.consistencyScore, 0.62)
+                        ),
+                        hygiene: segment.hygiene
                     )
                 )
                 sentenceIndex += 1
@@ -1071,6 +1045,77 @@ private extension AISourceParsingService {
         let verbPattern = #"\b(am|is|are|was|were|be|been|being|do|does|did|have|has|had|can|could|may|might|must|shall|should|will|would|become|became|means|mean|shows|show|suggests|suggests|suggest|indicates|indicate|remains|remain|appears|appear|\w+ed|\w+ing)\b"#
         let hasVerbLikeToken = lower.range(of: verbPattern, options: .regularExpression) != nil
         return !hasVerbLikeToken
+    }
+
+    private static func localSegmentDiagnostics(
+        id: String,
+        anchorLabel: String,
+        page: Int?,
+        text: String
+    ) -> (
+        id: String,
+        provenance: NodeProvenance,
+        hygiene: SourceHygieneSnapshot
+    ) {
+        let layoutType = inferredLocalLayoutType(text: text, anchorLabel: anchorLabel)
+        let classification = BlockContentClassifier.classify(
+            text: text,
+            layoutType: layoutType,
+            confidence: 0.72
+        )
+        let sourceKind = localSourceKind(for: classification.contentType)
+        let hygiene = SourceHygieneScorer.evaluate(
+            text: text,
+            sourceKind: sourceKind,
+            ocrConfidence: 1,
+            reversedRepaired: classification.reasons.contains("块级反转修复"),
+            hasMixedContamination: classification.languageProfile.isContaminated,
+            chineseRatio: classification.languageProfile.chineseRatio,
+            englishRatio: classification.languageProfile.englishRatio
+        ).snapshot
+        let provenance = NodeProvenance(
+            sourceSegmentID: id,
+            sourceSentenceID: nil,
+            sourcePage: page,
+            sourceKind: sourceKind,
+            generatedFrom: .localFallback,
+            hygieneScore: hygiene.score,
+            consistencyScore: min(max(classification.confidence, 0.52), 0.96)
+        )
+        return (id: id, provenance: provenance, hygiene: hygiene)
+    }
+
+    private static func inferredLocalLayoutType(
+        text: String,
+        anchorLabel: String
+    ) -> LayoutBlockType {
+        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if anchorLabel.contains("标题") || anchorLabel.contains("heading") {
+            return .heading
+        }
+        if normalized.count <= 28 {
+            return .heading
+        }
+        return .body
+    }
+
+    private static func localSourceKind(for contentType: BlockContentType) -> SourceContentKind {
+        switch contentType {
+        case .englishBody:
+            return .passageBody
+        case .title, .heading, .subheading:
+            return .passageHeading
+        case .chineseExplanation:
+            return .chineseInstruction
+        case .bilingualNote:
+            return .bilingualNote
+        case .questionStem, .optionList:
+            return .question
+        case .glossaryNote:
+            return .vocabularySupport
+        case .pageHeader, .pageFooter, .reference, .noise:
+            return .noise
+        }
     }
 
     /// 截断到最近的句末标点边界

@@ -17,6 +17,7 @@ enum StructuredLoadingStage: String, Equatable {
     case partialReady   = "partialReady"    // 基础结构已可用，教授级 AI 分析尚未补齐
     case aiEnriching    = "aiEnriching"     // AI 教授级分析升级中
     case ready          = "ready"           // 完成
+    case localFallbackReady = "localFallbackReady" // 已生成本地学习资料结构
     case failed         = "failed"          // 失败
     case timedOut       = "timedOut"        // 超时
     case fallbackLegacy = "fallbackLegacy"  // 已回退到旧解析链路
@@ -36,6 +37,7 @@ enum StructuredLoadingStage: String, Equatable {
         case .partialReady:     return "基础结构已就绪"
         case .aiEnriching:      return "AI 教授级分析升级中…"
         case .ready:            return "加载完成"
+        case .localFallbackReady: return "本地学习资料结构已就绪"
         case .failed:           return "加载失败"
         case .timedOut:         return "加载超时"
         case .fallbackLegacy:   return "已回退到旧解析链路"
@@ -49,12 +51,12 @@ enum StructuredLoadingStage: String, Equatable {
 
     /// 是否为终态
     var isTerminal: Bool {
-        self == .partialReady || self == .ready || self == .failed || self == .timedOut || self == .fallbackLegacy
+        self == .partialReady || self == .ready || self == .localFallbackReady || self == .failed || self == .timedOut || self == .fallbackLegacy
     }
 
     /// 是否已有可展示内容
     var hasPreview: Bool {
-        self == .partialReady || self == .ready || self == .buildingTree || self == .fallbackLegacy || self == .aiEnriching
+        self == .partialReady || self == .ready || self == .localFallbackReady || self == .buildingTree || self == .fallbackLegacy || self == .aiEnriching
     }
 
     /// 中文失败回退消息
@@ -63,6 +65,7 @@ enum StructuredLoadingStage: String, Equatable {
         case .failed:           return "结构化预览生成失败，已展示基础预览"
         case .timedOut:         return "资料解析超时，请稍后重试"
         case .fallbackLegacy:   return "PP-StructureV3 不可用，已回退到旧解析链路"
+        case .localFallbackReady: return "已展示本地学习资料结构骨架"
         default:                return nil
         }
     }
@@ -77,6 +80,7 @@ struct ParseSessionInfo: Equatable {
         case ppStructureV3 = "PP-StructureV3"
         case legacyRemote = "Legacy-Remote"
         case legacyLocal = "Legacy-Local"
+        case materialLocalFallback = "Local-Material-Fallback"
     }
 
     /// 失败分类
@@ -109,6 +113,58 @@ struct ParseSessionInfo: Equatable {
     let segmentCount: Int
     let parseDurationMs: Int?
     let timestamp: Date
+    let documentParseEndpointConfigured: Bool
+    let documentParseEndpointURL: String?
+    let documentParseRemoteStatus: String?
+    let skippedBecauseUnconfigured: Bool
+
+    init(
+        source: ParseSource,
+        requestURL: String?,
+        jobID: String?,
+        ppAttempted: Bool,
+        ppSucceeded: Bool,
+        fallbackUsed: Bool,
+        fallbackReason: String?,
+        failureClass: FailureClass?,
+        qualityReasonCode: String?,
+        schemaVersion: String?,
+        normalizedBlockCount: Int,
+        paragraphCount: Int,
+        structureCandidateCount: Int,
+        sentenceCount: Int,
+        outlineNodeCount: Int,
+        segmentCount: Int,
+        parseDurationMs: Int?,
+        timestamp: Date,
+        documentParseEndpointConfigured: Bool = DocumentParseEndpointConfig.isConfigured,
+        documentParseEndpointURL: String? = DocumentParseEndpointConfig.parseEndpointURL?.absoluteString,
+        documentParseRemoteStatus: String? = nil,
+        skippedBecauseUnconfigured: Bool = false
+    ) {
+        self.source = source
+        self.requestURL = requestURL
+        self.jobID = jobID
+        self.ppAttempted = ppAttempted
+        self.ppSucceeded = ppSucceeded
+        self.fallbackUsed = fallbackUsed
+        self.fallbackReason = fallbackReason
+        self.failureClass = failureClass
+        self.qualityReasonCode = qualityReasonCode
+        self.schemaVersion = schemaVersion
+        self.normalizedBlockCount = normalizedBlockCount
+        self.paragraphCount = paragraphCount
+        self.structureCandidateCount = structureCandidateCount
+        self.sentenceCount = sentenceCount
+        self.outlineNodeCount = outlineNodeCount
+        self.segmentCount = segmentCount
+        self.parseDurationMs = parseDurationMs
+        self.timestamp = timestamp
+        self.documentParseEndpointConfigured = documentParseEndpointConfigured
+        self.documentParseEndpointURL = documentParseEndpointURL
+        self.documentParseRemoteStatus = documentParseRemoteStatus
+        self.skippedBecauseUnconfigured = skippedBecauseUnconfigured
+    }
 
     /// debug 摘要文本
     var debugSummary: String {
@@ -119,6 +175,9 @@ struct ParseSessionInfo: Equatable {
         if let jid = jobID { parts.append("Job: \(jid)") }
         parts.append("PP尝试: \(ppAttempted ? "是" : "否")")
         parts.append("PP成功: \(ppSucceeded ? "是" : "否")")
+        parts.append("文档解析端点: \(documentParseEndpointConfigured ? (documentParseEndpointURL ?? "configured") : "unconfigured")")
+        if let documentParseRemoteStatus { parts.append("文档解析状态: \(documentParseRemoteStatus)") }
+        if skippedBecauseUnconfigured { parts.append("PP远端解析: 未配置，已跳过") }
         if fallbackUsed, let reason = fallbackReason {
             parts.append("回退原因: \(reason)")
         }
@@ -349,18 +408,43 @@ final class AppViewModel: ObservableObject {
                     await self?.loadStructuredSource(for: docForLoading)
                 }
             } catch {
-                var failedDocument = document
-                failedDocument.processingStatus = .failed
-                failedDocument.lastProcessingError = error.localizedDescription
-                replaceSourceDocument(with: failedDocument)
+                if let fallbackDocument = await recoverImportedDocumentWithLocalFallback(
+                    document,
+                    parseError: error
+                ) {
+                    successfulDocuments.append(fallbackDocument)
+                    processedPages += max(fallbackDocument.pageCount, 1)
+                    parsedSectionCount += max(fallbackDocument.sectionTitles.count, 1)
+                    previewChunkCount += max(fallbackDocument.chunkCount, 1)
+                    candidateKnowledgePointCount += fallbackDocument.candidateKnowledgePoints.count
+                } else {
+                    var failedDocument = document
+                    failedDocument.processingStatus = .failed
+                    failedDocument.lastProcessingError = error.localizedDescription
+                    replaceSourceDocument(with: failedDocument)
+                    structuredSourceStages[document.id] = .failed
+                    structuredSourceErrors[document.id] = "请求失败，可重试：\(error.localizedDescription)"
 
-                if firstError == nil {
-                    firstError = error
+                    if firstError == nil {
+                        firstError = error
+                    }
                 }
             }
         }
 
         guard !successfulDocuments.isEmpty else {
+            let visibleDocuments = parsingDocuments.compactMap { original in
+                sourceDocuments.first(where: { $0.id == original.id })
+            }
+            if !visibleDocuments.isEmpty {
+                return MaterialImportSummary(
+                    documents: visibleDocuments,
+                    processedPages: visibleDocuments.reduce(0) { $0 + max($1.pageCount, 1) },
+                    parsedSectionCount: 0,
+                    previewChunkCount: 0,
+                    candidateKnowledgePointCount: 0
+                )
+            }
             throw firstError ?? ImportError.copyFailed("导入流程未生成任何可用结果")
         }
 
@@ -371,6 +455,53 @@ final class AppViewModel: ObservableObject {
             previewChunkCount: previewChunkCount,
             candidateKnowledgePointCount: candidateKnowledgePointCount
         )
+    }
+
+    private func recoverImportedDocumentWithLocalFallback(
+        _ document: SourceDocument,
+        parseError: Error
+    ) async -> SourceDocument? {
+        do {
+            let draft = try await chunkingService.extractSourceDraft(document: document)
+            var fallbackDocument = document
+            fallbackDocument.processingStatus = .ready
+            fallbackDocument.lastProcessingError = nil
+            replaceSourceDocument(with: fallbackDocument)
+
+            let payload = AISourceParsingService.buildLocalFallbackPayload(
+                documentID: document.id,
+                title: document.title,
+                documentType: document.documentType,
+                pageCount: document.pageCount,
+                draft: draft
+            )
+            let decision = StructuredSourceMaterialGate.evaluate(
+                draft: draft,
+                bundle: payload.bundle
+            )
+            applyStructuredMaterialFallback(
+                document: fallbackDocument,
+                payload: payload,
+                decision: decision,
+                convertedFromEarlyFail: true
+            )
+            if let recovered = sourceDocuments.first(where: { $0.id == document.id }) {
+                TextPipelineDiagnostics.log(
+                    "PP",
+                    "[PP][Import] parse_failed_converted_to_local_fallback doc=\(document.id) error=\(parseError.localizedDescription)",
+                    severity: .warning
+                )
+                return recovered
+            }
+            return fallbackDocument
+        } catch {
+            TextPipelineDiagnostics.log(
+                "PP",
+                "[PP][Import] local_fallback_unavailable doc=\(document.id) parse_error=\(parseError.localizedDescription) fallback_error=\(error.localizedDescription)",
+                severity: .error
+            )
+            return nil
+        }
     }
 
     func chunks(for document: SourceDocument) -> [KnowledgeChunk] {
@@ -475,13 +606,20 @@ final class AppViewModel: ObservableObject {
         guard force || structuredSources[document.id] == nil else { return }
         guard !structuredSourceLoadingIDs.contains(document.id) else { return }
 
+        var recoveredDraft: SourceTextDraft?
+        var recoveredPayload: StructuredSourceParsePayload?
         structuredSourceLoadingIDs.insert(document.id)
         structuredSourceErrors[document.id] = nil
         structuredSourceStages[document.id] = .extracting
         defer {
+            recoverNonTerminalStructuredLoadIfPossible(
+                document: document,
+                draft: recoveredDraft,
+                payload: recoveredPayload
+            )
             structuredSourceLoadingIDs.remove(document.id)
             let stage = structuredSourceStages[document.id]
-            if stage != .ready && stage != .failed && stage != .timedOut && stage != .fallbackLegacy && stage != .partialReady && stage != .aiEnriching {
+            if stage != .ready && stage != .localFallbackReady && stage != .failed && stage != .timedOut && stage != .fallbackLegacy && stage != .partialReady && stage != .aiEnriching {
                 TextPipelineDiagnostics.log("PP", "[PP] ⚠️ defer guard: stage=\(stage?.rawValue ?? "nil") 不是终态，强制设为 .failed doc=\(document.id)", severity: .error)
                 structuredSourceStages[document.id] = .failed
             }
@@ -496,17 +634,61 @@ final class AppViewModel: ObservableObject {
             let draft: SourceTextDraft = try await withTimeoutOrThrow(seconds: 60) { [chunkingService, document] in
                 try await chunkingService.extractSourceDraft(document: document)
             }
-            guard AISourceParsingService.shouldAttemptEnglishParsing(for: draft) || draft.isLikelyEnglish || Self.containsEnglishLetters(draft.rawText) else {
-                structuredSourceErrors[document.id] = "当前资料未识别为英语资料，暂不进入英语结构化理解流程。"
-                structuredSourceStages[document.id] = .failed
-                parseSessionInfos[document.id] = ParseSessionInfo(
-                    source: .ppStructureV3, requestURL: nil, jobID: nil,
-                    ppAttempted: false, ppSucceeded: false, fallbackUsed: false,
-                    fallbackReason: "非英语资料", failureClass: nil,
-                    qualityReasonCode: nil, schemaVersion: nil,
-                    normalizedBlockCount: 0, paragraphCount: 0, structureCandidateCount: 0,
-                    sentenceCount: 0, outlineNodeCount: 0, segmentCount: 0,
-                    parseDurationMs: nil, timestamp: Date()
+            recoveredDraft = draft
+            TextPipelineDiagnostics.log(
+                "PP",
+                [
+                    "[PP][Gate]",
+                    "draft_extracted=true",
+                    "doc=\(document.id)",
+                    "raw_text_length=\(draft.rawText.count)",
+                    "anchors=\(draft.anchors.count)",
+                    "sentence_drafts=\(draft.sentenceDrafts.count)",
+                    "likely_english=\(draft.isLikelyEnglish)"
+                ].joined(separator: " "),
+                severity: .info
+            )
+            let localFallbackPayload = AISourceParsingService.buildLocalFallbackPayload(
+                documentID: document.id,
+                title: document.title,
+                documentType: document.documentType,
+                pageCount: document.pageCount,
+                draft: draft
+            )
+            recoveredPayload = localFallbackPayload
+            TextPipelineDiagnostics.log(
+                "PP",
+                [
+                    "[PP][Gate]",
+                    "material_gate_input=true",
+                    "doc=\(document.id)",
+                    "raw_text_length=\(draft.rawText.count)",
+                    "sentence_drafts=\(draft.sentenceDrafts.count)",
+                    "local_segments=\(localFallbackPayload.bundle.segments.count)",
+                    "local_sentences=\(localFallbackPayload.bundle.sentences.count)"
+                ].joined(separator: " "),
+                severity: .info
+            )
+            let earlyMaterialDecision = StructuredSourceMaterialGate.evaluate(
+                draft: draft,
+                bundle: localFallbackPayload.bundle
+            )
+            let englishGatePassed = AISourceParsingService.shouldAttemptEnglishParsing(for: draft)
+                || draft.isLikelyEnglish
+                || Self.containsEnglishLetters(draft.rawText)
+
+            if earlyMaterialDecision.shouldEnterFallbackPath || !englishGatePassed {
+                let resolvedDecision = !englishGatePassed && !earlyMaterialDecision.shouldEnterFallbackPath
+                    ? earlyMaterialDecision.withFallbackOverride(
+                        mode: .insufficientText,
+                        appendedReason: "englishGateRejected"
+                    )
+                    : earlyMaterialDecision
+                applyStructuredMaterialFallback(
+                    document: document,
+                    payload: localFallbackPayload,
+                    decision: resolvedDecision,
+                    convertedFromEarlyFail: !englishGatePassed
                 )
                 return
             }
@@ -522,7 +704,7 @@ final class AppViewModel: ObservableObject {
 
                 parseSessionInfos[document.id] = ParseSessionInfo(
                     source: .ppStructureV3,
-                    requestURL: "\(DocumentParseService.backendBaseURL)/api/document/parse",
+                    requestURL: DocumentParseEndpointConfig.parseEndpointURL?.absoluteString,
                     jobID: document.id.uuidString,
                     ppAttempted: true, ppSucceeded: true, fallbackUsed: false,
                     fallbackReason: nil, failureClass: nil,
@@ -533,7 +715,11 @@ final class AppViewModel: ObservableObject {
                     sentenceCount: ppPayload.bundle.sentences.count,
                     outlineNodeCount: ppPayload.bundle.source.outlineNodeCount,
                     segmentCount: ppPayload.bundle.segments.count,
-                    parseDurationMs: elapsed, timestamp: Date()
+                    parseDurationMs: elapsed, timestamp: Date(),
+                    documentParseEndpointConfigured: true,
+                    documentParseEndpointURL: DocumentParseEndpointConfig.parseEndpointURL?.absoluteString,
+                    documentParseRemoteStatus: "success",
+                    skippedBecauseUnconfigured: false
                 )
 
                 structuredSources[document.id] = ppPayload.bundle
@@ -561,18 +747,23 @@ final class AppViewModel: ObservableObject {
             let legacyPayload = await fallbackToLegacyPipeline(for: document, draft: draft)
             TextPipelineDiagnostics.log("PP", "[PP] fallback returned: sentences=\(legacyPayload.bundle.sentences.count) segments=\(legacyPayload.bundle.segments.count) doc=\(document.id)", severity: .info)
             let legacySource: ParseSessionInfo.ParseSource = structuredSourceStages[document.id] == .buildingTree ? .legacyLocal : .legacyRemote
+            let route = DocumentParseEndpointConfig.snapshot
 
             parseSessionInfos[document.id] = ParseSessionInfo(
                 source: legacySource,
                 requestURL: nil, jobID: nil,
-                ppAttempted: true, ppSucceeded: false, fallbackUsed: true,
+                ppAttempted: route.isConfigured, ppSucceeded: false, fallbackUsed: true,
                 fallbackReason: ppFailReason, failureClass: classifyPPFailure(ppFailReason),
                 qualityReasonCode: nil, schemaVersion: nil,
                 normalizedBlockCount: 0, paragraphCount: 0, structureCandidateCount: 0,
                 sentenceCount: legacyPayload.bundle.sentences.count,
                 outlineNodeCount: legacyPayload.bundle.source.outlineNodeCount,
                 segmentCount: legacyPayload.bundle.segments.count,
-                parseDurationMs: nil, timestamp: Date()
+                parseDurationMs: nil, timestamp: Date(),
+                documentParseEndpointConfigured: route.isConfigured,
+                documentParseEndpointURL: route.endpointURL?.absoluteString,
+                documentParseRemoteStatus: route.isConfigured ? "failed" : "skipped_unconfigured",
+                skippedBecauseUnconfigured: !route.isConfigured
             )
 
             structuredSources[document.id] = legacyPayload.bundle
@@ -585,6 +776,24 @@ final class AppViewModel: ObservableObject {
                 severity: .info
             )
         } catch {
+            if let draft = recoveredDraft {
+                let payload = recoveredPayload ?? buildLastResortMaterialFallbackPayload(
+                    document: document,
+                    draft: draft
+                )
+                TextPipelineDiagnostics.log(
+                    "PP",
+                    "[PP][Recovery] structured load error converted to local material fallback doc=\(document.id) error=\(error.localizedDescription)",
+                    severity: .warning
+                )
+                forceStructuredMaterialFallback(
+                    document: document,
+                    draft: draft,
+                    payload: payload,
+                    reason: "structuredLoadError:\(error.localizedDescription)"
+                )
+                return
+            }
             let errorMessage: String
             if error is TimeoutError {
                 errorMessage = "资料解析超时，请稍后重试。"
@@ -593,15 +802,20 @@ final class AppViewModel: ObservableObject {
                 errorMessage = "结构化解析失败：\(error.localizedDescription)"
                 structuredSourceStages[document.id] = .failed
             }
+            let route = DocumentParseEndpointConfig.snapshot
             structuredSourceErrors[document.id] = errorMessage
             parseSessionInfos[document.id] = ParseSessionInfo(
                 source: .ppStructureV3, requestURL: nil, jobID: nil,
-                ppAttempted: true, ppSucceeded: false, fallbackUsed: false,
+                ppAttempted: route.isConfigured, ppSucceeded: false, fallbackUsed: false,
                 fallbackReason: errorMessage, failureClass: error is TimeoutError ? .parseTimeout : nil,
                 qualityReasonCode: nil, schemaVersion: nil,
                 normalizedBlockCount: 0, paragraphCount: 0, structureCandidateCount: 0,
                 sentenceCount: 0, outlineNodeCount: 0, segmentCount: 0,
-                parseDurationMs: nil, timestamp: Date()
+                parseDurationMs: nil, timestamp: Date(),
+                documentParseEndpointConfigured: route.isConfigured,
+                documentParseEndpointURL: route.endpointURL?.absoluteString,
+                documentParseRemoteStatus: route.isConfigured ? "failed" : "skipped_unconfigured",
+                skippedBecauseUnconfigured: !route.isConfigured
             )
             TextPipelineDiagnostics.log("PP", "[PP] loadStructuredSource failed doc=\(document.id): \(errorMessage)", severity: .error)
         }
@@ -624,9 +838,34 @@ final class AppViewModel: ObservableObject {
             return
         }
 
-        guard let initialBundle = structuredSource(for: document) else { return }
-        if !force && initialBundle.hasProfessorAnalysis {
-            return
+        guard let loadedBundle = structuredSource(for: document) else { return }
+        var initialBundle = loadedBundle
+        if !force && loadedBundle.hasProfessorAnalysis {
+            let expected = PassageAnalysisIdentity.make(
+                document: document,
+                bundle: loadedBundle,
+                materialMode: loadedBundle.passageAnalysisDiagnostics?.materialMode ?? .passageReading
+            )
+            let decision = PassageAnalysisIdentityGuard.validate(
+                expected: expected,
+                actual: loadedBundle.passageAnalysisIdentity
+            )
+            PassageAnalysisIdentityGuard.logDecision(
+                requestID: nil,
+                expected: expected,
+                actual: loadedBundle.passageAnalysisIdentity,
+                decision: decision
+            )
+            if decision.isAllowed {
+                return
+            }
+            initialBundle = loadedBundle.removingProfessorAnalysis()
+            structuredSources[document.id] = initialBundle
+            TextPipelineDiagnostics.log(
+                "AI",
+                "[AI][ProfessorAnalysis] existing analysis discarded by passage identity guard doc=\(document.id)",
+                severity: .warning
+            )
         }
 
         let requestKey = ProfessorAnalysisCacheStore.cacheKey(
@@ -648,9 +887,23 @@ final class AppViewModel: ObservableObject {
                 severity: .info
             )
             let latestBundle = structuredSource(for: document) ?? initialBundle
-            structuredSources[document.id] = latestBundle.applyingProfessorAnalysis(cacheHit.delta)
-            structuredSourceStages[document.id] = .ready
-            return
+            if isProfessorDeltaCurrent(
+                cacheHit.delta,
+                document: document,
+                bundle: latestBundle,
+                requestID: nil
+            ) {
+                structuredSources[document.id] = latestBundle.applyingProfessorAnalysis(cacheHit.delta)
+                structuredSourceStages[document.id] = .ready
+                structuredSourceErrors[document.id] = nil
+                return
+            } else {
+                TextPipelineDiagnostics.log(
+                    "AI",
+                    "[AI][ProfessorAnalysis] cache discarded by passage identity guard doc=\(document.id)",
+                    severity: .warning
+                )
+            }
         }
 
         structuredSourceStages[document.id] = .aiEnriching
@@ -669,64 +922,301 @@ final class AppViewModel: ObservableObject {
                     )
                 }
             ) {
-                if !force,
-                   let cacheHit = await Self.professorAnalysisCacheStore.lookup(
-                       forKey: requestKey,
-                       allowDisk: allowDiskCache
-                   ) {
-                    TextPipelineDiagnostics.log(
-                        "AI",
-                        "[AI][ProfessorAnalysis] cache hit",
-                        severity: .info
-                    )
-                    return cacheHit.delta
-                }
-
-                let enriched = try await ProfessorAnalysisService.enrichBundle(
+                let analysisResult = try await ProfessorAnalysisService.enrichBundle(
                     initialBundle,
+                    document: document,
                     title: documentTitle
                 )
-                let delta = ProfessorAnalysisCacheStore.makeDelta(from: enriched)
-                await Self.professorAnalysisCacheStore.store(
-                    delta,
-                    forKey: requestKey,
-                    persistToDisk: allowDiskCache
-                )
+                let delta = analysisResult.delta
+                if !analysisResult.usedFallback {
+                    await Self.professorAnalysisCacheStore.store(
+                        delta,
+                        forKey: requestKey,
+                        persistToDisk: allowDiskCache
+                    )
+                }
                 TextPipelineDiagnostics.log(
                     "AI",
-                    "[AI][ProfessorAnalysis] fetched doc=\(documentID)",
+                    [
+                        "[AI][ProfessorAnalysis] fetched",
+                        "doc=\(documentID)",
+                        "request_id=\(analysisResult.requestID ?? "nil")",
+                        "provider=\(analysisResult.meta.provider ?? "nil")",
+                        "model=\(analysisResult.meta.model ?? "nil")",
+                        "retry_count=\(analysisResult.meta.retryCount)",
+                        "used_cache=\(analysisResult.meta.usedCache)",
+                        "used_fallback=\(analysisResult.meta.usedFallback)"
+                    ].joined(separator: " "),
                     severity: .info
                 )
                 return delta
             }
 
             let latestBundle = structuredSource(for: document) ?? initialBundle
-            structuredSources[document.id] = latestBundle.applyingProfessorAnalysis(delta)
-            structuredSourceStages[document.id] = .ready
+            guard isProfessorDeltaCurrent(
+                delta,
+                document: document,
+                bundle: latestBundle,
+                requestID: nil
+            ) else {
+                structuredSourceStages[document.id] = fallbackStage
+                structuredSourceErrors[document.id] = nil
+                return
+            }
+            let mergedBundle = latestBundle.applyingProfessorAnalysis(delta)
+            structuredSources[document.id] = mergedBundle
+            let hasAIGeneratedAnalysis = delta.paragraphCards.contains(where: \.isAIGenerated)
+                || delta.sentenceCards.contains(where: { $0.analysis.isAIGenerated })
+            structuredSourceStages[document.id] = hasAIGeneratedAnalysis ? .ready : fallbackStage
+            if hasAIGeneratedAnalysis {
+                structuredSourceErrors[document.id] = nil
+            } else if let overview = mergedBundle.passageOverview?.displayedAuthorCoreQuestion.nonEmpty {
+                structuredSourceErrors[document.id] = overview
+            } else {
+                structuredSourceErrors[document.id] = "AI 地图分析暂不可用，已展示本地结构骨架。"
+            }
         } catch is CancellationError {
             structuredSourceStages[document.id] = fallbackStage
-        } catch let error as ProfessorAnalysisService.AnalysisError {
-            structuredSourceStages[document.id] = fallbackStage
-            if case .requestFailed(let failure) = error {
-                TextPipelineDiagnostics.log(
-                    "AI",
-                    "[AI][ProfessorAnalysis] request_id=\(failure.requestID ?? "nil") error_code=\(failure.errorCode ?? "UNKNOWN") retry_count=\(failure.retryCount) used_cache=\(failure.usedCache) used_fallback=\(failure.usedFallback || failure.fallbackAvailable)",
-                    severity: .warning
-                )
-            }
-            TextPipelineDiagnostics.log(
-                "AI",
-                "[AI][ProfessorAnalysis] failed doc=\(document.id): \(error.localizedDescription)",
-                severity: .warning
-            )
         } catch {
             structuredSourceStages[document.id] = fallbackStage
+            structuredSourceErrors[document.id] = "AI 地图分析暂不可用，已展示本地结构骨架。"
             TextPipelineDiagnostics.log(
                 "AI",
                 "[AI][ProfessorAnalysis] failed doc=\(document.id): \(error.localizedDescription)",
                 severity: .warning
             )
         }
+    }
+
+    private func applyStructuredMaterialFallback(
+        document: SourceDocument,
+        payload: StructuredSourceParsePayload,
+        decision: StructuredSourceMaterialDecision,
+        convertedFromEarlyFail: Bool
+    ) {
+        let diagnostics = decision.asPassageDiagnostics(
+            documentID: document.id.uuidString,
+            activeCallPath: "AppViewModel.loadStructuredSource",
+            bundle: payload.bundle,
+            sourceTitle: document.title
+        )
+        let localFallback = LocalPassageFallbackBuilder.build(
+            document: document,
+            bundle: payload.bundle,
+            diagnostics: diagnostics,
+            structuredError: AIStructuredError.invalidRequest(
+                message: decision.mode.fallbackMessage,
+                fallbackAvailable: true
+            ),
+            meta: AIServiceResponseMeta.localFallback()
+        )
+        let enrichedBundle = payload.bundle.applyingProfessorAnalysis(localFallback.delta)
+        let enrichedPayload = StructuredSourceParsePayload(
+            bundle: enrichedBundle,
+            sectionTitles: payload.sectionTitles,
+            topicTags: payload.topicTags,
+            candidateKnowledgePoints: payload.candidateKnowledgePoints
+        )
+
+        TextPipelineDiagnostics.log(
+            "PP",
+            [
+                "[PP][Gate]",
+                "doc=\(document.id)",
+                "material_mode=\(decision.mode.rawValue)",
+                "raw_text_length=\(decision.rawTextLength)",
+                "sentence_drafts=\(decision.sentenceDraftCount)",
+                String(format: "non_passage_ratio=%.2f", decision.nonPassageRatio),
+                "reason=\(decision.reasons.joined(separator: "||"))",
+                "early_fail_converted_to_fallback=\(convertedFromEarlyFail)"
+            ].joined(separator: " "),
+            severity: .info
+        )
+        TextPipelineDiagnostics.log(
+            "PP",
+            [
+                "[PP][Fallback]",
+                "doc=\(document.id)",
+                "generated local learning material bundle",
+                "material_mode=\(decision.mode.rawValue)",
+                "stage=\(StructuredLoadingStage.localFallbackReady.rawValue)"
+            ].joined(separator: " "),
+            severity: .info
+        )
+        TextPipelineDiagnostics.log(
+            "AI",
+            [
+                "[AI][PassageMap] local fallback",
+                "request_id=nil",
+                "client_request_id=nil",
+                "document_id=\(document.id.uuidString)",
+                "active_call_path=AppViewModel.loadStructuredSource",
+                "content_hash=\(diagnostics.contentHash ?? "nil")",
+                "accepted_paragraph_count=\(diagnostics.acceptedParagraphCount)",
+                "rejected_paragraph_count=\(diagnostics.rejectedParagraphCount)",
+                String(format: "non_passage_ratio=%.2f", diagnostics.nonPassageRatio),
+                "material_mode=\(diagnostics.materialMode.rawValue)",
+                "reason=\(diagnostics.reasonFlags.joined(separator: "||"))",
+                "error_code=EARLY_MATERIAL_FALLBACK",
+                "retry_count=0",
+                "used_cache=false",
+                "used_fallback=true",
+                "circuit_state=closed",
+                "early_fail_converted_to_fallback=\(convertedFromEarlyFail)"
+            ].joined(separator: " "),
+            severity: .info
+        )
+
+        parseSessionInfos[document.id] = ParseSessionInfo(
+            source: .materialLocalFallback,
+            requestURL: nil,
+            jobID: nil,
+            ppAttempted: false,
+            ppSucceeded: false,
+            fallbackUsed: true,
+            fallbackReason: decision.reasons.joined(separator: " | "),
+            failureClass: nil,
+            qualityReasonCode: decision.primaryReason,
+            schemaVersion: nil,
+            normalizedBlockCount: 0,
+            paragraphCount: enrichedPayload.bundle.zoningSummary.passageParagraphCount,
+            structureCandidateCount: enrichedPayload.bundle.segments.count,
+            sentenceCount: enrichedPayload.bundle.sentences.count,
+            outlineNodeCount: enrichedPayload.bundle.source.outlineNodeCount,
+            segmentCount: enrichedPayload.bundle.segments.count,
+            parseDurationMs: nil,
+            timestamp: Date(),
+            documentParseEndpointConfigured: DocumentParseEndpointConfig.isConfigured,
+            documentParseEndpointURL: DocumentParseEndpointConfig.parseEndpointURL?.absoluteString,
+            documentParseRemoteStatus: DocumentParseEndpointConfig.isConfigured ? "not_attempted_material_fallback" : "skipped_unconfigured",
+            skippedBecauseUnconfigured: !DocumentParseEndpointConfig.isConfigured
+        )
+
+        structuredSources[document.id] = enrichedPayload.bundle
+        mergeStructuredSourcePayload(enrichedPayload, into: document)
+        seedWorkbenchProgressIfNeeded(for: document, with: enrichedPayload.bundle)
+        structuredSourceErrors[document.id] = localFallback.message
+        structuredSourceStages[document.id] = .localFallbackReady
+    }
+
+    private func recoverNonTerminalStructuredLoadIfPossible(
+        document: SourceDocument,
+        draft: SourceTextDraft?,
+        payload: StructuredSourceParsePayload?
+    ) {
+        let stage = structuredSourceStages[document.id]
+        let alreadyRecovered = structuredSources[document.id] != nil
+        let needsRecovery = stage == nil
+            || stage == .extracting
+            || stage == .grouping
+            || stage == .classifying
+            || stage == .buildingPreview
+            || stage == .buildingTree
+            || (stage == .failed && !alreadyRecovered)
+
+        guard needsRecovery,
+              let draft else { return }
+        let recoveryPayload = payload ?? buildLastResortMaterialFallbackPayload(
+            document: document,
+            draft: draft
+        )
+
+        TextPipelineDiagnostics.log(
+            "PP",
+            [
+                "[PP][Recovery]",
+                "non_terminal_stage_converted_to_local_fallback=true",
+                "last_resort_payload=\(payload == nil)",
+                "doc=\(document.id)",
+                "stage=\(stage?.rawValue ?? "nil")",
+                "raw_text_length=\(draft.rawText.count)",
+                "sentence_drafts=\(draft.sentenceDrafts.count)"
+            ].joined(separator: " "),
+            severity: .warning
+        )
+        forceStructuredMaterialFallback(
+            document: document,
+            draft: draft,
+            payload: recoveryPayload,
+            reason: "nonTerminalStage:\(stage?.rawValue ?? "nil")"
+        )
+    }
+
+    private func buildLastResortMaterialFallbackPayload(
+        document: SourceDocument,
+        draft: SourceTextDraft
+    ) -> StructuredSourceParsePayload {
+        let payload = AISourceParsingService.buildLocalFallbackPayload(
+            documentID: document.id,
+            title: document.title,
+            documentType: document.documentType,
+            pageCount: document.pageCount,
+            draft: draft
+        )
+        TextPipelineDiagnostics.log(
+            "PP",
+            [
+                "[PP][Recovery]",
+                "last_resort_local_payload_built=true",
+                "doc=\(document.id)",
+                "segments=\(payload.bundle.segments.count)",
+                "sentences=\(payload.bundle.sentences.count)",
+                "source_kinds=\(Self.sourceKindSummary(for: payload.bundle))"
+            ].joined(separator: " "),
+            severity: .warning
+        )
+        return payload
+    }
+
+    private func forceStructuredMaterialFallback(
+        document: SourceDocument,
+        draft: SourceTextDraft,
+        payload: StructuredSourceParsePayload,
+        reason: String
+    ) {
+        let decision = StructuredSourceMaterialGate
+            .evaluate(draft: draft, bundle: payload.bundle)
+            .withFallbackOverride(
+                mode: preferredForcedFallbackMode(for: payload.bundle),
+                appendedReason: reason
+            )
+        applyStructuredMaterialFallback(
+            document: document,
+            payload: payload,
+            decision: decision,
+            convertedFromEarlyFail: true
+        )
+    }
+
+    private func preferredForcedFallbackMode(for bundle: StructuredSourceBundle) -> StructuredSourceMaterialMode {
+        let nonEmptySegments = bundle.segments.filter {
+            !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        let counts = Dictionary(grouping: nonEmptySegments, by: { $0.provenance.sourceKind })
+            .mapValues(\.count)
+        let questionCount = (counts[.question] ?? 0) + (counts[.answerKey] ?? 0)
+        let vocabularyCount = (counts[.vocabularySupport] ?? 0) + (counts[.bilingualNote] ?? 0)
+        let learningCount = (counts[.chineseInstruction] ?? 0) + (counts[.passageHeading] ?? 0)
+
+        if questionCount >= max(vocabularyCount, learningCount), questionCount > 0 {
+            return .questionSheet
+        }
+        if vocabularyCount >= max(questionCount, learningCount), vocabularyCount > 0 {
+            return .vocabularyNotes
+        }
+        if learningCount > 0 {
+            return .learningMaterial
+        }
+        return nonEmptySegments.isEmpty ? .insufficientText : .auxiliaryOnlyMap
+    }
+
+    private static func sourceKindSummary(for bundle: StructuredSourceBundle) -> String {
+        let counts = Dictionary(grouping: bundle.segments, by: { $0.provenance.sourceKind.rawValue })
+            .mapValues(\.count)
+        return counts
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key):\($0.value)" }
+            .joined(separator: ",")
     }
 
     private func baseStructuredStage(
@@ -742,7 +1232,35 @@ final class AppViewModel: ObservableObject {
             return bundle.hasProfessorAnalysis ? .ready : .partialReady
         case .legacyLocal, .legacyRemote:
             return bundle.hasProfessorAnalysis ? .ready : .fallbackLegacy
+        case .materialLocalFallback:
+            return .localFallbackReady
         }
+    }
+
+    private func isProfessorDeltaCurrent(
+        _ delta: ProfessorAnalysisDelta,
+        document: SourceDocument,
+        bundle: StructuredSourceBundle,
+        requestID: String?
+    ) -> Bool {
+        let mode = delta.passageAnalysisDiagnostics?.materialMode
+            ?? MaterialAnalysisGate.evaluate(document: document, bundle: bundle).mode
+        let expected = PassageAnalysisIdentity.make(
+            document: document,
+            bundle: bundle,
+            materialMode: mode
+        )
+        let decision = PassageAnalysisIdentityGuard.validate(
+            expected: expected,
+            actual: delta.passageAnalysisIdentity
+        )
+        PassageAnalysisIdentityGuard.logDecision(
+            requestID: requestID,
+            expected: expected,
+            actual: delta.passageAnalysisIdentity,
+            decision: decision
+        )
+        return decision.isAllowed
     }
 
     /// PP 失败原因分类
@@ -766,6 +1284,14 @@ final class AppViewModel: ObservableObject {
     /// 尝试通过 PP-StructureV3 后端解析文档
     /// 返回 (payload, normalizedDocument) 或 nil（不可用/失败）
     private func attemptPPStructureParse(for document: SourceDocument) async -> (StructuredSourceParsePayload, NormalizedDocument)? {
+        let route = DocumentParseEndpointConfig.snapshot
+        guard route.isConfigured else {
+            DocumentParseService.logRemoteUnavailableRoute()
+            let reason = DocumentParseServiceError.remoteUnavailable.localizedDescription
+            structuredSourceErrors[document.id] = reason
+            return nil
+        }
+
         // 检查是否有本地文件可上传
         guard let filePath = document.filePath else {
             let reason = "无本地文件路径，跳过 PP-StructureV3"
@@ -887,32 +1413,14 @@ final class AppViewModel: ObservableObject {
             return localPayload
         }
 
-        do {
-            structuredSourceStages[document.id] = .buildingPreview
-            TextPipelineDiagnostics.log(
-                "AI",
-                "[AI][LegacyParse] local fallback too weak, calling remote parse-source quality=\(qualityReport.debugSummary)",
-                severity: .warning
-            )
-            TextPipelineDiagnostics.log("PP", "[PP] fallback → legacy REMOTE doc=\(document.id)", severity: .warning)
-            let payload = try await withTimeoutOrThrow(seconds: 60) { [document, draft] in
-                try await AISourceParsingService.parseSource(
-                    documentID: document.id,
-                    title: document.title,
-                    documentType: document.documentType,
-                    pageCount: document.pageCount,
-                    draft: draft,
-                    localFallback: localPayload
-                )
-            }
-            TextPipelineDiagnostics.log("PP", "[PP] fallback → legacy REMOTE DONE sentences=\(payload.bundle.sentences.count) doc=\(document.id)", severity: .warning)
-            return payload
-        } catch {
-            TextPipelineDiagnostics.log("PP", "[PP] fallback legacy remote also failed: \(error.localizedDescription), using local fallback doc=\(document.id)", severity: .error)
-            structuredSourceStages[document.id] = .buildingTree
-            TextPipelineDiagnostics.log("PP", "[PP] fallback → legacy LOCAL (after remote fail) DONE sentences=\(localPayload.bundle.sentences.count) doc=\(document.id)", severity: .warning)
-            return localPayload
-        }
+        structuredSourceStages[document.id] = .buildingTree
+        TextPipelineDiagnostics.log(
+            "AI",
+            "[AI][LegacyParse] remote parse-source disabled by runtime path lock, using local fallback quality=\(qualityReport.debugSummary)",
+            severity: .warning
+        )
+        TextPipelineDiagnostics.log("PP", "[PP] fallback → legacy LOCAL (remote parse-source disabled) DONE sentences=\(localPayload.bundle.sentences.count) doc=\(document.id)", severity: .warning)
+        return localPayload
     }
 
     /// 带超时的异步操作包装
@@ -949,8 +1457,14 @@ final class AppViewModel: ObservableObject {
     func explainSentenceContext(for sentence: Sentence, in document: SourceDocument) -> ExplainSentenceContext {
         guard let bundle = structuredSource(for: document),
               let segment = bundle.segment(id: sentence.segmentID) else {
+            let selectionState = SourceSelectionState.make(
+                document: document,
+                sentence: sentence,
+                segment: nil
+            )
             return ExplainSentenceContext(
                 title: document.title,
+                documentID: document.id.uuidString,
                 sentenceID: sentence.id,
                 segmentID: sentence.segmentID,
                 anchorLabel: sentence.anchorLabel,
@@ -958,10 +1472,16 @@ final class AppViewModel: ObservableObject {
                 context: sentence.text,
                 paragraphTheme: "",
                 paragraphRole: "",
-                questionPrompt: ""
+                questionPrompt: "",
+                selectionState: selectionState
             )
         }
 
+        let selectionState = SourceSelectionState.make(
+            document: document,
+            sentence: sentence,
+            segment: segment
+        )
         let segmentSentences = bundle.sentences(in: segment)
         let surrounding = segmentSentences.filter {
             abs($0.localIndex - sentence.localIndex) <= 1
@@ -973,6 +1493,7 @@ final class AppViewModel: ObservableObject {
 
         return ExplainSentenceContext(
             title: document.title,
+            documentID: document.id.uuidString,
             sentenceID: sentence.id,
             segmentID: sentence.segmentID,
             anchorLabel: sentence.anchorLabel,
@@ -980,7 +1501,21 @@ final class AppViewModel: ObservableObject {
             context: context.isEmpty ? segment.text : context,
             paragraphTheme: paragraphCard?.theme ?? "",
             paragraphRole: paragraphCard?.argumentRole.displayName ?? "",
-            questionPrompt: linkedQuestion
+            questionPrompt: linkedQuestion,
+            selectionState: selectionState
+        )
+    }
+
+    func explainSentenceRequestIdentity(for sentence: Sentence, in document: SourceDocument) -> AIRequestIdentity? {
+        AIRequestIdentity.make(document: document, sentence: sentence)
+    }
+
+    func sourceSelectionState(for sentence: Sentence, in document: SourceDocument) -> SourceSelectionState {
+        let segment = structuredSource(for: document)?.segment(id: sentence.segmentID)
+        return SourceSelectionState.make(
+            document: document,
+            sentence: sentence,
+            segment: segment
         )
     }
 
@@ -1511,7 +2046,8 @@ final class AppViewModel: ObservableObject {
 
     func explainSentenceContext(for card: Card) -> ExplainSentenceContext? {
         let chunk = knowledgeChunk(for: card)
-        let sourceTitle = sourceTitle(for: card)
+        guard let document = sourceDocument(for: card) else { return nil }
+        let sourceTitle = document.title
         let sentenceCandidates = [
             card.frontContent,
             chunk?.content,
@@ -1529,10 +2065,22 @@ final class AppViewModel: ObservableObject {
             return nil
         }
 
+        let matchedSentence = matchedSentenceForCardExplanation(
+            candidates: sentenceCandidates,
+            document: document
+        )
+        let matchedSegment = structuredSource(for: document)?.segment(id: matchedSentence?.segmentID)
+        let selectionState = SourceSelectionState.make(
+            document: document,
+            text: sentence,
+            sentence: matchedSentence,
+            segment: matchedSegment
+        )
+
         let context = [
             chunk?.content,
             card.backContent,
-            sourceDocument(for: card)?.extractedText
+            document.extractedText
         ]
         .compactMap { value in
             let normalized = (value ?? "")
@@ -1544,15 +2092,51 @@ final class AppViewModel: ObservableObject {
 
         return ExplainSentenceContext(
             title: sourceTitle,
-            sentenceID: nil,
-            segmentID: nil,
-            anchorLabel: nil,
+            documentID: document.id.uuidString,
+            sentenceID: matchedSentence?.id,
+            segmentID: matchedSentence?.segmentID,
+            anchorLabel: matchedSentence?.anchorLabel,
             sentence: sentence,
             context: context,
             paragraphTheme: "",
             paragraphRole: "",
-            questionPrompt: ""
+            questionPrompt: "",
+            selectionState: selectionState
         )
+    }
+
+    func explainSentenceRequestIdentity(for card: Card) -> AIRequestIdentity? {
+        guard let context = explainSentenceContext(for: card) else { return nil }
+        return context.makeRequestIdentity()
+    }
+
+    private func matchedSentenceForCardExplanation(
+        candidates: [String],
+        document: SourceDocument
+    ) -> Sentence? {
+        guard let bundle = structuredSource(for: document) else { return nil }
+
+        let normalizedCandidates = Set(candidates.map(Self.normalizedEnglishComparisonKey))
+        guard !normalizedCandidates.isEmpty else { return nil }
+
+        return bundle.sentences.first { sentence in
+            let normalizedSentence = Self.normalizedEnglishComparisonKey(sentence.text)
+            guard !normalizedSentence.isEmpty else { return false }
+            if normalizedCandidates.contains(normalizedSentence) {
+                return true
+            }
+            return normalizedCandidates.contains { candidate in
+                normalizedSentence.contains(candidate) || candidate.contains(normalizedSentence)
+            }
+        }
+    }
+
+    private static func normalizedEnglishComparisonKey(_ value: String) -> String {
+        value
+            .lowercased()
+            .replacingOccurrences(of: #"[^\p{Latin}0-9]+"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     func generateDraftCards(for document: SourceDocument) async throws -> Int {
@@ -1690,6 +2274,7 @@ final class AppViewModel: ObservableObject {
             limit: 12
         )
         updated.pageCount = max(updated.pageCount, payload.bundle.source.pageCount)
+        updated.chunkCount = max(updated.chunkCount, payload.bundle.segments.count)
         updated.lastProcessingError = nil
         sourceDocuments[index] = updated
     }
@@ -1940,8 +2525,6 @@ final class AppViewModel: ObservableObject {
             return "教学重点"
         case .supportingSentence:
             return "支撑句"
-        case .misreadingTrap:
-            return "易错点"
         case .questionLink:
             return "题目联动"
         case .vocabularySupport:

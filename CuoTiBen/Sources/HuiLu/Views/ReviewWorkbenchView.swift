@@ -162,23 +162,28 @@ struct ReviewWorkbenchView: View {
                 .padding(.bottom, safeBottom)
 
                 if showsPadOutlineWorkspace, let structuredSource {
-                    StructureTreeWorkspaceOverlay(
-                        title: liveDocument.title,
-                        nodes: structuredSource.outline,
-                        highlightedNodeID: highlightedNodeID,
-                        jumpTargetNodeID: jumpTargetOutlineNodeID,
-                        ancestorNodeIDs: outlineAncestorNodeIDs,
+                    MindMapWorkspaceOverlay(
+                        documentTitle: liveDocument.title,
+                        bundle: structuredSource,
+                        focusSentenceID: highlightedSentenceID,
+                        focusSegmentIDs: highlightedSegmentIDs,
                         onNodeTap: { node in
-                            handleNodeSelection(
+                            handleMindMapNodeSelection(
                                 node,
-                                recordProgress: true,
-                                shouldJump: true,
                                 revealAnalysisOnPhone: false
                             )
                         },
-                        onJumpHandled: handleOutlineJumpHandled,
                         onClose: {
                             showsPadOutlineWorkspace = false
+                        },
+                        onRegenerate: {
+                            Task {
+                                await viewModel.ensureProfessorAnalysis(
+                                    for: liveDocument,
+                                    trigger: .openReviewWorkbench,
+                                    force: true
+                                )
+                            }
                         }
                     )
                     .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .center)))
@@ -293,6 +298,7 @@ struct ReviewWorkbenchView: View {
                 ReviewWorkbenchAnalysisPane(
                     document: liveDocument,
                     bundle: bundle,
+                    analysisStatusMessage: viewModel.structuredSourceError(for: liveDocument),
                     usesPadLayout: true,
                     showsOutlineButton: true,
                     panelKind: panelKind,
@@ -313,6 +319,15 @@ struct ReviewWorkbenchView: View {
                     onWordTap: handleWordSelection,
                     onShowOutline: {
                         showsPadOutlineWorkspace = true
+                    },
+                    onRetryPassageAnalysis: {
+                        Task {
+                            await viewModel.ensureProfessorAnalysis(
+                                for: liveDocument,
+                                trigger: .openReviewWorkbench,
+                                force: true
+                            )
+                        }
                     }
                 )
                 .frame(width: rightWidth)
@@ -548,6 +563,44 @@ struct ReviewWorkbenchView: View {
         if usesPhoneLayout, revealAnalysisOnPhone {
             phoneDrawerDetent = .large
             showsPhoneAnalysisDrawer = true
+        }
+    }
+
+    private func handleMindMapNodeSelection(
+        _ node: MindMapNode,
+        revealAnalysisOnPhone: Bool
+    ) {
+        guard let structuredSource else { return }
+
+        if node.kind == .anchorSentence,
+           let sentence = structuredSource.sentence(id: node.provenance.sourceSentenceID) {
+            handleSentenceSelection(
+                sentence,
+                recordProgress: true,
+                shouldJump: true,
+                revealAnalysisOnPhone: revealAnalysisOnPhone
+            )
+            return
+        }
+
+        if let outlineNode = structuredSource.bestOutlineNode(forSentenceID: node.provenance.sourceSentenceID)
+            ?? structuredSource.bestOutlineNode(forSegmentID: node.provenance.sourceSegmentID) {
+            handleNodeSelection(
+                outlineNode,
+                recordProgress: true,
+                shouldJump: true,
+                revealAnalysisOnPhone: revealAnalysisOnPhone
+            )
+            return
+        }
+
+        if let sentence = structuredSource.sentences.first(where: { $0.segmentID == node.provenance.sourceSegmentID }) {
+            handleSentenceSelection(
+                sentence,
+                recordProgress: true,
+                shouldJump: true,
+                revealAnalysisOnPhone: revealAnalysisOnPhone
+            )
         }
     }
 
@@ -952,6 +1005,7 @@ private struct ReviewWorkbenchOriginalPane: View {
 private struct ReviewWorkbenchAnalysisPane: View {
     let document: SourceDocument
     let bundle: StructuredSourceBundle
+    let analysisStatusMessage: String?
     let usesPadLayout: Bool
     let showsOutlineButton: Bool
     let panelKind: ReviewWorkbenchPanelKind
@@ -967,6 +1021,19 @@ private struct ReviewWorkbenchAnalysisPane: View {
     let onAnchorTap: (OutlineNodeAnchorItem) -> Void
     let onWordTap: (WordExplanationEntry) -> Void
     let onShowOutline: () -> Void
+    let onRetryPassageAnalysis: () -> Void
+
+    private var materialMode: MaterialAnalysisMode? {
+        bundle.passageAnalysisDiagnostics?.materialMode
+    }
+
+    private var analysisStatusTitle: String {
+        materialMode?.statusTitle ?? "AI 地图分析暂不可用，已展示本地结构骨架"
+    }
+
+    private var allowsPassageRetry: Bool {
+        materialMode == nil || materialMode == .passageReading
+    }
 
     var body: some View {
         PaperSheetCard(
@@ -985,7 +1052,7 @@ private struct ReviewWorkbenchAnalysisPane: View {
                         Button(action: onShowOutline) {
                             HStack(spacing: 6) {
                                 Image(systemName: "list.bullet.indent")
-                                Text("结构树")
+                                Text("思维导图")
                             }
                             .font(.system(size: 12, weight: .semibold, design: .serif))
                             .foregroundStyle(Color.blue.opacity(0.8))
@@ -1002,6 +1069,33 @@ private struct ReviewWorkbenchAnalysisPane: View {
                     Text(modeLabel)
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(AppPalette.paperMuted)
+                }
+
+                if let analysisStatusMessage = analysisStatusMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !analysisStatusMessage.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(analysisStatusTitle)
+                            .font(.system(size: 15, weight: .bold, design: .serif))
+                            .foregroundStyle(AppPalette.paperInk)
+
+                        Text(analysisStatusMessage)
+                            .font(.system(size: 14, weight: .medium, design: .serif))
+                            .foregroundStyle(AppPalette.paperMuted)
+
+                        if allowsPassageRetry {
+                            Button("稍后重新生成地图") {
+                                onRetryPassageAnalysis()
+                            }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 13, weight: .semibold, design: .serif))
+                            .foregroundStyle(Color.blue.opacity(0.82))
+                        }
+                    }
+                    .padding(14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(Color.white.opacity(0.68))
+                    )
                 }
 
                 ReviewWorkbenchPanelShell(contentPadding: usesPadLayout ? 18 : 14) {
@@ -1049,47 +1143,6 @@ private struct ReviewWorkbenchAnalysisPane: View {
         }
     }
 
-    private var outlineTreeCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("思维导图")
-                .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(Color.black.opacity(0.7))
-
-            ScrollViewReader { proxy in
-                ScrollView(showsIndicators: false) {
-                    SourceOutlineTab(
-                        nodes: bundle.outline,
-                        highlightedNodeID: highlightedNodeID,
-                        jumpTargetNodeID: nil,
-                        ancestorNodeIDs: ancestorNodeIDs,
-                        onNodeTap: onNodeTap,
-                        onJumpHandled: {}
-                    )
-                    .padding(.bottom, 6)
-                }
-                .frame(minHeight: outlineTreeMinHeight, maxHeight: outlineTreeMaxHeight)
-                .onAppear {
-                    scrollToOutlineTarget(with: proxy, animated: false)
-                }
-                .onChange(of: jumpTargetNodeID) { _ in
-                    scrollToOutlineTarget(with: proxy, animated: true)
-                }
-                .onChange(of: highlightedNodeID) { _ in
-                    scrollToOutlineTarget(with: proxy, animated: true)
-                }
-            }
-        }
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(Color.white.opacity(0.72))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .stroke(Color.white.opacity(0.9), lineWidth: 1)
-                )
-        )
-    }
-
     private var modeLabel: String {
         switch panelKind {
         case .empty:
@@ -1103,39 +1156,6 @@ private struct ReviewWorkbenchAnalysisPane: View {
         }
     }
 
-    private var outlineTreeMinHeight: CGFloat {
-        if usesPadLayout {
-            return panelKind == .empty ? 150 : 120
-        }
-
-        return panelKind == .empty ? 132 : 108
-    }
-
-    private var outlineTreeMaxHeight: CGFloat {
-        if usesPadLayout {
-            return panelKind == .empty ? 220 : 168
-        }
-
-        return panelKind == .empty ? 160 : 128
-    }
-
-    private func scrollToOutlineTarget(with proxy: ScrollViewProxy, animated: Bool) {
-        guard let targetID = jumpTargetNodeID ?? highlightedNodeID else { return }
-
-        let action = {
-            proxy.scrollTo(targetID, anchor: .center)
-        }
-
-        if animated {
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.88)) {
-                action()
-            }
-        } else {
-            action()
-        }
-
-        onOutlineJumpHandled()
-    }
 }
 
 private struct ReviewWorkbenchPhoneAnalysisDrawer: View {
@@ -1294,6 +1314,7 @@ private struct ReviewWorkbenchSentencePanel: View {
     @State private var noteSeed: NoteEditorSeed?
     @State private var actionNote: String?
     @State private var explanationTask: Task<Void, Never>?
+    @State private var activeExplanationRequestID: String?
 
     private var breadcrumb: SentenceBreadcrumb {
         viewModel.sentenceBreadcrumb(for: sentence, in: document)
@@ -1323,6 +1344,10 @@ private struct ReviewWorkbenchSentencePanel: View {
         return bundled
     }
 
+    private var selectionState: SourceSelectionState {
+        viewModel.sourceSelectionState(for: sentence, in: document)
+    }
+
     private var visibleResult: AIExplainSentenceResult? {
         guard let result, isResultVisible(result, for: sentence) else {
             return nil
@@ -1332,6 +1357,7 @@ private struct ReviewWorkbenchSentencePanel: View {
 
     private var shouldAutoLoadRemoteExplanation: Bool {
         guard !isLoading, result == nil else { return false }
+        guard selectionState.allowsCloudSentenceExplain else { return false }
         guard let bundled = bundledAnalysis else { return true }
         return bundled.shouldPreferSentenceExplain(for: sentence.text)
     }
@@ -1376,6 +1402,7 @@ private struct ReviewWorkbenchSentencePanel: View {
             result = nil
             errorMessage = nil
             isLoading = false
+            activeExplanationRequestID = nil
             maybeAutoLoadExplanation()
         }
         .onAppear {
@@ -1384,6 +1411,7 @@ private struct ReviewWorkbenchSentencePanel: View {
         .onDisappear {
             explanationTask?.cancel()
             explanationTask = nil
+            activeExplanationRequestID = nil
         }
     }
 
@@ -1469,11 +1497,28 @@ private struct ReviewWorkbenchSentencePanel: View {
 
     @ViewBuilder
     private var explanationSection: some View {
-        if let analysis = effectiveAnalysis {
+        let currentSelection = selectionState
+        if !currentSelection.allowsCloudSentenceExplain {
+            VStack(alignment: .leading, spacing: 14) {
+                SentenceExplainBlock(
+                    title: "本地骨架",
+                    content: "当前展示的是本地结构骨架，远端 AI 精讲尚未成功获取。",
+                    tone: .neutral
+                )
+                SourceSelectionSkeletonPanel(selectionState: currentSelection)
+            }
+        } else if let analysis = effectiveAnalysis {
             VStack(alignment: .leading, spacing: 14) {
                 if isLoading {
                     ProgressView("正在获取教授式精讲…")
                         .font(.system(size: 15, weight: .medium))
+                } else if let visibleResult, visibleResult.shouldShowFallbackBanner {
+                    SentenceExplainBlock(
+                        title: "提示",
+                        content: visibleResult.displayFallbackMessage,
+                        tone: .neutral
+                    )
+                    debugTransportSection(for: visibleResult)
                 } else if let errorMessage, result == nil {
                     SentenceExplainBlock(
                         title: "提示",
@@ -1500,7 +1545,7 @@ private struct ReviewWorkbenchSentencePanel: View {
                 )
 
                 if !isLoading, result == nil {
-                    remoteExplanationButton(title: "补充云端精讲（会消耗额度）")
+                    remoteExplanationButton(title: "重新获取 AI 精讲")
                 }
             }
         } else if isLoading {
@@ -1515,7 +1560,7 @@ private struct ReviewWorkbenchSentencePanel: View {
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(Color.black.opacity(0.62))
 
-                Button("重新获取") {
+                Button("重新获取 AI 精讲") {
                     scheduleExplanationLoad(force: true)
                 }
                 .font(.system(size: 14, weight: .semibold))
@@ -1531,7 +1576,7 @@ private struct ReviewWorkbenchSentencePanel: View {
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(Color.black.opacity(0.62))
 
-                remoteExplanationButton(title: "获取云端精讲（会消耗额度）")
+                remoteExplanationButton(title: "获取 AI 精讲")
             }
         }
     }
@@ -1584,52 +1629,102 @@ private struct ReviewWorkbenchSentencePanel: View {
         for currentSentence: Sentence,
         forceRefresh: Bool
     ) async {
+        let context = viewModel.explainSentenceContext(for: currentSentence, in: document)
         await MainActor.run {
             guard sentence.id == currentSentence.id else { return }
             isLoading = true
             errorMessage = nil
             result = nil
+            activeExplanationRequestID = nil
+        }
+
+        guard let requestIdentity = viewModel.explainSentenceRequestIdentity(for: currentSentence, in: document) else {
+            _ = try? ExplainSentenceRequestBuilder.prepare(context: context, requestIdentity: nil)
+            let fallback = LocalSentenceFallbackBuilder.build(
+                context: context,
+                requestIdentity: nil,
+                structuredError: AIStructuredError.invalidRequest(message: "缺少 sentence identity 字段。")
+            )
+            await MainActor.run {
+                guard sentence.id == currentSentence.id else { return }
+                result = fallback
+                errorMessage = fallback.displayFallbackMessage
+                isLoading = false
+                activeExplanationRequestID = nil
+            }
+            return
+        }
+
+        await MainActor.run {
+            guard sentence.id == currentSentence.id else { return }
+            activeExplanationRequestID = requestIdentity.clientRequestID
         }
 
         do {
-            let context = viewModel.explainSentenceContext(for: currentSentence, in: document)
             let fetched = try await AIExplainSentenceService.fetchExplanationWithCache(
                 for: context,
+                requestIdentity: requestIdentity,
                 forceRefresh: forceRefresh
             )
             try Task.checkCancellation()
 
             guard isResultVisible(fetched, for: currentSentence) else {
-                throw AIExplainSentenceServiceError.requestFailed(
-                    AIServiceFailureContext(
-                        message: "返回结果与当前句不一致",
-                        errorCode: "GEMINI_INVALID_RESPONSE",
-                        requestID: nil,
-                        retryable: false,
-                        fallbackAvailable: false,
-                        usedCache: false,
-                        usedFallback: false,
-                        retryCount: 0
-                    )
+                TextPipelineDiagnostics.log(
+                    "AI",
+                    "[AI][SentenceExplain] discard stale result request_id=\(requestIdentity.clientRequestID) sentence_id=\(requestIdentity.sentenceID)",
+                    severity: .warning
                 )
+                await MainActor.run {
+                    guard sentence.id == currentSentence.id else { return }
+                    guard activeExplanationRequestID == requestIdentity.clientRequestID else { return }
+                    isLoading = false
+                }
+                return
             }
 
             await MainActor.run {
                 guard sentence.id == currentSentence.id else { return }
+                guard activeExplanationRequestID == requestIdentity.clientRequestID else {
+                    TextPipelineDiagnostics.log(
+                        "AI",
+                        "[AI][SentenceExplain] discard stale request request_id=\(requestIdentity.clientRequestID) discard_reason=requestSuperseded",
+                        severity: .warning
+                    )
+                    return
+                }
                 result = fetched
+                errorMessage = fetched.shouldShowFallbackBanner ? fetched.displayFallbackMessage : nil
                 isLoading = false
+                activeExplanationRequestID = nil
             }
         } catch is CancellationError {
             await MainActor.run {
                 guard sentence.id == currentSentence.id else { return }
                 isLoading = false
+                if activeExplanationRequestID == requestIdentity.clientRequestID {
+                    activeExplanationRequestID = nil
+                }
             }
         } catch {
+            let fallback = LocalSentenceFallbackBuilder.build(
+                context: context,
+                requestIdentity: requestIdentity,
+                structuredError: AIStructuredError.invalidModelResponse(message: error.localizedDescription)
+            )
             await MainActor.run {
                 guard sentence.id == currentSentence.id else { return }
-                result = nil
-                errorMessage = error.localizedDescription
+                guard activeExplanationRequestID == requestIdentity.clientRequestID else {
+                    TextPipelineDiagnostics.log(
+                        "AI",
+                        "[AI][SentenceExplain] discard stale fallback request_id=\(requestIdentity.clientRequestID) discard_reason=requestSuperseded",
+                        severity: .warning
+                    )
+                    return
+                }
+                result = fallback
+                errorMessage = fallback.displayFallbackMessage
                 isLoading = false
+                activeExplanationRequestID = nil
             }
         }
     }
@@ -1640,18 +1735,44 @@ private struct ReviewWorkbenchSentencePanel: View {
     }
 
     private func isResultVisible(_ result: AIExplainSentenceResult, for sentence: Sentence) -> Bool {
-        guard let identity = result.analysisIdentity else { return false }
-        let expectedIdentity = SentenceAnalysisIdentity(
-            sentenceID: sentence.id,
+        guard let expectedIdentity = AIRequestIdentity.make(document: document, sentence: sentence) else {
+            return false
+        }
+        return AIResponseIdentityGuard.validate(
+            expected: expectedIdentity,
+            actual: result.analysisIdentity
+        ).isAllowed && AnalysisConsistencyGuard.warnings(
+            expectedIdentity: expectedIdentity,
             sentenceText: sentence.text,
-            anchorLabel: sentence.anchorLabel
-        )
-        return identity == expectedIdentity &&
-            AnalysisConsistencyGuard.warnings(
-                identity: expectedIdentity,
-                sentenceText: sentence.text,
-                analysis: result
-            ).isEmpty
+            analysis: result
+        ).isEmpty
+    }
+
+    @ViewBuilder
+    private func debugTransportSection(for result: AIExplainSentenceResult) -> some View {
+        #if DEBUG
+        let debugLines = [
+            result.requestID.map { "request_id：\($0)" },
+            result.errorCode.map { "error_code：\($0)" },
+            "used_fallback：\(result.usedFallback ? "true" : "false")",
+            "used_cache：\(result.usedCache ? "true" : "false")",
+            "retry_count：\(result.retryCount)"
+        ].compactMap { $0 }
+
+        if !debugLines.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("DEBUG")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Color.black.opacity(0.55))
+
+                ForEach(debugLines, id: \.self) { line in
+                    Text(line)
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Color.black.opacity(0.55))
+                }
+            }
+        }
+        #endif
     }
 }
 

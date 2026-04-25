@@ -5,6 +5,7 @@ struct HomeView: View {
     @State private var showingReview = false
     @State private var selectedWorkbenchDocument: SourceDocument?
     @State private var selectedWorkbenchAnchor: SourceAnchor?
+    @State private var selectedRecentDocument: SourceDocument?
     @State private var showsSettings = false
     @State private var showsNotesHome = false
 
@@ -27,6 +28,10 @@ struct HomeView: View {
 
     private var primaryWorkbenchDocument: SourceDocument? {
         workbenchDocuments.first
+    }
+
+    private var recentImportedDocuments: [SourceDocument] {
+        Array(viewModel.sourceDocuments.sorted { $0.importDate > $1.importDate }.prefix(4))
     }
 
     private var usesPadDashboard: Bool {
@@ -69,6 +74,8 @@ struct HomeView: View {
                                         .frame(maxWidth: .infinity)
                                 }
 
+                                recentImportedMaterialsPanel(isPad: true)
+
                                 LazyVGrid(
                                     columns: [
                                         GridItem(.flexible(), spacing: 18),
@@ -91,6 +98,7 @@ struct HomeView: View {
                     ScrollView(showsIndicators: false) {
                         VStack(alignment: .leading, spacing: 18) {
                             dashboardHero(isPad: false)
+                            recentImportedMaterialsPanel(isPad: false)
                             continueReviewPanel(isPad: false)
                             todayTaskPanel(isPad: false)
                             dashboardWeakPointsCard
@@ -112,6 +120,12 @@ struct HomeView: View {
             ReviewWorkbenchView(document: document, initialAnchor: selectedWorkbenchAnchor) {
                 selectedWorkbenchAnchor = nil
                 selectedWorkbenchDocument = nil
+            }
+            .environmentObject(viewModel)
+        }
+        .fullScreenCover(item: $selectedRecentDocument) { document in
+            SourceDetailView(document: document) {
+                selectedRecentDocument = nil
             }
             .environmentObject(viewModel)
         }
@@ -138,7 +152,9 @@ struct HomeView: View {
         DashboardCard(cornerRadius: 24, padding: 14, tint: AppPalette.paperBackgroundDeep) {
             VStack(spacing: 18) {
                 DashboardRailItem(icon: "house", title: "首页", isSelected: true, action: {})
-                DashboardRailItem(icon: "books.vertical", title: "知识库", isSelected: false, action: {})
+                DashboardRailItem(icon: "books.vertical", title: "知识库", isSelected: false) {
+                    NotificationCenter.default.post(name: .switchToLibraryTab, object: nil)
+                }
                 DashboardRailItem(icon: "note.text", title: "笔记", isSelected: false) {
                     showsNotesHome = true
                 }
@@ -307,6 +323,34 @@ struct HomeView: View {
                     .foregroundStyle(Color.white)
                 }
                 .buttonStyle(RibbonButtonStyle())
+            }
+        }
+    }
+
+    private func recentImportedMaterialsPanel(isPad: Bool) -> some View {
+        DashboardCard(cornerRadius: isPad ? 28 : 24, padding: isPad ? 22 : 18) {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("最近导入资料")
+                    .font(.system(size: isPad ? 22 : 18, weight: .bold, design: .serif))
+                    .foregroundStyle(AppPalette.paperInk)
+
+                if recentImportedDocuments.isEmpty {
+                    Text("导入资料后，即使远端解析失败或只生成本地骨架，也会显示在这里。")
+                        .font(.system(size: 14, weight: .medium, design: .serif))
+                        .foregroundStyle(AppPalette.paperMuted)
+                } else {
+                    VStack(spacing: 10) {
+                        ForEach(recentImportedDocuments) { document in
+                            Button {
+                                selectedRecentDocument = document
+                            } label: {
+                                HomeRecentMaterialRow(document: document)
+                                    .environmentObject(viewModel)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
             }
         }
     }
@@ -697,6 +741,89 @@ struct FocusPill: View {
                         .stroke(Color.black.opacity(0.06), lineWidth: 1)
                 )
         )
+    }
+}
+
+private struct HomeRecentMaterialRow: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+    let document: SourceDocument
+
+    private var liveDocument: SourceDocument {
+        viewModel.sourceDocuments.first(where: { $0.id == document.id }) ?? document
+    }
+
+    private var parseInfo: ParseSessionInfo? {
+        viewModel.parseSessionInfo(for: liveDocument)
+    }
+
+    private var materialMode: String {
+        viewModel.structuredSource(for: liveDocument)?
+            .passageAnalysisDiagnostics?
+            .materialMode
+            .rawValue ?? "pending"
+    }
+
+    private var statusText: String {
+        if parseInfo?.skippedBecauseUnconfigured == true {
+            return "文档解析接口未配置 · 本地骨架"
+        }
+        if parseInfo?.fallbackUsed == true {
+            return "本地骨架"
+        }
+        switch liveDocument.processingStatus {
+        case .imported: return "已导入"
+        case .parsing: return "云端解析中"
+        case .ready: return "AI 已分析"
+        case .failed: return "请求失败，可重试"
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: liveDocument.documentType.icon)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(AppPalette.paperInk.opacity(0.72))
+                    .frame(width: 20)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(liveDocument.title)
+                        .font(.system(size: 15, weight: .semibold, design: .serif))
+                        .foregroundStyle(AppPalette.paperInk)
+                        .lineLimit(2)
+
+                    Text("\(liveDocument.documentType.displayName) · \(liveDocument.pageCount) 页 · \(statusText)")
+                        .font(.system(size: 12, weight: .medium, design: .serif))
+                        .foregroundStyle(AppPalette.paperMuted)
+                }
+
+                Spacer(minLength: 8)
+
+                Text(relativeImportDate)
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(AppPalette.paperMuted)
+            }
+
+            Text("materialMode=\(materialMode) · progress=\(progressText)")
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(AppPalette.paperInk.opacity(0.58))
+        }
+        .padding(.vertical, 8)
+    }
+
+    private var progressText: String {
+        switch liveDocument.processingStatus {
+        case .ready: return "100%"
+        case .parsing: return "42%"
+        case .imported: return "20%"
+        case .failed: return parseInfo?.fallbackUsed == true ? "100%" : "12%"
+        }
+    }
+
+    private var relativeImportDate: String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        return formatter.localizedString(for: liveDocument.importDate, relativeTo: Date())
     }
 }
 

@@ -119,21 +119,21 @@ struct StructureTreePreviewMetrics {
 
     var collapsedBranchLimit: Int {
         switch densityMode {
-        case .detailed: return 4
+        case .detailed: return 2
         case .compact: return 1
         }
     }
 
     var focusedCollapsedBranchLimit: Int {
         switch densityMode {
-        case .detailed: return 4
+        case .detailed: return 3
         case .compact: return 2
         }
     }
 
     var expandedBranchLimit: Int {
         switch densityMode {
-        case .detailed: return 4
+        case .detailed: return 5
         case .compact: return 3
         }
     }
@@ -265,8 +265,6 @@ enum StructureTreePreviewPalette {
             return Color(red: 0.79, green: 0.62, blue: 0.32)
         case .supportingSentence:
             return Color(red: 0.45, green: 0.67, blue: 0.82)
-        case .misreadingTrap:
-            return Color(red: 0.82, green: 0.49, blue: 0.31)
         case .questionLink:
             return Color(red: 0.77, green: 0.55, blue: 0.67)
         case .vocabularySupport:
@@ -288,8 +286,6 @@ enum StructureTreePreviewPalette {
             return "lightbulb.fill"
         case .supportingSentence:
             return "doc.text.fill"
-        case .misreadingTrap:
-            return "exclamationmark.triangle.fill"
         case .questionLink:
             return "questionmark.bubble.fill"
         case .vocabularySupport:

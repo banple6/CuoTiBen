@@ -131,6 +131,32 @@
 		B0000000000000000000007A /* ProfessorAnalysisCacheStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000007A /* ProfessorAnalysisCacheStore.swift */; };
 		B0000000000000000000007B /* StructuredSourceQualityEvaluator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000007B /* StructuredSourceQualityEvaluator.swift */; };
 		B0000000000000000000007C /* AnchorConsistencyValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000007C /* AnchorConsistencyValidator.swift */; };
+		B0000000000000000000007D /* AIRequestIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000007D /* AIRequestIdentity.swift */; };
+		B0000000000000000000007E /* AIResponseIdentityGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000007E /* AIResponseIdentityGuard.swift */; };
+		B00000000000000000000092 /* PassageAnalysisIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000092 /* PassageAnalysisIdentity.swift */; };
+		B00000000000000000000093 /* PassageAnalysisIdentityGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000093 /* PassageAnalysisIdentityGuard.swift */; };
+		B00000000000000000000094 /* RuntimeBuildFingerprint.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000094 /* RuntimeBuildFingerprint.swift */; };
+		B00000000000000000000095 /* CloudRequestProbeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000095 /* CloudRequestProbeService.swift */; };
+		B00000000000000000000096 /* CloudRequestDiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000096 /* CloudRequestDiagnosticsView.swift */; };
+		B0000000000000000000007F /* AIStructuredError.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000007F /* AIStructuredError.swift */; };
+		B00000000000000000000080 /* LocalSentenceFallbackBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000080 /* LocalSentenceFallbackBuilder.swift */; };
+		B00000000000000000000081 /* LocalPassageFallbackBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000081 /* LocalPassageFallbackBuilder.swift */; };
+		B00000000000000000000082 /* NodeProvenance.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000082 /* NodeProvenance.swift */; };
+		B00000000000000000000083 /* ParagraphMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000083 /* ParagraphMap.swift */; };
+		B00000000000000000000084 /* PassageMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000084 /* PassageMap.swift */; };
+		B00000000000000000000085 /* MindMapNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000085 /* MindMapNode.swift */; };
+		B00000000000000000000086 /* MindMapAdmissionResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000086 /* MindMapAdmissionResult.swift */; };
+		B00000000000000000000087 /* SourceHygieneScorer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000087 /* SourceHygieneScorer.swift */; };
+		B00000000000000000000088 /* MindMapAdmissionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000088 /* MindMapAdmissionService.swift */; };
+		B00000000000000000000089 /* MindMapWorkspaceViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000089 /* MindMapWorkspaceViewModel.swift */; };
+		B0000000000000000000008A /* MindMapWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000008A /* MindMapWorkspaceView.swift */; };
+		B0000000000000000000008B /* MindMapCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000008B /* MindMapCanvasView.swift */; };
+		B0000000000000000000008C /* MindMapMiniMapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000008C /* MindMapMiniMapView.swift */; };
+		B0000000000000000000008D /* MindMapToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000008D /* MindMapToolbar.swift */; };
+		B0000000000000000000008E /* MindMapLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000008E /* MindMapLayout.swift */; };
+		B0000000000000000000008F /* AnalyzePassageRequestBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000008F /* AnalyzePassageRequestBuilder.swift */; };
+		B00000000000000000000090 /* MaterialAnalysisGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000090 /* MaterialAnalysisGate.swift */; };
+		B00000000000000000000091 /* StructuredSourceMaterialMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000091 /* StructuredSourceMaterialMode.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -259,6 +285,32 @@
 		C0000000000000000000007A /* ProfessorAnalysisCacheStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfessorAnalysisCacheStore.swift; sourceTree = "<group>"; };
 		C0000000000000000000007B /* StructuredSourceQualityEvaluator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StructuredSourceQualityEvaluator.swift; sourceTree = "<group>"; };
 		C0000000000000000000007C /* AnchorConsistencyValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnchorConsistencyValidator.swift; sourceTree = "<group>"; };
+		C0000000000000000000007D /* AIRequestIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIRequestIdentity.swift; sourceTree = "<group>"; };
+		C0000000000000000000007E /* AIResponseIdentityGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIResponseIdentityGuard.swift; sourceTree = "<group>"; };
+		C00000000000000000000092 /* PassageAnalysisIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PassageAnalysisIdentity.swift; sourceTree = "<group>"; };
+		C00000000000000000000093 /* PassageAnalysisIdentityGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PassageAnalysisIdentityGuard.swift; sourceTree = "<group>"; };
+		C00000000000000000000094 /* RuntimeBuildFingerprint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeBuildFingerprint.swift; sourceTree = "<group>"; };
+		C00000000000000000000095 /* CloudRequestProbeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudRequestProbeService.swift; sourceTree = "<group>"; };
+		C00000000000000000000096 /* CloudRequestDiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudRequestDiagnosticsView.swift; sourceTree = "<group>"; };
+		C0000000000000000000007F /* AIStructuredError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIStructuredError.swift; sourceTree = "<group>"; };
+		C00000000000000000000080 /* LocalSentenceFallbackBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalSentenceFallbackBuilder.swift; sourceTree = "<group>"; };
+		C00000000000000000000081 /* LocalPassageFallbackBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalPassageFallbackBuilder.swift; sourceTree = "<group>"; };
+		C00000000000000000000082 /* NodeProvenance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NodeProvenance.swift; sourceTree = "<group>"; };
+		C00000000000000000000083 /* ParagraphMap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParagraphMap.swift; sourceTree = "<group>"; };
+		C00000000000000000000084 /* PassageMap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PassageMap.swift; sourceTree = "<group>"; };
+		C00000000000000000000085 /* MindMapNode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MindMapNode.swift; sourceTree = "<group>"; };
+		C00000000000000000000086 /* MindMapAdmissionResult.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MindMapAdmissionResult.swift; sourceTree = "<group>"; };
+		C00000000000000000000087 /* SourceHygieneScorer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceHygieneScorer.swift; sourceTree = "<group>"; };
+		C00000000000000000000088 /* MindMapAdmissionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MindMapAdmissionService.swift; sourceTree = "<group>"; };
+		C00000000000000000000089 /* MindMapWorkspaceViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MindMapWorkspaceViewModel.swift; sourceTree = "<group>"; };
+		C0000000000000000000008A /* MindMapWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MindMapWorkspaceView.swift; sourceTree = "<group>"; };
+		C0000000000000000000008B /* MindMapCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MindMapCanvasView.swift; sourceTree = "<group>"; };
+		C0000000000000000000008C /* MindMapMiniMapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MindMapMiniMapView.swift; sourceTree = "<group>"; };
+		C0000000000000000000008D /* MindMapToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MindMapToolbar.swift; sourceTree = "<group>"; };
+		C0000000000000000000008E /* MindMapLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MindMapLayout.swift; sourceTree = "<group>"; };
+		C0000000000000000000008F /* AnalyzePassageRequestBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalyzePassageRequestBuilder.swift; sourceTree = "<group>"; };
+		C00000000000000000000090 /* MaterialAnalysisGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MaterialAnalysisGate.swift; sourceTree = "<group>"; };
+		C00000000000000000000091 /* StructuredSourceMaterialMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StructuredSourceMaterialMode.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -342,7 +394,12 @@
 				C00000000000000000000035 /* InkAssistSuggestion.swift */,
 				C00000000000000000000007 /* KnowledgeChunk.swift */,
 				C00000000000000000000045 /* LearningRecordContext.swift */,
+				C00000000000000000000086 /* MindMapAdmissionResult.swift */,
+				C00000000000000000000085 /* MindMapNode.swift */,
 				C00000000000000000000023 /* NoteModels.swift */,
+				C00000000000000000000082 /* NodeProvenance.swift */,
+				C00000000000000000000083 /* ParagraphMap.swift */,
+				C00000000000000000000084 /* PassageMap.swift */,
 				C00000000000000000000008 /* ReviewSession.swift */,
 				C00000000000000000000009 /* SourceDocument.swift */,
 				C0000000000000000000001A /* StructuredSourceModels.swift */,
@@ -357,8 +414,15 @@
 			isa = PBXGroup;
 			children = (
 				C00000000000000000000077 /* AIRequestPolicy.swift */,
+				C00000000000000000000094 /* RuntimeBuildFingerprint.swift */,
+				C00000000000000000000095 /* CloudRequestProbeService.swift */,
 				C00000000000000000000019 /* AIExplainSentenceService.swift */,
+				C0000000000000000000007D /* AIRequestIdentity.swift */,
 				C00000000000000000000078 /* AIRequestSingleFlight.swift */,
+				C0000000000000000000007E /* AIResponseIdentityGuard.swift */,
+				C00000000000000000000092 /* PassageAnalysisIdentity.swift */,
+				C00000000000000000000093 /* PassageAnalysisIdentityGuard.swift */,
+				C0000000000000000000007F /* AIStructuredError.swift */,
 				C0000000000000000000001B /* AISourceParsingService.swift */,
 				C0000000000000000000000C /* CardGenerationService.swift */,
 				C0000000000000000000000D /* ChunkingService.swift */,
@@ -377,8 +441,15 @@
 				C0000000000000000000006D /* DocumentParseService.swift */,
 				C0000000000000000000006E /* NormalizedDocumentConverter.swift */,
 				C0000000000000000000006F /* ProfessorAnalysisService.swift */,
+				C0000000000000000000008F /* AnalyzePassageRequestBuilder.swift */,
+				C00000000000000000000090 /* MaterialAnalysisGate.swift */,
+				C00000000000000000000091 /* StructuredSourceMaterialMode.swift */,
+				C00000000000000000000080 /* LocalSentenceFallbackBuilder.swift */,
+				C00000000000000000000081 /* LocalPassageFallbackBuilder.swift */,
+				C00000000000000000000088 /* MindMapAdmissionService.swift */,
 				C0000000000000000000007A /* ProfessorAnalysisCacheStore.swift */,
 				C00000000000000000000079 /* SentenceAnalysisCacheStore.swift */,
+				C00000000000000000000087 /* SourceHygieneScorer.swift */,
 				C0000000000000000000007B /* StructuredSourceQualityEvaluator.swift */,
 				C0000000000000000000007C /* AnchorConsistencyValidator.swift */,
 			);
@@ -416,6 +487,7 @@
 			children = (
 				C00000000000000000000010 /* AppViewModel.swift */,
 				C00000000000000000000055 /* ArchivistWorkspaceViewModel.swift */,
+				C00000000000000000000089 /* MindMapWorkspaceViewModel.swift */,
 				C0000000000000000000002D /* ConceptSummaryItem.swift */,
 				C00000000000000000000039 /* InkAssistViewModel.swift */,
 				C0000000000000000000004E /* NoteDetailViewModel.swift */,
@@ -441,6 +513,7 @@
 				C0000000000000000000001C /* SourceDetailView.swift */,
 				C0000000000000000000001D /* SourceOriginalTab.swift */,
 				C0000000000000000000001E /* SourceOutlineTab.swift */,
+				D00000000000000000000017 /* MindMap */,
 				C00000000000000000000070 /* StructureTreePreviewStyle.swift */,
 				C00000000000000000000071 /* StructureTreePreviewLayout.swift */,
 				C00000000000000000000072 /* StructureTreePreviewNodeCard.swift */,
@@ -452,6 +525,7 @@
 				C00000000000000000000020 /* ReviewWorkbenchView.swift */,
 				C00000000000000000000021 /* StructuredSourcePDFReader.swift */,
 				C00000000000000000000069 /* TextPipelineDiagnosticsView.swift */,
+				C00000000000000000000096 /* CloudRequestDiagnosticsView.swift */,
 				D0000000000000000000000A /* Cards */,
 				D0000000000000000000000B /* Home */,
 				D0000000000000000000000C /* Materials */,
@@ -461,6 +535,18 @@
 				D00000000000000000000012 /* Workspace */,
 			);
 			path = Views;
+			sourceTree = "<group>";
+		};
+		D00000000000000000000017 /* MindMap */ = {
+			isa = PBXGroup;
+			children = (
+				C0000000000000000000008E /* MindMapLayout.swift */,
+				C0000000000000000000008B /* MindMapCanvasView.swift */,
+				C0000000000000000000008C /* MindMapMiniMapView.swift */,
+				C0000000000000000000008D /* MindMapToolbar.swift */,
+				C0000000000000000000008A /* MindMapWorkspaceView.swift */,
+			);
+			path = MindMap;
 			sourceTree = "<group>";
 		};
 		D00000000000000000000008 /* Data */ = {
@@ -595,6 +681,7 @@
 				3E079BA22F6E5B5A0004FFFC /* Sources */,
 				3E079BA32F6E5B5A0004FFFC /* Frameworks */,
 				3E079BA42F6E5B5A0004FFFC /* Resources */,
+				E00000000000000000000001 /* Stamp Build Fingerprint */,
 			);
 			buildRules = (
 			);
@@ -653,6 +740,28 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		E00000000000000000000001 /* Stamp Build Fingerprint */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Stamp Build Fingerprint";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\nAPP_BUNDLE=\"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\nINFO_PLIST=\"${TARGET_BUILD_DIR}/${INFOPLIST_PATH}\"\nFINGERPRINT_PLIST=\"${APP_BUNDLE}/BuildFingerprint.plist\"\nGIT_SHA=$(git -C \"${SRCROOT}\" rev-parse HEAD 2>/dev/null || echo unknown)\nGIT_BRANCH=$(git -C \"${SRCROOT}\" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)\nBUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)\nAPP_CONFIGURATION=${CONFIGURATION:-unknown}\nmkdir -p \"$APP_BUNDLE\"\nset_plist_value() {\n  key=\"$1\"\n  value=\"$2\"\n  plist=\"$3\"\n  /usr/libexec/PlistBuddy -c \"Set :${key} ${value}\" \"$plist\" 2>/dev/null || /usr/libexec/PlistBuddy -c \"Add :${key} string ${value}\" \"$plist\"\n}\nrm -f \"$FINGERPRINT_PLIST\"\nset_plist_value GIT_SHA \"$GIT_SHA\" \"$FINGERPRINT_PLIST\"\nset_plist_value GIT_BRANCH \"$GIT_BRANCH\" \"$FINGERPRINT_PLIST\"\nset_plist_value BUILD_TIME \"$BUILD_TIME\" \"$FINGERPRINT_PLIST\"\nset_plist_value APP_CONFIGURATION \"$APP_CONFIGURATION\" \"$FINGERPRINT_PLIST\"\nif [ -f \"$INFO_PLIST\" ]; then\n  set_plist_value GIT_SHA \"$GIT_SHA\" \"$INFO_PLIST\"\n  set_plist_value GIT_BRANCH \"$GIT_BRANCH\" \"$INFO_PLIST\"\n  set_plist_value BUILD_TIME \"$BUILD_TIME\" \"$INFO_PLIST\"\n  set_plist_value APP_CONFIGURATION \"$APP_CONFIGURATION\" \"$INFO_PLIST\"\nfi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		3E079BA22F6E5B5A0004FFFC /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -667,7 +776,12 @@
 				B00000000000000000000007 /* SourceDocument.swift in Sources */,
 				B00000000000000000000035 /* InkAssistSuggestion.swift in Sources */,
 				B00000000000000000000045 /* LearningRecordContext.swift in Sources */,
+				B00000000000000000000086 /* MindMapAdmissionResult.swift in Sources */,
+				B00000000000000000000085 /* MindMapNode.swift in Sources */,
 				B00000000000000000000023 /* NoteModels.swift in Sources */,
+				B00000000000000000000082 /* NodeProvenance.swift in Sources */,
+				B00000000000000000000083 /* ParagraphMap.swift in Sources */,
+				B00000000000000000000084 /* PassageMap.swift in Sources */,
 				B0000000000000000000002D /* ConceptSummaryItem.swift in Sources */,
 				B0000000000000000000001A /* StructuredSourceModels.swift in Sources */,
 				B00000000000000000000008 /* Subject.swift in Sources */,
@@ -684,6 +798,7 @@
 				B0000000000000000000004C /* SourceJumpCoordinator.swift in Sources */,
 				B0000000000000000000000D /* ReviewScheduler.swift in Sources */,
 				B0000000000000000000000E /* AppViewModel.swift in Sources */,
+				B00000000000000000000089 /* MindMapWorkspaceViewModel.swift in Sources */,
 				B0000000000000000000002B /* NoteSummaryItem.swift in Sources */,
 				B0000000000000000000002E /* NotesHomeViewModel.swift in Sources */,
 				B00000000000000000000039 /* InkAssistViewModel.swift in Sources */,
@@ -697,14 +812,26 @@
 				B00000000000000000000011 /* ImportMaterialView.swift in Sources */,
 				B00000000000000000000018 /* LibraryView.swift in Sources */,
 				B00000000000000000000019 /* AIExplainSentenceService.swift in Sources */,
+				B0000000000000000000007D /* AIRequestIdentity.swift in Sources */,
 				B00000000000000000000077 /* AIRequestPolicy.swift in Sources */,
 				B00000000000000000000078 /* AIRequestSingleFlight.swift in Sources */,
+				B0000000000000000000007E /* AIResponseIdentityGuard.swift in Sources */,
+				B00000000000000000000092 /* PassageAnalysisIdentity.swift in Sources */,
+				B00000000000000000000093 /* PassageAnalysisIdentityGuard.swift in Sources */,
+				B00000000000000000000094 /* RuntimeBuildFingerprint.swift in Sources */,
+				B00000000000000000000095 /* CloudRequestProbeService.swift in Sources */,
+				B0000000000000000000007F /* AIStructuredError.swift in Sources */,
 				B0000000000000000000001B /* AISourceParsingService.swift in Sources */,
 				B00000000000000000000017 /* ReviewListView.swift in Sources */,
 				B00000000000000000000012 /* ReviewSessionView.swift in Sources */,
 				B0000000000000000000001C /* SourceDetailView.swift in Sources */,
 				B0000000000000000000001D /* SourceOriginalTab.swift in Sources */,
 				B0000000000000000000001E /* SourceOutlineTab.swift in Sources */,
+				B0000000000000000000008A /* MindMapWorkspaceView.swift in Sources */,
+				B0000000000000000000008B /* MindMapCanvasView.swift in Sources */,
+				B0000000000000000000008C /* MindMapMiniMapView.swift in Sources */,
+				B0000000000000000000008D /* MindMapToolbar.swift in Sources */,
+				B0000000000000000000008E /* MindMapLayout.swift in Sources */,
 				B00000000000000000000070 /* StructureTreePreviewStyle.swift in Sources */,
 				B00000000000000000000071 /* StructureTreePreviewLayout.swift in Sources */,
 				B00000000000000000000072 /* StructureTreePreviewNodeCard.swift in Sources */,
@@ -771,11 +898,19 @@
 				B0000000000000000000006D /* DocumentParseService.swift in Sources */,
 				B0000000000000000000006E /* NormalizedDocumentConverter.swift in Sources */,
 				B0000000000000000000006F /* ProfessorAnalysisService.swift in Sources */,
+				B0000000000000000000008F /* AnalyzePassageRequestBuilder.swift in Sources */,
+				B00000000000000000000090 /* MaterialAnalysisGate.swift in Sources */,
+				B00000000000000000000091 /* StructuredSourceMaterialMode.swift in Sources */,
+				B00000000000000000000080 /* LocalSentenceFallbackBuilder.swift in Sources */,
+				B00000000000000000000081 /* LocalPassageFallbackBuilder.swift in Sources */,
+				B00000000000000000000088 /* MindMapAdmissionService.swift in Sources */,
 				B0000000000000000000007A /* ProfessorAnalysisCacheStore.swift in Sources */,
 				B00000000000000000000079 /* SentenceAnalysisCacheStore.swift in Sources */,
+				B00000000000000000000087 /* SourceHygieneScorer.swift in Sources */,
 				B0000000000000000000007B /* StructuredSourceQualityEvaluator.swift in Sources */,
 				B0000000000000000000007C /* AnchorConsistencyValidator.swift in Sources */,
 				B00000000000000000000069 /* TextPipelineDiagnosticsView.swift in Sources */,
+				B00000000000000000000096 /* CloudRequestDiagnosticsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -910,6 +1045,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 2S768KJY2S;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = CuoTiBen/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.6;
@@ -939,6 +1075,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 2S768KJY2S;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = CuoTiBen/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.6;

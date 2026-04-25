@@ -1,194 +1,89 @@
 import Foundation
 
-// MARK: - 教授级全文教学分析服务
-// 调用后端 /ai/analyze-passage 批量获取 AI 教学分析
-// 一次调用产出：文章总览 + 段落教学卡 + 关键句教授卡
+struct ProfessorAnalysisServiceResult {
+    let delta: ProfessorAnalysisDelta
+    let meta: AIServiceResponseMeta
+    let requestID: String?
+    let keySentenceIDs: [String]
+    let questionLinks: [QuestionEvidenceLink]
+    let passageMap: PassageMap?
+    let admissionResult: MindMapAdmissionResult?
+    let message: String?
+    let structuredError: AIStructuredError?
+    let analysisDiagnostics: PassageAnalysisDiagnostics
+
+    var usedFallback: Bool { meta.usedFallback }
+}
 
 enum ProfessorAnalysisService {
+    private static let analyzePassageTimeout: TimeInterval = 150
+    private static let activeCallPath = "ProfessorAnalysisService.enrichBundle"
 
-    private static let maxProfessorParagraphs = 4
-    private static let preferredParagraphChars = 460
-    private static let minimumParagraphChars = 180
-    private static let hardParagraphChars = 700
-    private static let maxParagraphSentences = 4
-    private static let maxProfessorKeySentences = 6
-    private static let analyzePassageTimeout: TimeInterval = 45
-
-    private struct ParagraphAnalysisGroup {
-        let requestIndex: Int
-        let text: String
-        let segmentIDs: [String]
-        let segmentIndexes: [Int]
-        let anchorLabels: [String]
-        let sentenceIDs: [String]
-        let charCount: Int
-        let pageRange: ClosedRange<Int>?
+    private struct AnalyzePassageResponseEnvelope {
+        let success: Bool
+        let requestID: String?
+        let meta: AIServiceResponseMeta
+        let data: AnalyzePassagePayload?
+        let identity: PassageAnalysisIdentity?
+        let structuredError: AIStructuredError?
     }
 
-    private struct MutableParagraphGroup {
-        var segments: [Segment] = []
-        var sentenceIDs: [String] = []
-        var charCount: Int = 0
-        var pages: [Int] = []
-
-        var isEmpty: Bool { segments.isEmpty }
-        var segmentIDs: [String] { segments.map(\.id) }
-        var segmentIndexes: [Int] { segments.map(\.index) }
-        var anchorLabels: [String] { segments.map(\.anchorLabel) }
-        var sentenceCount: Int { sentenceIDs.count }
-        var pageRange: ClosedRange<Int>? {
-            guard let first = pages.min(), let last = pages.max() else { return nil }
-            return first ... last
-        }
-
-        mutating func append(_ segment: Segment) {
-            segments.append(segment)
-            sentenceIDs.append(contentsOf: segment.sentenceIDs)
-            charCount += segment.text.count
-            if let page = segment.page {
-                pages.append(page)
-            }
-        }
-
-        func finalized(requestIndex: Int) -> ParagraphAnalysisGroup {
-            ParagraphAnalysisGroup(
-                requestIndex: requestIndex,
-                text: segments.map(\.text).joined(separator: "\n\n"),
-                segmentIDs: segmentIDs,
-                segmentIndexes: segmentIndexes,
-                anchorLabels: anchorLabels,
-                sentenceIDs: sentenceIDs,
-                charCount: charCount,
-                pageRange: pageRange
-            )
-        }
+    private struct AnalyzePassagePayload {
+        let overview: PassageOverview?
+        let paragraphCards: [ParagraphTeachingCard]
+        let keySentenceIDs: [String]
+        let questionLinks: [QuestionEvidenceLink]
     }
 
-    // MARK: - 请求/响应模型
-
-    struct ParagraphInput: Encodable {
-        let index: Int
-        let text: String
-    }
-
-    struct KeySentenceInput: Encodable {
-        let ref: String
-        let text: String
-        let paragraph_index: Int
-    }
-
-    struct AnalyzePassageRequest: Encodable {
-        let title: String
-        let paragraphs: [ParagraphInput]
-        let key_sentences: [KeySentenceInput]
-        let client_request_id: String
-    }
-
-    struct AnalyzePassageResponse: Decodable {
-        let success: Bool?
-        let data: AnalyzePassageData?
-        let error_code: String?
-        let message: String?
-        let request_id: String?
-        let retryable: Bool?
-        let fallback_available: Bool?
-        let used_cache: Bool?
-        let used_fallback: Bool?
-        let retry_count: Int?
-    }
-
-    struct AnalyzePassageData: Decodable {
-        let passage_overview: PassageOverviewDTO?
-        let paragraph_cards: [ParagraphCardDTO]?
-        let key_sentence_refs: [String]?
-        let quality_warnings: [String]?
-        let elapsed_ms: Int?
-        let request_id: String?
-        let used_cache: Bool?
-        let used_fallback: Bool?
-        let retry_count: Int?
-    }
-
-    struct PassageOverviewDTO: Decodable {
-        let article_theme: String?
-        let author_core_question: String?
-        let progression_path: String?
-        let likely_question_types: [String]?
-        let logic_pitfalls: [String]?
-        let paragraph_function_map: [String]?
-        let syntax_highlights: [String]?
-        let reading_traps: [String]?
-        let vocabulary_highlights: [String]?
-    }
-
-    struct ParagraphCardDTO: Decodable {
-        let paragraph_index: Int?
-        let theme: String?
-        let argument_role: String?
-        let core_sentence_local_index: Int?
-        let keywords: [String]?
-        let relation_to_previous: String?
-        let exam_value: String?
-        let teaching_focuses: [String]?
-        let student_blind_spot: String?
-    }
-
-    struct GrammarPointDTO: Decodable {
-        let name: String?
-        let explanation: String?
-    }
-
-    struct VocabularyDTO: Decodable {
-        let term: String?
-        let meaning: String?
-    }
-
-    // MARK: - 错误类型
-
-    enum AnalysisError: LocalizedError {
-        case missingBaseURL
-        case invalidBaseURL
-        case invalidServerResponse
-        case requestFailed(AIServiceFailureContext)
-        case noContent
-
-        var errorDescription: String? {
-            switch self {
-            case .missingBaseURL: return "未配置后端地址"
-            case .invalidBaseURL: return "后端地址格式错误"
-            case .invalidServerResponse: return "服务器响应格式异常"
-            case .requestFailed(let failure):
-                return failure.userFacingMessage
-            case .noContent: return "后端未返回分析内容"
-            }
-        }
-    }
-
-    // MARK: - 公开接口
-
-    /// 从 StructuredSourceBundle 中提取段落和关键句，调用后端批量分析，返回增强后的 Bundle
     static func enrichBundle(
         _ bundle: StructuredSourceBundle,
+        document: SourceDocument,
         title: String,
         overrideBaseURL: String? = nil
-    ) async throws -> StructuredSourceBundle {
-        if let blockingMessage = await aiServiceAvailabilityGate.blockingMessage(for: .professorAnalysis) {
-            TextPipelineDiagnostics.log(
-                "AI",
-                "[AI][ProfessorAnalysis] service gate open",
-                severity: .warning
+    ) async throws -> ProfessorAnalysisServiceResult {
+        let materialDecision = MaterialAnalysisGate.evaluate(document: document, bundle: bundle)
+        let requestBuild = AnalyzePassageRequestBuilder.build(
+            document: document,
+            bundle: bundle,
+            title: title,
+            decision: materialDecision,
+            activeCallPath: activeCallPath
+        )
+
+        logRequestPreparation(requestBuild.diagnostics)
+        if requestBuild.diagnostics.requestBuilderUsed,
+           !requestBuild.diagnostics.contractPreflightPassed {
+            logContractPreflightFailure(requestBuild.diagnostics)
+        }
+
+        guard let requestBody = requestBuild.payload else {
+            return fallbackResult(
+                document: document,
+                bundle: bundle,
+                diagnostics: requestBuild.diagnostics,
+                structuredError: AIStructuredError.invalidRequest(
+                    message: requestBuild.diagnostics.fallbackMessage,
+                    requestID: requestBuild.diagnostics.clientRequestID,
+                    fallbackAvailable: true
+                ),
+                meta: AIServiceResponseMeta.localFallback()
             )
-            throw AnalysisError.requestFailed(
-                AIServiceFailureContext(
-                    message: blockingMessage,
-                    errorCode: "GEMINI_UPSTREAM_503",
-                    requestID: nil,
+        }
+
+        if let blockingMessage = await aiServiceAvailabilityGate.blockingMessage(for: .professorAnalysis) {
+            return fallbackResult(
+                document: document,
+                bundle: bundle,
+                diagnostics: requestBuild.diagnostics,
+                structuredError: AIStructuredError(
+                    kind: .upstream503,
+                    requestID: requestBuild.diagnostics.clientRequestID,
+                    errorCode: "UPSTREAM_503",
                     retryable: true,
                     fallbackAvailable: true,
-                    usedCache: false,
-                    usedFallback: true,
-                    retryCount: 0
-                )
+                    message: blockingMessage
+                ),
+                meta: AIServiceResponseMeta.localFallback()
             )
         }
 
@@ -196,121 +91,221 @@ enum ProfessorAnalysisService {
             path: "ai/analyze-passage",
             overrideBaseURL: overrideBaseURL
         )
-        guard !endpointURLs.isEmpty else { throw AnalysisError.missingBaseURL }
-
-        // 从 bundle 构建请求
-        let paragraphGroups = buildParagraphAnalysisGroups(from: bundle)
-        let paragraphInputs = paragraphGroups.map {
-            ParagraphInput(index: $0.requestIndex, text: $0.text)
+        guard !endpointURLs.isEmpty else {
+            return fallbackResult(
+                document: document,
+                bundle: bundle,
+                diagnostics: requestBuild.diagnostics,
+                structuredError: AIStructuredError(
+                    kind: .networkUnavailable,
+                    requestID: requestBuild.diagnostics.clientRequestID,
+                    errorCode: "BACKEND_NOT_CONFIGURED",
+                    retryable: true,
+                    fallbackAvailable: true,
+                    message: "AI 后端未配置，已展示本地结构骨架。"
+                ),
+                meta: AIServiceResponseMeta.localFallback()
+            )
         }
 
-        // 选取关键句（每段核心句 + 所有 isKeySentence  + 超长句）
-        let keySentenceInputs = selectKeySentences(from: bundle, paragraphGroups: paragraphGroups)
-
-        TextPipelineDiagnostics.log(
-            "AI",
-            "[AI][ProfessorAnalysis] 开始批量教学分析: paragraphs=\(paragraphInputs.count)/segments=\(bundle.segments.count) keySentences=\(keySentenceInputs.count) title=\(title)",
-            severity: .info
-        )
-
-        let clientRequestID = "ios-passage-\(UUID().uuidString.lowercased())"
-        let requestBody = AnalyzePassageRequest(
-            title: title,
-            paragraphs: paragraphInputs,
-            key_sentences: keySentenceInputs,
-            client_request_id: clientRequestID
-        )
-
         let requestData = try JSONEncoder().encode(requestBody)
-        var payload: AnalyzePassageData?
+
+        return try await performAnalyzePassage(
+            document: document,
+            bundle: bundle,
+            requestBuild: requestBuild,
+            endpointURLs: endpointURLs,
+            requestData: requestData
+        )
+    }
+
+    private static func performAnalyzePassage(
+        document: SourceDocument,
+        bundle: StructuredSourceBundle,
+        requestBuild: AnalyzePassageRequestBuildResult,
+        endpointURLs: [URL],
+        requestData: Data
+    ) async throws -> ProfessorAnalysisServiceResult {
         var lastError: Error?
 
-        for (index, url) in endpointURLs.enumerated() {
+        for (endpointIndex, endpointURL) in endpointURLs.enumerated() {
             for attempt in 0..<2 {
-                var request = URLRequest(url: url, timeoutInterval: analyzePassageTimeout)
+                var request = URLRequest(url: endpointURL)
                 request.httpMethod = "POST"
-                request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+                request.timeoutInterval = analyzePassageTimeout
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                 request.httpBody = requestData
 
                 do {
                     try Task.checkCancellation()
-                    let (data, httpResponse) = try await URLSession.shared.data(for: request)
-
-                    guard let http = httpResponse as? HTTPURLResponse else {
-                        throw AnalysisError.invalidServerResponse
+                    let (data, response) = try await URLSession.shared.data(for: request)
+                    guard let httpResponse = response as? HTTPURLResponse else {
+                        throw AIExplainSentenceServiceError.invalidServerResponse
                     }
 
-                    if !(200 ..< 300).contains(http.statusCode) {
-                        let errorEnvelope = try? JSONDecoder().decode(AnalyzePassageResponse.self, from: data)
-                        let bodySnippet = String(data: data.prefix(500), encoding: .utf8) ?? ""
-                        let failure = AIServiceFailureContext(
-                            message: errorEnvelope?.message ?? "AI 服务暂时繁忙，已展示本地教授式骨架，可稍后重试。",
-                            errorCode: errorEnvelope?.error_code ?? "GEMINI_UPSTREAM_503",
-                            requestID: errorEnvelope?.request_id,
-                            retryable: errorEnvelope?.retryable ?? AIExplainSentenceService.shouldRetryEndpoint(statusCode: http.statusCode),
-                            fallbackAvailable: errorEnvelope?.fallback_available ?? true,
-                            usedCache: errorEnvelope?.used_cache ?? false,
-                            usedFallback: errorEnvelope?.used_fallback ?? true,
-                            retryCount: errorEnvelope?.retry_count ?? attempt
-                        )
+                    if AIExplainSentenceService.shouldRetrySameEndpoint(statusCode: httpResponse.statusCode), attempt == 0 {
+                        try await Task.sleep(nanoseconds: AIExplainSentenceService.retryDelayNanoseconds(for: attempt))
+                        continue
+                    }
+
+                    guard (200 ..< 300).contains(httpResponse.statusCode) else {
+                        let structuredError = AIStructuredError.from(data: data, statusCode: httpResponse.statusCode)
+                        let bodySnippet = String(data: data.prefix(500), encoding: .utf8)?
+                            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                         await aiServiceAvailabilityGate.recordFailure(
                             for: .professorAnalysis,
-                            technicalReason: bodySnippet.isEmpty ? "HTTP \(http.statusCode)" : "HTTP \(http.statusCode): \(bodySnippet)",
-                            cooldown: AIServiceAvailabilityPolicy.cooldown(for: http.statusCode)
-                        )
-                        TextPipelineDiagnostics.log(
-                            "AI",
-                            "[AI][ProfessorAnalysis] 后端返回 HTTP \(http.statusCode): \(bodySnippet)",
-                            severity: .error
+                            technicalReason: bodySnippet.isEmpty ? "HTTP \(httpResponse.statusCode)" : "HTTP \(httpResponse.statusCode): \(bodySnippet)",
+                            cooldown: AIServiceAvailabilityPolicy.cooldown(for: httpResponse.statusCode)
                         )
 
-                        if AIExplainSentenceService.shouldRetrySameEndpoint(statusCode: http.statusCode), attempt == 0 {
-                            TextPipelineDiagnostics.log(
-                                "AI",
-                                "[AI][ProfessorAnalysis] 端点瞬时失败，准备重试: \(url.absoluteString) status=\(http.statusCode) request_id=\(failure.requestID ?? "nil")",
-                                severity: .warning
+                        if let structuredError,
+                           structuredError.errorCode == "INVALID_REQUEST",
+                           structuredError.message.contains("缺少 passage identity 字段") {
+                            logMissingIdentityBug(
+                                diagnostics: requestBuild.diagnostics.withFlags(
+                                    requestBuilderUsed: true,
+                                    missingIdentity: true
+                                ),
+                                structuredError: structuredError
                             )
-                            try await Task.sleep(nanoseconds: AIExplainSentenceService.retryDelayNanoseconds(for: attempt))
-                            continue
+                            return fallbackResult(
+                                document: document,
+                                bundle: bundle,
+                                diagnostics: requestBuild.diagnostics.withFlags(
+                                    requestBuilderUsed: true,
+                                    missingIdentity: true
+                                ),
+                                structuredError: structuredError,
+                                meta: AIServiceResponseMeta.localFallback()
+                            )
                         }
 
-                        if AIExplainSentenceService.shouldRetryEndpoint(statusCode: http.statusCode), index < endpointURLs.count - 1 {
-                            let nextURL = endpointURLs[index + 1].absoluteString
-                            TextPipelineDiagnostics.log(
-                                "AI",
-                                "[AI][ProfessorAnalysis] 切换候选地址: \(url.absoluteString) -> \(nextURL) status=\(http.statusCode) request_id=\(failure.requestID ?? "nil")",
-                                severity: .warning
-                            )
-                            lastError = AnalysisError.requestFailed(failure)
+                        if AIExplainSentenceService.shouldRetryEndpoint(statusCode: httpResponse.statusCode),
+                           endpointIndex < endpointURLs.count - 1 {
+                            lastError = structuredError.map(AIExplainSentenceServiceError.structured)
+                                ?? AIExplainSentenceServiceError.requestFailed(
+                                    bodySnippet.isEmpty ? "HTTP \(httpResponse.statusCode)" : "HTTP \(httpResponse.statusCode): \(bodySnippet)"
+                                )
                             break
                         }
 
-                        throw AnalysisError.requestFailed(failure)
-                    }
-
-                    let response = try JSONDecoder().decode(AnalyzePassageResponse.self, from: data)
-
-                    guard let data = response.data else {
-                        if let message = response.message {
-                            throw AnalysisError.requestFailed(
-                                AIServiceFailureContext(
-                                    message: message,
-                                    errorCode: response.error_code,
-                                    requestID: response.request_id,
-                                    retryable: response.retryable ?? false,
-                                    fallbackAvailable: response.fallback_available ?? true,
-                                    usedCache: response.used_cache ?? false,
-                                    usedFallback: response.used_fallback ?? false,
-                                    retryCount: response.retry_count ?? attempt
-                                )
+                        if let structuredError, structuredError.shouldUseLocalFallback {
+                            return fallbackResult(
+                                document: document,
+                                bundle: bundle,
+                                diagnostics: requestBuild.diagnostics,
+                                structuredError: structuredError,
+                                meta: AIServiceResponseMeta.localFallback()
                             )
                         }
-                        throw AnalysisError.noContent
+
+                        throw structuredError.map(AIExplainSentenceServiceError.structured)
+                            ?? AIExplainSentenceServiceError.requestFailed(
+                                bodySnippet.isEmpty ? "HTTP \(httpResponse.statusCode)" : "HTTP \(httpResponse.statusCode): \(bodySnippet)"
+                            )
                     }
 
-                    await aiServiceAvailabilityGate.recordSuccess(for: .professorAnalysis)
-                    payload = data
-                    break
+                    let decoded = try decodeResponseEnvelope(
+                        from: data,
+                        bundle: bundle,
+                        acceptedParagraphs: requestBuild.payload?.paragraphs ?? []
+                    )
+
+                    if decoded.success, let payload = decoded.data {
+                        let expectedIdentity = requestBuild.expectedIdentity ?? PassageAnalysisIdentity.make(
+                            document: document,
+                            bundle: bundle,
+                            materialMode: requestBuild.diagnostics.materialMode,
+                            acceptedParagraphCount: requestBuild.diagnostics.acceptedParagraphCount,
+                            contentHash: requestBuild.diagnostics.contentHash
+                        )
+                        let actualIdentity = decoded.identity ?? expectedIdentity
+                        let identityDecision = PassageAnalysisIdentityGuard.validate(
+                            expected: expectedIdentity,
+                            actual: actualIdentity
+                        )
+                        PassageAnalysisIdentityGuard.logDecision(
+                            requestID: decoded.requestID,
+                            expected: expectedIdentity,
+                            actual: actualIdentity,
+                            decision: identityDecision
+                        )
+                        guard identityDecision.isAllowed else {
+                            return fallbackResult(
+                                document: document,
+                                bundle: bundle,
+                                diagnostics: requestBuild.diagnostics,
+                                structuredError: AIStructuredError.invalidModelResponse(
+                                    message: "AI 地图分析身份与当前资料不一致，已展示本地结构骨架。",
+                                    requestID: decoded.requestID
+                                ),
+                                meta: AIServiceResponseMeta.localFallback()
+                            )
+                        }
+
+                        await aiServiceAvailabilityGate.recordSuccess(for: .professorAnalysis)
+                        let delta = ProfessorAnalysisDelta(
+                            schemaVersion: ProfessorAnalysisCacheStore.analysisSchemaVersion,
+                            storedAt: Date(),
+                            passageOverview: payload.overview,
+                            paragraphCards: payload.paragraphCards,
+                            sentenceCards: [],
+                            passageAnalysisDiagnostics: requestBuild.diagnostics,
+                            passageAnalysisIdentity: expectedIdentity
+                        )
+                        TextPipelineDiagnostics.log(
+                            "AI",
+                            successLogFields(
+                                diagnostics: requestBuild.diagnostics,
+                                requestID: decoded.requestID,
+                                meta: decoded.meta
+                            ).joined(separator: " "),
+                            severity: .info
+                        )
+                        let enrichedBundle = bundle.enrichedWithAIAnalysis(
+                            overview: payload.overview,
+                            paragraphCards: payload.paragraphCards,
+                            sentenceCards: [],
+                            passageAnalysisDiagnostics: requestBuild.diagnostics,
+                            passageAnalysisIdentity: expectedIdentity
+                        )
+                        return ProfessorAnalysisServiceResult(
+                            delta: delta,
+                            meta: decoded.meta,
+                            requestID: decoded.requestID,
+                            keySentenceIDs: payload.keySentenceIDs,
+                            questionLinks: payload.questionLinks,
+                            passageMap: enrichedBundle.passageMap,
+                            admissionResult: enrichedBundle.mindMapAdmissionResult,
+                            message: decoded.meta.usedFallback ? requestBuild.diagnostics.fallbackMessage : nil,
+                            structuredError: decoded.structuredError,
+                            analysisDiagnostics: requestBuild.diagnostics
+                        )
+                    }
+
+                    if let structuredError = decoded.structuredError {
+                        if structuredError.shouldUseLocalFallback {
+                            return fallbackResult(
+                                document: document,
+                                bundle: bundle,
+                                diagnostics: requestBuild.diagnostics,
+                                structuredError: structuredError,
+                                meta: fallbackMeta(from: decoded.meta)
+                            )
+                        }
+                        throw AIExplainSentenceServiceError.structured(structuredError)
+                    }
+
+                    return fallbackResult(
+                        document: document,
+                        bundle: bundle,
+                        diagnostics: requestBuild.diagnostics,
+                        structuredError: AIStructuredError.invalidModelResponse(
+                            message: "AI 地图分析返回内容不可解析。",
+                            requestID: decoded.requestID
+                        ),
+                        meta: fallbackMeta(from: decoded.meta)
+                    )
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch let error as URLError {
@@ -323,301 +318,444 @@ enum ProfessorAnalysisService {
                         cooldown: AIServiceAvailabilityPolicy.cooldown(for: error)
                     )
                     if AIExplainSentenceService.shouldRetrySameEndpoint(for: error), attempt == 0 {
-                        TextPipelineDiagnostics.log(
-                            "AI",
-                            "[AI][ProfessorAnalysis] 端点连接瞬断，准备重试: \(url.absoluteString) error=\(error.localizedDescription)",
-                            severity: .warning
-                        )
                         try await Task.sleep(nanoseconds: AIExplainSentenceService.retryDelayNanoseconds(for: attempt))
                         continue
                     }
-                    if AIExplainSentenceService.shouldRetryEndpoint(for: error), index < endpointURLs.count - 1 {
-                        let nextURL = endpointURLs[index + 1].absoluteString
-                        TextPipelineDiagnostics.log(
-                            "AI",
-                            "[AI][ProfessorAnalysis] 端点连接失败，切换候选地址: \(url.absoluteString) -> \(nextURL) error=\(error.localizedDescription)",
-                            severity: .warning
-                        )
-                        lastError = AnalysisError.requestFailed(
-                            AIServiceFailureContext(
-                                message: AIServiceAvailabilityPolicy.userFacingMessage(
-                                    for: .professorAnalysis,
-                                    technicalReason: error.localizedDescription
-                                ),
-                                errorCode: error.code == .timedOut ? "GEMINI_TIMEOUT" : "BACKEND_ROUTE_ERROR",
-                                requestID: nil,
-                                retryable: true,
-                                fallbackAvailable: true,
-                                usedCache: false,
-                                usedFallback: true,
-                                retryCount: attempt
-                            )
-                        )
+                    if AIExplainSentenceService.shouldRetryEndpoint(for: error),
+                       endpointIndex < endpointURLs.count - 1 {
+                        lastError = AIExplainSentenceServiceError.transport(error.localizedDescription)
                         break
                     }
-                    throw AnalysisError.requestFailed(
-                        AIServiceFailureContext(
-                            message: AIServiceAvailabilityPolicy.userFacingMessage(
-                                for: .professorAnalysis,
-                                technicalReason: error.localizedDescription
-                            ),
-                            errorCode: error.code == .timedOut ? "GEMINI_TIMEOUT" : "BACKEND_ROUTE_ERROR",
-                            requestID: nil,
-                            retryable: true,
-                            fallbackAvailable: true,
-                            usedCache: false,
-                            usedFallback: true,
-                            retryCount: attempt
-                        )
+                    return fallbackResult(
+                        document: document,
+                        bundle: bundle,
+                        diagnostics: requestBuild.diagnostics,
+                        structuredError: AIStructuredError.from(urlError: error),
+                        meta: AIServiceResponseMeta.localFallback()
                     )
-                } catch let error as AnalysisError {
-                    if case .invalidServerResponse = error, index < endpointURLs.count - 1 {
-                        let nextURL = endpointURLs[index + 1].absoluteString
-                        TextPipelineDiagnostics.log(
-                            "AI",
-                            "[AI][ProfessorAnalysis] 端点响应异常，切换候选地址: \(url.absoluteString) -> \(nextURL)",
-                            severity: .warning
+                } catch let error as AIExplainSentenceServiceError {
+                    if case .structured(let structuredError) = error, structuredError.shouldUseLocalFallback {
+                        return fallbackResult(
+                            document: document,
+                            bundle: bundle,
+                            diagnostics: requestBuild.diagnostics,
+                            structuredError: structuredError,
+                            meta: AIServiceResponseMeta.localFallback()
                         )
+                    }
+                    if case .invalidServerResponse = error {
+                        return fallbackResult(
+                            document: document,
+                            bundle: bundle,
+                            diagnostics: requestBuild.diagnostics,
+                            structuredError: AIStructuredError.invalidModelResponse(message: "AI 地图分析返回内容不可解析。"),
+                            meta: AIServiceResponseMeta.localFallback()
+                        )
+                    }
+                    if endpointIndex < endpointURLs.count - 1 {
                         lastError = error
                         break
                     }
                     throw error
                 } catch {
-                    if index < endpointURLs.count - 1 {
+                    if endpointIndex < endpointURLs.count - 1 {
                         lastError = error
                         break
                     }
-                    throw AnalysisError.invalidServerResponse
+                    return fallbackResult(
+                        document: document,
+                        bundle: bundle,
+                        diagnostics: requestBuild.diagnostics,
+                        structuredError: AIStructuredError.invalidModelResponse(message: "AI 地图分析返回内容不可解析。"),
+                        meta: AIServiceResponseMeta.localFallback()
+                    )
                 }
             }
-
-            if payload != nil {
-                break
-            }
         }
 
-        guard let payload else {
-            if let error = lastError as? AnalysisError {
-                throw error
+        if let structuredError = (lastError as? AIExplainSentenceServiceError).flatMap({ error -> AIStructuredError? in
+            if case .structured(let value) = error {
+                return value
             }
-            throw AnalysisError.noContent
-        }
-
-        if let warnings = payload.quality_warnings, !warnings.isEmpty {
-            TextPipelineDiagnostics.log(
-                "AI",
-                "[AI][ProfessorAnalysis] 质量警告: \(warnings.joined(separator: "; "))",
-                severity: .warning
+            return nil
+        }), structuredError.shouldUseLocalFallback {
+            return fallbackResult(
+                document: document,
+                bundle: bundle,
+                diagnostics: requestBuild.diagnostics,
+                structuredError: structuredError,
+                meta: AIServiceResponseMeta.localFallback()
             )
         }
 
+        if let error = lastError {
+            throw error
+        }
+
+        return fallbackResult(
+            document: document,
+            bundle: bundle,
+            diagnostics: requestBuild.diagnostics,
+            structuredError: AIStructuredError.invalidModelResponse(message: "AI 地图分析返回内容不可解析。"),
+            meta: AIServiceResponseMeta.localFallback()
+        )
+    }
+
+    private static func decodeResponseEnvelope(
+        from data: Data,
+        bundle: StructuredSourceBundle,
+        acceptedParagraphs: [AnalyzePassageParagraphPayload]
+    ) throws -> AnalyzePassageResponseEnvelope {
+        let isWhitespaceOnly = data.allSatisfy { byte in
+            byte == 0x20 || byte == 0x09 || byte == 0x0A || byte == 0x0D
+        }
+        guard !data.isEmpty, !isWhitespaceOnly else {
+            throw AIExplainSentenceServiceError.invalidServerResponse
+        }
+
+        let object = try JSONSerialization.jsonObject(with: data)
+        guard let dictionary = object as? [String: Any] else {
+            throw AIExplainSentenceServiceError.invalidServerResponse
+        }
+
+        let requestID = normalizedString(dictionary["request_id"] as? String)
+        let meta = AIServiceResponseMeta.from(dictionary: dictionary["meta"] as? [String: Any])
+        let structuredError = AIStructuredError.from(dictionary: dictionary, statusCode: nil)
+        let success = dictionary["success"] as? Bool ?? false
+
+        guard let payloadDictionary = dictionary["data"] as? [String: Any] else {
+            return AnalyzePassageResponseEnvelope(
+                success: success,
+                requestID: requestID,
+                meta: meta,
+                data: nil,
+                identity: responseIdentity(from: dictionary, payloadDictionary: nil),
+                structuredError: structuredError
+            )
+        }
+
+        let payload = normalizePayload(
+            from: payloadDictionary,
+            bundle: bundle,
+            acceptedParagraphs: acceptedParagraphs
+        )
+        return AnalyzePassageResponseEnvelope(
+            success: success,
+            requestID: requestID,
+            meta: meta,
+            data: payload,
+            identity: responseIdentity(from: dictionary, payloadDictionary: payloadDictionary),
+            structuredError: structuredError
+        )
+    }
+
+    private static func normalizePayload(
+        from dictionary: [String: Any],
+        bundle: StructuredSourceBundle,
+        acceptedParagraphs: [AnalyzePassageParagraphPayload]
+    ) -> AnalyzePassagePayload? {
+        let allowedSegmentIDs = Set(acceptedParagraphs.map { $0.segmentID })
+        let segmentIndex = Dictionary(uniqueKeysWithValues: bundle.segments.map { ($0.id, $0) })
+        let sentencesBySegment = Dictionary(grouping: bundle.sentences, by: \.segmentID)
+
+        let overview = (dictionary["passage_overview"] as? [String: Any]).map { payload in
+            PassageOverview(
+                articleTheme: normalizedString(payload["article_theme"] as? String) ?? "",
+                authorCoreQuestion: normalizedString(payload["author_core_question"] as? String) ?? "",
+                progressionPath: normalizedString(payload["progression_path"] as? String) ?? "",
+                likelyQuestionTypes: stringArray(payload["likely_question_types"]),
+                logicPitfalls: stringArray(payload["logic_pitfalls"]),
+                paragraphFunctionMap: [],
+                syntaxHighlights: [],
+                readingTraps: [],
+                vocabularyHighlights: []
+            )
+        }
+
+        let paragraphCards = (dictionary["paragraph_cards"] as? [Any] ?? []).compactMap { item -> ParagraphTeachingCard? in
+            guard let payload = item as? [String: Any] else { return nil }
+            guard let segmentID = normalizedString(payload["segment_id"] as? String),
+                  allowedSegmentIDs.contains(segmentID),
+                  let segment = segmentIndex[segmentID]
+            else {
+                return nil
+            }
+
+            let provenance = payload["provenance"] as? [String: Any]
+            let sourceKind = normalizedString(provenance?["source_kind"] as? String) ?? segment.provenance.sourceKind.rawValue
+            guard sourceKind == SourceContentKind.passageBody.rawValue else {
+                return nil
+            }
+
+            let sentenceIDs = Set(sentencesBySegment[segmentID]?.map(\.id) ?? [])
+            let proposedCoreSentenceID = normalizedString(payload["core_sentence_id"] as? String)
+            let coreSentenceID = proposedCoreSentenceID.flatMap { sentenceIDs.contains($0) ? $0 : nil }
+                ?? sentencesBySegment[segmentID]?.first?.id
+
+            return ParagraphTeachingCard(
+                id: "ai_passage_\(segmentID)",
+                segmentID: segmentID,
+                paragraphIndex: (payload["paragraph_index"] as? Int) ?? segment.index,
+                anchorLabel: normalizedString(payload["anchor_label"] as? String) ?? segment.anchorLabel,
+                theme: normalizedString(payload["theme"] as? String) ?? truncated(segment.text, limit: 48),
+                argumentRole: ParagraphArgumentRole(rawValue: normalizedString(payload["argument_role"] as? String) ?? "") ?? .support,
+                coreSentenceID: coreSentenceID,
+                keywords: [],
+                relationToPrevious: normalizedString(payload["relation_to_previous"] as? String) ?? "",
+                examValue: normalizedString(payload["exam_value"] as? String) ?? "",
+                teachingFocuses: stringArray(payload["teaching_focuses"]),
+                studentBlindSpot: normalizedString(payload["student_blind_spot"] as? String),
+                isAIGenerated: true
+            )
+        }
+
+        guard !paragraphCards.isEmpty || overview != nil else {
+            return nil
+        }
+
+        let keySentenceIDs = Array(
+            Array(Set(stringArray(dictionary["key_sentence_ids"]))).prefix(6)
+        )
+
+        return AnalyzePassagePayload(
+            overview: overview,
+            paragraphCards: paragraphCards,
+            keySentenceIDs: keySentenceIDs,
+            questionLinks: []
+        )
+    }
+
+    private static func fallbackResult(
+        document: SourceDocument,
+        bundle: StructuredSourceBundle,
+        diagnostics: PassageAnalysisDiagnostics,
+        structuredError: AIStructuredError,
+        meta: AIServiceResponseMeta? = nil
+    ) -> ProfessorAnalysisServiceResult {
+        let fallback = LocalPassageFallbackBuilder.build(
+            document: document,
+            bundle: bundle,
+            diagnostics: diagnostics,
+            structuredError: structuredError,
+            meta: meta ?? AIServiceResponseMeta.localFallback()
+        )
+
         TextPipelineDiagnostics.log(
             "AI",
-            "[AI][ProfessorAnalysis] 分析完成: paragraphCards=\(payload.paragraph_cards?.count ?? 0) keySentenceRefs=\(payload.key_sentence_refs?.count ?? 0) elapsed=\(payload.elapsed_ms ?? 0)ms request_id=\(payload.request_id ?? "nil") retry_count=\(payload.retry_count ?? 0) used_cache=\(payload.used_cache ?? false) used_fallback=\(payload.used_fallback ?? false) client_request_id=\(clientRequestID)",
-            severity: .info
+            fallbackLogFields(
+                diagnostics: fallback.analysisDiagnostics,
+                requestID: structuredError.requestID,
+                errorCode: structuredError.errorCode,
+                meta: fallback.meta
+            ).joined(separator: " "),
+            severity: .warning
         )
 
-        // 转换为本地模型并合并到 bundle
-        let aiOverview = convertOverview(payload.passage_overview)
-        let aiParagraphCards = convertParagraphCards(
-            payload.paragraph_cards ?? [],
-            paragraphGroups: paragraphGroups,
-            segments: bundle.segments,
-            sentences: bundle.sentences
-        )
-        return bundle.enrichedWithAIAnalysis(
-            overview: aiOverview,
-            paragraphCards: aiParagraphCards,
-            sentenceCards: []
-        )
-    }
-
-    // MARK: - 关键句选取
-
-    private static func selectKeySentences(
-        from bundle: StructuredSourceBundle,
-        paragraphGroups: [ParagraphAnalysisGroup]
-    ) -> [KeySentenceInput] {
-        struct Candidate {
-            let priority: Int
-            let input: KeySentenceInput
-        }
-
-        var candidates: [Candidate] = []
-        var seenIDs: Set<String> = []
-
-        let sentencesBySegment = Dictionary(grouping: bundle.sentences, by: { $0.segmentID })
-        let paragraphIndexBySegmentID = paragraphGroups.reduce(into: [String: Int]()) { partialResult, group in
-            for segmentID in group.segmentIDs {
-                partialResult[segmentID] = group.requestIndex
-            }
-        }
-
-        for (segIdx, segment) in bundle.segments.enumerated() {
-            let sentences = sentencesBySegment[segment.id] ?? []
-            let paragraphCard = bundle.paragraphCard(forSegmentID: segment.id)
-            let paragraphIndex = paragraphIndexBySegmentID[segment.id] ?? min(segIdx, maxProfessorParagraphs - 1)
-
-            for sentence in sentences {
-                let isCore = sentence.id == paragraphCard?.coreSentenceID
-                let isKey = bundle.sentenceCard(id: sentence.id)?.isKeySentence == true
-                let isLong = sentence.text.count >= 80
-
-                guard isCore || isKey || isLong else { continue }
-                guard seenIDs.insert(sentence.id).inserted else { continue }
-
-                let ref = "S_\(segIdx)_\(sentence.localIndex)"
-                let priority = isCore ? 0 : (isKey ? 1 : 2)
-                candidates.append(
-                    Candidate(
-                        priority: priority,
-                        input: KeySentenceInput(
-                            ref: ref,
-                            text: sentence.text,
-                            paragraph_index: paragraphIndex
-                        )
-                    )
-                )
-            }
-        }
-
-        let ordered = candidates.sorted { lhs, rhs in
-            if lhs.input.paragraph_index != rhs.input.paragraph_index {
-                return lhs.input.paragraph_index < rhs.input.paragraph_index
-            }
-            if lhs.priority != rhs.priority {
-                return lhs.priority < rhs.priority
-            }
-            return lhs.input.ref < rhs.input.ref
-        }
-
-        return Array(ordered.prefix(maxProfessorKeySentences).map(\.input))
-    }
-
-    private static func buildParagraphAnalysisGroups(from bundle: StructuredSourceBundle) -> [ParagraphAnalysisGroup] {
-        let orderedSegments = bundle.segments.sorted { lhs, rhs in
-            if lhs.index != rhs.index { return lhs.index < rhs.index }
-            return lhs.id < rhs.id
-        }
-
-        var groups: [MutableParagraphGroup] = []
-        var current = MutableParagraphGroup()
-
-        for segment in orderedSegments {
-            let trimmedText = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmedText.isEmpty else { continue }
-
-            if current.isEmpty {
-                current.append(segment)
-                continue
-            }
-
-            let pageChanged = current.pages.last != segment.page
-            let currentIsReady = current.charCount >= preferredParagraphChars || current.sentenceCount >= maxParagraphSentences
-            let wouldExceedHardLimit = current.charCount + trimmedText.count > hardParagraphChars
-            let shouldWrapForLargeIncoming = current.charCount >= minimumParagraphChars && trimmedText.count >= preferredParagraphChars / 2
-            let shouldStartNewGroup =
-                wouldExceedHardLimit ||
-                (currentIsReady && (pageChanged || shouldWrapForLargeIncoming))
-
-            if shouldStartNewGroup {
-                groups.append(current)
-                current = MutableParagraphGroup()
-            }
-
-            current.append(segment)
-        }
-
-        if !current.isEmpty {
-            groups.append(current)
-        }
-
-        while groups.count > maxProfessorParagraphs, groups.count >= 2 {
-            var mergeIndex = 0
-            var smallestCombinedCount = Int.max
-
-            for index in 0 ..< groups.count - 1 {
-                let combinedCount = groups[index].charCount + groups[index + 1].charCount
-                if combinedCount < smallestCombinedCount {
-                    smallestCombinedCount = combinedCount
-                    mergeIndex = index
-                }
-            }
-
-            var merged = groups[mergeIndex]
-            let next = groups[mergeIndex + 1]
-            for segment in next.segments {
-                merged.append(segment)
-            }
-            groups.replaceSubrange(mergeIndex ... mergeIndex + 1, with: [merged])
-        }
-
-        return groups.enumerated().map { index, group in
-            group.finalized(requestIndex: index)
-        }
-    }
-
-    // MARK: - DTO → 本地模型转换
-
-    private static func convertOverview(_ dto: PassageOverviewDTO?) -> PassageOverview? {
-        guard let dto else { return nil }
-        return PassageOverview(
-            articleTheme: dto.article_theme ?? "",
-            authorCoreQuestion: dto.author_core_question ?? "",
-            progressionPath: dto.progression_path ?? "",
-            likelyQuestionTypes: dto.likely_question_types ?? [],
-            logicPitfalls: dto.logic_pitfalls ?? [],
-            paragraphFunctionMap: dto.paragraph_function_map ?? [],
-            syntaxHighlights: dto.syntax_highlights ?? [],
-            readingTraps: dto.reading_traps ?? [],
-            vocabularyHighlights: dto.vocabulary_highlights ?? []
+        let enrichedBundle = bundle.applyingProfessorAnalysis(fallback.delta)
+        return ProfessorAnalysisServiceResult(
+            delta: fallback.delta,
+            meta: fallback.meta,
+            requestID: structuredError.requestID,
+            keySentenceIDs: fallback.keySentenceIDs,
+            questionLinks: [],
+            passageMap: enrichedBundle.passageMap,
+            admissionResult: enrichedBundle.mindMapAdmissionResult,
+            message: fallback.message,
+            structuredError: structuredError,
+            analysisDiagnostics: fallback.analysisDiagnostics
         )
     }
 
-    private static func convertParagraphCards(
-        _ dtos: [ParagraphCardDTO],
-        paragraphGroups: [ParagraphAnalysisGroup],
-        segments: [Segment],
-        sentences: [Sentence]
-    ) -> [ParagraphTeachingCard] {
-        let segmentIndex = Dictionary(uniqueKeysWithValues: segments.map { ($0.id, $0) })
-        let sentenceIndex = Dictionary(uniqueKeysWithValues: sentences.map { ($0.id, $0) })
-
-        return dtos.flatMap { dto -> [ParagraphTeachingCard] in
-            guard let paragraphIndex = dto.paragraph_index,
-                  paragraphIndex < paragraphGroups.count else { return [] }
-
-            let group = paragraphGroups[paragraphIndex]
-            let groupSegments = group.segmentIDs.compactMap { segmentIndex[$0] }
-            let groupSentences = group.sentenceIDs.compactMap { sentenceIndex[$0] }
-            guard !groupSegments.isEmpty else { return [] }
-
-            let roleString = dto.argument_role ?? "support"
-            let role = ParagraphArgumentRole(rawValue: roleString) ?? .support
-
-            let coreLocalIndex = dto.core_sentence_local_index ?? 0
-            let coreSentenceID = groupSentences.indices.contains(coreLocalIndex)
-                ? groupSentences[coreLocalIndex].id
-                : groupSentences.first?.id
-
-            return groupSegments.map { segment in
-                ParagraphTeachingCard(
-                    id: segment.id,
-                    segmentID: segment.id,
-                    paragraphIndex: segment.index,
-                    anchorLabel: segment.anchorLabel,
-                    theme: dto.theme ?? "",
-                    argumentRole: role,
-                    coreSentenceID: coreSentenceID,
-                    keywords: dto.keywords ?? [],
-                    relationToPrevious: dto.relation_to_previous ?? "",
-                    examValue: dto.exam_value ?? "",
-                    teachingFocuses: dto.teaching_focuses ?? [],
-                    studentBlindSpot: dto.student_blind_spot,
-                    isAIGenerated: true
-                )
-            }
-        }
+    private static func fallbackMeta(from meta: AIServiceResponseMeta) -> AIServiceResponseMeta {
+        AIServiceResponseMeta(
+            provider: meta.provider ?? "local_fallback",
+            model: meta.model ?? "local_fallback",
+            retryCount: meta.retryCount,
+            usedCache: meta.usedCache,
+            usedFallback: true,
+            circuitState: meta.circuitState
+        )
     }
 
+    private static func logRequestPreparation(_ diagnostics: PassageAnalysisDiagnostics) {
+        TextPipelineDiagnostics.log(
+            "AI",
+            [
+                "[AI][PassageMap] request_prepared",
+                "client_request_id=\(diagnostics.clientRequestID ?? "nil")",
+                "document_id=\(diagnostics.documentID)",
+                "active_call_path=\(diagnostics.activeCallPath)",
+                "content_hash=\(diagnostics.contentHash ?? "nil")",
+                "accepted_paragraph_count=\(diagnostics.acceptedParagraphCount)",
+                "rejected_paragraph_count=\(diagnostics.rejectedParagraphCount)",
+                String(format: "non_passage_ratio=%.2f", diagnostics.nonPassageRatio),
+                "material_mode=\(diagnostics.materialMode.rawValue)",
+                "reason=\(diagnostics.reasonFlags.isEmpty ? diagnostics.reason : diagnostics.reasonFlags.joined(separator: "||"))",
+                "request_builder_used=\(diagnostics.requestBuilderUsed)",
+                "contract_preflight_passed=\(diagnostics.contractPreflightPassed)",
+                "missing_fields=\(formatMissingFields(diagnostics.missingFields))",
+                "final_segments_count=\(diagnostics.finalSegmentsCount)",
+                "final_sentences_count=\(diagnostics.finalSentencesCount)",
+                "passage_body_paragraph_count=\(diagnostics.passageBodyParagraphCount)",
+                "used_fallback=\(!diagnostics.contractPreflightPassed)",
+                "cloud_passage_attempted=\(diagnostics.contractPreflightPassed)",
+                "currentResultSource=\(diagnostics.contractPreflightPassed ? "remoteAI" : "localSkeleton")",
+                "current_result_source=\(diagnostics.contractPreflightPassed ? "remoteAI" : "localSkeleton")"
+            ].joined(separator: " "),
+            severity: diagnostics.requestBuilderUsed ? .info : .warning
+        )
+    }
+
+    private static func logContractPreflightFailure(_ diagnostics: PassageAnalysisDiagnostics) {
+        TextPipelineDiagnostics.log(
+            "AI",
+            [
+                "[AI][PassageMap] contract_preflight_failed",
+                "missingFields=\(formatMissingFields(diagnostics.missingFields))",
+                "requestBuilderUsed=true",
+                "activeCallPath=\(diagnostics.activeCallPath)",
+                "client_request_id=\(diagnostics.clientRequestID ?? "nil")",
+                "document_id=\(diagnostics.documentID)",
+                "content_hash=\(diagnostics.contentHash ?? "nil")",
+                "accepted_paragraph_count=\(diagnostics.acceptedParagraphCount)",
+                "material_mode=\(diagnostics.materialMode.rawValue)",
+                "used_fallback=true",
+                "cloud_passage_attempted=false",
+                "currentResultSource=localSkeleton",
+                "current_result_source=localSkeleton",
+                "fallback_reason=contract_preflight_failed"
+            ].joined(separator: " "),
+            severity: .error
+        )
+    }
+
+    private static func logMissingIdentityBug(
+        diagnostics: PassageAnalysisDiagnostics,
+        structuredError: AIStructuredError
+    ) {
+        TextPipelineDiagnostics.log(
+            "AI",
+            [
+                "[AI][PassageMap] identity_bug",
+                "request_id=\(structuredError.requestID ?? "nil")",
+                "client_request_id=\(diagnostics.clientRequestID ?? "nil")",
+                "document_id=\(diagnostics.documentID)",
+                "active_call_path=\(diagnostics.activeCallPath)",
+                "content_hash=\(diagnostics.contentHash ?? "nil")",
+                "accepted_paragraph_count=\(diagnostics.acceptedParagraphCount)",
+                "material_mode=\(diagnostics.materialMode.rawValue)",
+                "request_builder_used=\(diagnostics.requestBuilderUsed)",
+                "missing_identity=true",
+                "used_fallback=true",
+                "error_code=\(structuredError.errorCode)",
+                "cloud_passage_attempted=true",
+                "currentResultSource=localSkeleton",
+                "current_result_source=localSkeleton",
+                "fallback_reason=missing_passage_identity"
+            ].joined(separator: " "),
+            severity: .error
+        )
+    }
+
+    private static func successLogFields(
+        diagnostics: PassageAnalysisDiagnostics,
+        requestID: String?,
+        meta: AIServiceResponseMeta
+    ) -> [String] {
+        [
+            "[AI][PassageMap] success",
+            "request_id=\(requestID ?? "nil")",
+            "client_request_id=\(diagnostics.clientRequestID ?? "nil")",
+            "document_id=\(diagnostics.documentID)",
+            "active_call_path=\(diagnostics.activeCallPath)",
+            "content_hash=\(diagnostics.contentHash ?? "nil")",
+            "accepted_paragraph_count=\(diagnostics.acceptedParagraphCount)",
+            "rejected_paragraph_count=\(diagnostics.rejectedParagraphCount)",
+            String(format: "non_passage_ratio=%.2f", diagnostics.nonPassageRatio),
+            "material_mode=\(diagnostics.materialMode.rawValue)",
+            "reason=\(diagnostics.reasonFlags.isEmpty ? diagnostics.reason : diagnostics.reasonFlags.joined(separator: "||"))",
+            "request_builder_used=\(diagnostics.requestBuilderUsed)",
+            "contract_preflight_passed=\(diagnostics.contractPreflightPassed)",
+            "missing_fields=\(formatMissingFields(diagnostics.missingFields))",
+            "provider=\(meta.provider ?? "nil")",
+            "model=\(meta.model ?? "nil")",
+            "retry_count=\(meta.retryCount)",
+            "used_cache=\(meta.usedCache)",
+            "used_fallback=\(meta.usedFallback)",
+            "circuit_state=\(meta.circuitState)",
+            "cloud_passage_attempted=true",
+            "currentResultSource=remoteAI",
+            "current_result_source=remoteAI"
+        ]
+    }
+
+    private static func fallbackLogFields(
+        diagnostics: PassageAnalysisDiagnostics,
+        requestID: String?,
+        errorCode: String,
+        meta: AIServiceResponseMeta
+    ) -> [String] {
+        [
+            "[AI][PassageMap] local fallback",
+            "request_id=\(requestID ?? "nil")",
+            "client_request_id=\(diagnostics.clientRequestID ?? "nil")",
+            "document_id=\(diagnostics.documentID)",
+            "active_call_path=\(diagnostics.activeCallPath)",
+            "content_hash=\(diagnostics.contentHash ?? "nil")",
+            "accepted_paragraph_count=\(diagnostics.acceptedParagraphCount)",
+            "rejected_paragraph_count=\(diagnostics.rejectedParagraphCount)",
+            String(format: "non_passage_ratio=%.2f", diagnostics.nonPassageRatio),
+            "material_mode=\(diagnostics.materialMode.rawValue)",
+            "reason=\(diagnostics.reasonFlags.isEmpty ? diagnostics.reason : diagnostics.reasonFlags.joined(separator: "||"))",
+            "request_builder_used=\(diagnostics.requestBuilderUsed)",
+            "contract_preflight_passed=\(diagnostics.contractPreflightPassed)",
+            "missing_fields=\(formatMissingFields(diagnostics.missingFields))",
+            "error_code=\(errorCode)",
+            "retry_count=\(meta.retryCount)",
+            "used_cache=\(meta.usedCache)",
+            "used_fallback=\(meta.usedFallback)",
+            "circuit_state=\(meta.circuitState)",
+            "cloud_passage_attempted=\(diagnostics.contractPreflightPassed)",
+            "currentResultSource=\(diagnostics.contractPreflightPassed ? "requestFailed" : "localSkeleton")",
+            "current_result_source=\(diagnostics.contractPreflightPassed ? "requestFailed" : "localSkeleton")",
+            "fallback_reason=\(errorCode)"
+        ]
+    }
+
+    private static func stringArray(_ value: Any?) -> [String] {
+        if let array = value as? [Any] {
+            return array.compactMap { item in
+                normalizedString(item as? String)
+            }
+        }
+        if let string = normalizedString(value as? String) {
+            return [string]
+        }
+        return []
+    }
+
+    private static func normalizedString(_ value: String?) -> String? {
+        let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func responseIdentity(
+        from dictionary: [String: Any],
+        payloadDictionary: [String: Any]?
+    ) -> PassageAnalysisIdentity? {
+        PassageAnalysisIdentity(dictionary: dictionary["identity"] as? [String: Any])
+            ?? PassageAnalysisIdentity(dictionary: payloadDictionary?["identity"] as? [String: Any])
+    }
+
+    private static func formatMissingFields(_ fields: [String]) -> String {
+        fields.isEmpty ? "[]" : "[\(fields.joined(separator: ","))]"
+    }
+
+    private static func truncated(_ text: String, limit: Int) -> String {
+        let normalized = text
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalized.count > limit else { return normalized }
+        return String(normalized.prefix(limit))
+    }
 }

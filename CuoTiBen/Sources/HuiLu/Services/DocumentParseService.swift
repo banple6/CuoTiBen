@@ -5,6 +5,7 @@ import Foundation
 // Token 存放在后端环境变量中，客户端不接触任何 AI Studio 凭据
 
 enum DocumentParseServiceError: LocalizedError {
+    case remoteUnavailable
     case missingBackendURL
     case invalidBackendURL
     case uploadFailed(String)
@@ -17,6 +18,7 @@ enum DocumentParseServiceError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
+        case .remoteUnavailable: return "文档解析云接口未配置，已使用本地解析。"
         case .missingBackendURL:    return "后端地址未配置"
         case .invalidBackendURL:    return "后端地址格式无效"
         case .uploadFailed(let m):  return "上传失败：\(m)"
@@ -30,26 +32,135 @@ enum DocumentParseServiceError: LocalizedError {
     }
 }
 
+enum DocumentParseEndpointConfig {
+    private static let runtimeBaseURLStorageKey = "huiLu.documentParseBaseURL"
+    private static let legacyRuntimeBaseURLStorageKey = "huiLu.documentParseBackendURL"
+    private static let infoPlistBaseURLKey = "DOCUMENT_PARSE_BASE_URL"
+    private static let parsePathComponents = ["api", "document", "parse"]
+
+    struct Snapshot: Equatable {
+        let isConfigured: Bool
+        let endpointURL: URL?
+
+        var endpointDescription: String {
+            endpointURL?.absoluteString ?? "unconfigured"
+        }
+    }
+
+    static var snapshot: Snapshot {
+        guard let baseURLString = resolvedBaseURL,
+              let endpointURL = makeParseEndpointURL(from: baseURLString)
+        else {
+            return Snapshot(isConfigured: false, endpointURL: nil)
+        }
+        return Snapshot(isConfigured: true, endpointURL: endpointURL)
+    }
+
+    static var isConfigured: Bool {
+        snapshot.isConfigured
+    }
+
+    static var parseEndpointURL: URL? {
+        snapshot.endpointURL
+    }
+
+    static func parseEndpointURL(jobID: String) -> URL? {
+        guard let baseEndpoint = parseEndpointURL else { return nil }
+        return baseEndpoint.appendingPathComponent(jobID)
+    }
+
+    static func saveRuntimeBaseURL(_ value: String) {
+        UserDefaults.standard.set(normalizeBaseURL(value), forKey: runtimeBaseURLStorageKey)
+    }
+
+    static func normalizeBaseURL(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+
+    private static var resolvedBaseURL: String? {
+        #if DEBUG
+        if let runtimeBaseURL = normalizedDebugRuntimeBaseURL(UserDefaults.standard.string(forKey: runtimeBaseURLStorageKey)) {
+            return runtimeBaseURL
+        }
+        if let legacyRuntimeBaseURL = normalizedDebugRuntimeBaseURL(UserDefaults.standard.string(forKey: legacyRuntimeBaseURLStorageKey)) {
+            return legacyRuntimeBaseURL
+        }
+        #endif
+        if let infoPlistBaseURL = normalizedNonEmpty(Bundle.main.object(forInfoDictionaryKey: infoPlistBaseURLKey) as? String) {
+            return infoPlistBaseURL
+        }
+        return nil
+    }
+
+    private static func normalizedNonEmpty(_ value: String?) -> String? {
+        let normalized = normalizeBaseURL(value ?? "")
+        return normalized.isEmpty ? nil : normalized
+    }
+
+    private static func normalizedDebugRuntimeBaseURL(_ value: String?) -> String? {
+        guard let normalized = normalizedNonEmpty(value),
+              isLocalParserEndpoint(normalized)
+        else {
+            return nil
+        }
+        return normalized
+    }
+
+    private static func isLocalParserEndpoint(_ value: String) -> Bool {
+        guard let host = URLComponents(string: value)?.host?.lowercased() else {
+            return false
+        }
+        return host == "localhost" || host == "127.0.0.1" || host == "::1"
+    }
+
+    private static func makeParseEndpointURL(from baseURLString: String) -> URL? {
+        guard let components = URLComponents(string: baseURLString),
+              components.scheme != nil,
+              components.host != nil
+        else {
+            return nil
+        }
+
+        let normalizedPath = components.path
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if normalizedPath == parsePathComponents.joined(separator: "/") {
+            return components.url
+        }
+
+        var url = components.url
+        for component in parsePathComponents {
+            url = url?.appendingPathComponent(component)
+        }
+        return url
+    }
+}
+
 enum DocumentParseService {
 
     // MARK: - 后端地址管理
 
-    private static let backendURLStorageKey = "huiLu.documentParseBackendURL"
-
-    /// 后端解析服务基础地址（复用现有 AI 后端或独立部署）
+    /// 文档解析服务已拆为独立 endpoint，保留旧 API 名称仅用于设置页兼容。
     static var backendBaseURL: String {
-        let stored = UserDefaults.standard.string(forKey: backendURLStorageKey) ?? ""
-        let normalized = stored.trimmingCharacters(in: .whitespacesAndNewlines)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        if !normalized.isEmpty { return normalized }
-        // 默认复用现有后端
-        return AIExplainSentenceService.storedBaseURL
+        DocumentParseEndpointConfig.parseEndpointURL?.absoluteString ?? ""
     }
 
     static func saveBackendURL(_ value: String) {
-        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        UserDefaults.standard.set(normalized, forKey: backendURLStorageKey)
+        DocumentParseEndpointConfig.saveRuntimeBaseURL(value)
+    }
+
+    static func logRemoteUnavailableRoute() {
+        TextPipelineDiagnostics.log(
+            "PP",
+            "[PP][Route] document_parse_endpoint=unconfigured",
+            severity: .warning
+        )
+        TextPipelineDiagnostics.log(
+            "PP",
+            "[PP][Route] skip remote document parse, use local extraction fallbackMode=localExtraction",
+            severity: .warning
+        )
     }
 
     // MARK: - 配置
@@ -80,11 +191,21 @@ enum DocumentParseService {
         documentID: UUID,
         title: String
     ) async throws -> DocumentParseResponse {
-        let base = backendBaseURL
-        guard !base.isEmpty else { throw DocumentParseServiceError.missingBackendURL }
-        guard let url = URL(string: "\(base)/api/document/parse") else {
-            throw DocumentParseServiceError.invalidBackendURL
+        let route = DocumentParseEndpointConfig.snapshot
+        guard route.isConfigured, let url = route.endpointURL else {
+            logRemoteUnavailableRoute()
+            throw DocumentParseServiceError.remoteUnavailable
         }
+        TextPipelineDiagnostics.log(
+            "PP",
+            "[PP][Route] document_parse_endpoint=\(url.absoluteString)",
+            severity: .info
+        )
+        TextPipelineDiagnostics.log(
+            "PP",
+            "[PP][Route] remote parse request start",
+            severity: .info
+        )
 
         // Multipart form-data 构建
         let boundary = "Boundary-\(UUID().uuidString)"
@@ -153,9 +274,12 @@ enum DocumentParseService {
 
     /// 轮询解析任务状态，直到完成或超时
     static func pollParseResult(jobID: String) async throws -> NormalizedDocument {
-        let base = backendBaseURL
-        guard !base.isEmpty else { throw DocumentParseServiceError.missingBackendURL }
-        guard let url = URL(string: "\(base)/api/document/parse/\(jobID)") else {
+        let route = DocumentParseEndpointConfig.snapshot
+        guard route.isConfigured else {
+            logRemoteUnavailableRoute()
+            throw DocumentParseServiceError.remoteUnavailable
+        }
+        guard let url = DocumentParseEndpointConfig.parseEndpointURL(jobID: jobID) else {
             throw DocumentParseServiceError.invalidBackendURL
         }
 

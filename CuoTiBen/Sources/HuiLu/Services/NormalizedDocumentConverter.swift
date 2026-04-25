@@ -192,7 +192,7 @@ enum NormalizedDocumentConverter {
             severity: .info
         )
 
-        let bundle = StructuredSourceBundle(
+        let provisionalBundle = StructuredSourceBundle(
             source: source,
             segments: segments,
             sentences: allSentences,
@@ -202,6 +202,21 @@ enum NormalizedDocumentConverter {
             professorSentenceCards: sentenceCards,
             questionLinks: questionLinks,
             zoningSummary: zoningSummary
+        )
+        let passageMap = MindMapAdmissionService.buildPassageMap(from: provisionalBundle)
+        let admissionResult = MindMapAdmissionService.admit(bundle: provisionalBundle, passageMap: passageMap)
+        let bundle = StructuredSourceBundle(
+            source: provisionalBundle.source,
+            segments: provisionalBundle.segments,
+            sentences: provisionalBundle.sentences,
+            outline: provisionalBundle.outline,
+            passageOverview: provisionalBundle.passageOverview,
+            paragraphTeachingCards: provisionalBundle.paragraphTeachingCards,
+            professorSentenceCards: provisionalBundle.professorSentenceCards,
+            questionLinks: provisionalBundle.questionLinks,
+            zoningSummary: provisionalBundle.zoningSummary,
+            passageMap: passageMap.withDiagnostics(admissionResult.diagnostics),
+            mindMapAdmissionResult: admissionResult
         )
 
         return StructuredSourceParsePayload(
@@ -441,31 +456,25 @@ enum NormalizedDocumentConverter {
         let profile = passageBodyProfile(for: text)
 
         if paragraph.zoneRole == .question || blockTypes.contains(.questionStem) || blockTypes.contains(.optionList) {
-            return .questionSupport
+            return .question
         }
         if paragraph.zoneRole == .answerKey {
-            return .answerSupport
-        }
-        if paragraph.zoneRole == .vocabularySupport {
-            return .vocabularySupport
+            return .answerKey
         }
         if blockTypes.contains(.chineseExplanation) {
-            return .chineseExplanation
-        }
-        if paragraph.zoneRole == .metaInstruction {
             return .chineseInstruction
         }
         if blockTypes.contains(.bilingualNote) || blockTypes.contains(.glossary) {
-            return .bilingualAnnotation
+            return .bilingualNote
         }
         if looksLikeInstructionOrQuestionParagraph(text) || paragraph.zoneRole == .metaInstruction {
-            return .polluted
+            return .chineseInstruction
         }
         if looksLikeBilingualGlossaryParagraph(text, profile: profile) {
-            return .bilingualAnnotation
+            return .bilingualNote
         }
         if profile.chineseCharacters > max(12, Int(Double(max(profile.englishLetters, 1)) * 0.9)) {
-            return .polluted
+            return .noise
         }
         if looksLikePassageHeading(text, profile: profile) {
             return .passageHeading
@@ -510,38 +519,29 @@ enum NormalizedDocumentConverter {
         if hasChineseExplanation { flags.append("chinese_explanation") }
         if hasBilingualAnnotation { flags.append("bilingual_annotation") }
         if hasInstructionalLeak { flags.append("instructional") }
-        if sourceKind == .polluted { flags.append("polluted") }
+        if sourceKind == .noise { flags.append("polluted") }
         if mixedContamination { flags.append("mixed_contamination") }
 
-        var score = 1.0
-        if wasRepaired { score -= 0.08 }
-        if mixedContamination { score -= 0.24 }
-        if chineseRatio > 0.24 { score -= min((chineseRatio - 0.24) * 0.8, 0.18) }
-        if englishRatio < 0.48 { score -= min((0.48 - englishRatio) * 0.85, 0.2) }
-        if averageOCRConfidence < 0.72 {
-            score -= min((0.72 - averageOCRConfidence) * 0.46, 0.18)
-        }
-        if sourceKind == .chineseInstruction ||
-            sourceKind == .chineseExplanation ||
-            sourceKind == .bilingualNote ||
-            sourceKind == .bilingualAnnotation {
-            score -= 0.24
-        }
-        if sourceKind == .questionSupport ||
-            sourceKind == .answerSupport ||
-            sourceKind == .vocabularySupport ||
-            sourceKind == .polluted {
-            score -= 0.3
-        }
-
-        return SourceHygieneSnapshot(
-            score: min(max(score, 0.02), 1),
+        let evaluation = SourceHygieneScorer.evaluate(
+            text: repairedText,
+            sourceKind: sourceKind,
+            ocrConfidence: averageOCRConfidence,
             reversedRepaired: wasRepaired,
             hasMixedContamination: mixedContamination,
             chineseRatio: chineseRatio,
             englishRatio: englishRatio,
-            ocrConfidence: averageOCRConfidence,
-            flags: flags
+            blockTypes: blocks.map(\.blockType),
+            zoneRole: paragraph.zoneRole
+        )
+
+        return SourceHygieneSnapshot(
+            score: evaluation.snapshot.score,
+            reversedRepaired: evaluation.snapshot.reversedRepaired,
+            hasMixedContamination: evaluation.snapshot.hasMixedContamination,
+            chineseRatio: evaluation.snapshot.chineseRatio,
+            englishRatio: evaluation.snapshot.englishRatio,
+            ocrConfidence: evaluation.snapshot.ocrConfidence,
+            flags: Array(Set(flags + evaluation.snapshot.flags)).sorted()
         )
     }
 
@@ -658,7 +658,7 @@ enum NormalizedDocumentConverter {
                         sourceSentenceID: sentenceID,
                         sourcePage: paragraph.page,
                         sourceKind: segmentSourceKind,
-                        sourceConfidence: sentenceHygiene.ocrConfidence,
+                        generatedFrom: .normalizedDocument,
                         hygieneScore: sentenceHygiene.score,
                         consistencyScore: sentenceHygiene.score
                     ),
@@ -683,7 +683,7 @@ enum NormalizedDocumentConverter {
                     sourceSentenceID: sentenceIDs.first,
                     sourcePage: paragraph.page,
                     sourceKind: segmentSourceKind,
-                    sourceConfidence: segmentHygiene.ocrConfidence,
+                    generatedFrom: .normalizedDocument,
                     hygieneScore: segmentHygiene.score,
                     consistencyScore: segmentHygiene.score
                 ),
@@ -989,15 +989,198 @@ enum NormalizedDocumentConverter {
         questionLinks: [QuestionEvidenceLink]
     ) -> [OutlineNode] {
         let sentenceCardIndex = Dictionary(uniqueKeysWithValues: sentenceCards.map { ($0.sentenceID, $0) })
-        return PedagogicalOutlineBuilder.build(
-            sourceID: sourceID,
-            segments: segments,
-            sentencesBySegment: sentencesBySegment,
-            paragraphCards: paragraphCards,
-            sentenceCardIndex: sentenceCardIndex,
-            overview: overview,
-            questionLinks: questionLinks
+        let linkedQuestionsBySegment = Dictionary(
+            grouping: questionLinks.flatMap { link in
+                link.supportParagraphIDs.map { ($0, link) }
+            },
+            by: { $0.0 }
         )
+        let sentenceSegmentIndex = Dictionary(
+            uniqueKeysWithValues: sentencesBySegment.values
+                .flatMap { $0 }
+                .map { ($0.id, $0.segmentID) }
+        )
+
+        let paragraphNodes: [OutlineNode] = paragraphCards.map { card in
+            let sentences = sentencesBySegment[card.segmentID] ?? []
+            let linkedQuestions = (linkedQuestionsBySegment[card.segmentID] ?? []).map(\.1)
+            let paragraphSegment = segments.first(where: { $0.id == card.segmentID })
+            let validatedParagraph = AnchorConsistencyValidator.validatedParagraphNodeContent(
+                card: card,
+                sentences: sentences,
+                proposedTitle: teachingParagraphNodeTitle(card: card),
+                proposedSummary: teachingParagraphNodeSummary(card: card, linkedQuestions: linkedQuestions)
+            )
+            let questionNodes = linkedQuestions.enumerated().map { offset, link in
+                let localSentenceIDs = link.supportingSentenceIDs.filter {
+                    sentenceSegmentIndex[$0] == card.segmentID
+                }
+                let anchorSentenceID = localSentenceIDs.first ?? validatedParagraph.anchorSentenceID
+                return OutlineNode(
+                    id: "question_\(card.segmentID)_\(link.id)",
+                    sourceID: sourceID,
+                    parentID: "para_\(card.segmentID)",
+                    depth: 2,
+                    order: card.paragraphIndex * 100 + offset + 20,
+                    nodeType: .questionLink,
+                    title: "题目联动｜\(teachingQuestionNodeTitle(link: link))",
+                    summary: teachingQuestionNodeSummary(link: link),
+                    anchor: OutlineAnchor(
+                        segmentID: card.segmentID,
+                        sentenceID: anchorSentenceID,
+                        page: sentences.first?.page,
+                        label: card.anchorLabel
+                    ),
+                    sourceSegmentIDs: [card.segmentID],
+                    sourceSentenceIDs: anchorSentenceID.map { [$0] } ?? [],
+                    provenance: NodeProvenance(
+                        sourceSegmentID: card.segmentID,
+                        sourceSentenceID: anchorSentenceID,
+                        sourceKind: .question,
+                        generatedFrom: .questionLink,
+                        hygieneScore: paragraphSegment?.hygiene.score ?? 0.5,
+                        consistencyScore: localSentenceIDs.isEmpty ? 0.58 : 0.76
+                    ),
+                    children: []
+                )
+            }
+            let supportingSentenceNodes = sentences
+                .filter { sentence in
+                    sentence.id == validatedParagraph.anchorSentenceID || sentenceCardIndex[sentence.id]?.isKeySentence == true
+                }
+                .prefix(maxOutlineSupportingSentences)
+                .enumerated()
+                .map { _, sentence in
+                    let analysis = sentenceCardIndex[sentence.id]?.analysis
+                    let validatedSentence = AnchorConsistencyValidator.validatedSentenceNodeContent(
+                        sentence: sentence,
+                        analysis: analysis,
+                        proposedTitle: teachingSentenceNodeTitle(sentence: sentence, analysis: analysis),
+                        proposedSummary: teachingSentenceSummary(analysis: analysis, sentence: sentence.text)
+                    )
+                    return OutlineNode(
+                        id: "support_\(sentence.id)",
+                        sourceID: sourceID,
+                        parentID: "para_\(card.segmentID)",
+                        depth: 2,
+                        order: sentence.index,
+                        nodeType: .supportingSentence,
+                        title: validatedSentence.title,
+                        summary: validatedSentence.summary,
+                        anchor: OutlineAnchor(
+                            segmentID: sentence.segmentID,
+                            sentenceID: sentence.id,
+                            page: sentence.page,
+                            label: sentence.anchorLabel
+                        ),
+                        sourceSegmentIDs: [sentence.segmentID],
+                        sourceSentenceIDs: [sentence.id],
+                        provenance: NodeProvenance(
+                            sourceSegmentID: sentence.segmentID,
+                            sourceSentenceID: sentence.id,
+                            sourceKind: sentence.provenance.sourceKind,
+                            consistencyScore: validatedSentence.consistencyScore
+                        ),
+                        children: []
+                    )
+                }
+
+            let validatedFocus = AnchorConsistencyValidator.validatedFocusNodeContent(
+                card: card,
+                sentences: sentences,
+                proposedTitle: teachingFocusTitle(card: card),
+                proposedSummary: teachingFocusSummary(card: card, linkedQuestions: linkedQuestions)
+            )
+            let focusNode = OutlineNode(
+                id: "focus_\(card.segmentID)",
+                sourceID: sourceID,
+                parentID: "para_\(card.segmentID)",
+                depth: 2,
+                order: card.paragraphIndex * 10,
+                nodeType: .teachingFocus,
+                title: validatedFocus.title,
+                summary: validatedFocus.summary,
+                anchor: OutlineAnchor(
+                    segmentID: card.segmentID,
+                    sentenceID: validatedFocus.anchorSentenceID,
+                    page: sentences.first?.page,
+                    label: card.anchorLabel
+                ),
+                sourceSegmentIDs: [card.segmentID],
+                sourceSentenceIDs: validatedFocus.anchorSentenceID.map { [$0] } ?? [],
+                provenance: NodeProvenance(
+                    sourceSegmentID: card.segmentID,
+                    sourceSentenceID: validatedFocus.anchorSentenceID,
+                    sourceKind: paragraphSegment?.provenance.sourceKind ?? .passageBody,
+                    consistencyScore: validatedFocus.consistencyScore
+                ),
+                children: []
+            )
+
+            return OutlineNode(
+                id: "para_\(card.segmentID)",
+                sourceID: sourceID,
+                parentID: "passage_root",
+                depth: 1,
+                order: card.paragraphIndex,
+                nodeType: .paragraphTheme,
+                title: validatedParagraph.title,
+                summary: validatedParagraph.summary,
+                anchor: OutlineAnchor(
+                    segmentID: card.segmentID,
+                    sentenceID: validatedParagraph.anchorSentenceID,
+                    page: sentences.first?.page,
+                    label: card.anchorLabel
+                ),
+                sourceSegmentIDs: [card.segmentID],
+                sourceSentenceIDs: validatedParagraph.anchorSentenceID.map { [$0] } ?? [],
+                provenance: NodeProvenance(
+                    sourceSegmentID: card.segmentID,
+                    sourceSentenceID: validatedParagraph.anchorSentenceID,
+                    sourceKind: paragraphSegment?.provenance.sourceKind ?? .passageBody,
+                    consistencyScore: validatedParagraph.consistencyScore
+                ),
+                children: [focusNode] + questionNodes + supportingSentenceNodes
+            )
+        }
+
+        let rootNode = OutlineNode(
+            id: "passage_root",
+            sourceID: sourceID,
+            parentID: nil,
+            depth: 0,
+            order: 0,
+            nodeType: .passageRoot,
+            title: {
+                let theme = shortSnippet(from: overview?.displayedArticleTheme ?? "", limit: 22)
+                return theme.isEmpty ? "文章主题与问题意识" : theme
+            }(),
+            summary: {
+                let question = shortSnippet(from: overview?.displayedAuthorCoreQuestion ?? "", limit: 28)
+                if !question.isEmpty {
+                    return "核心问题：\(question)"
+                }
+                let progression = shortSnippet(from: overview?.displayedProgressionPath ?? "", limit: 52)
+                return progression.isEmpty ? "先看主题，再顺着段落分支定位关键句。" : progression
+            }(),
+            anchor: OutlineAnchor(
+                segmentID: segments.first?.id,
+                sentenceID: segments.first.flatMap { sentencesBySegment[$0.id]?.first?.id },
+                page: segments.first?.page,
+                label: segments.first?.anchorLabel ?? "原文"
+            ),
+            sourceSegmentIDs: segments.map(\.id),
+            sourceSentenceIDs: segments.first.flatMap { sentencesBySegment[$0.id]?.first?.id }.map { [$0] } ?? [],
+            provenance: NodeProvenance(
+                sourceSegmentID: segments.first?.id,
+                sourceSentenceID: segments.first.flatMap { sentencesBySegment[$0.id]?.first?.id },
+                sourceKind: segments.first?.provenance.sourceKind ?? .passageBody,
+                consistencyScore: 0.9
+            ),
+            children: paragraphNodes
+        )
+
+        return [rootNode]
     }
 
     private static func splitIntoSentences(_ text: String) -> [String] {
@@ -1099,10 +1282,7 @@ enum NormalizedDocumentConverter {
         if role == .evidence && (lower.contains("for example") || lower.contains("for instance")) { score += 25 }
         score += sentence.hygiene.score * 24
         if sentence.provenance.sourceKind == .passageHeading { score -= 12 }
-        if sentence.provenance.sourceKind == .chineseInstruction ||
-            sentence.provenance.sourceKind == .chineseExplanation ||
-            sentence.provenance.sourceKind == .bilingualNote ||
-            sentence.provenance.sourceKind == .bilingualAnnotation {
+        if sentence.provenance.sourceKind == .chineseInstruction || sentence.provenance.sourceKind == .bilingualNote {
             score -= 30
         }
         return score

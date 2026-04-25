@@ -237,19 +237,7 @@ enum StructureTreePreviewLayout {
 
         var deduplicated: [OutlineNode] = []
         var seen: Set<String> = []
-        let sortedCandidates = candidates.sorted { lhs, rhs in
-            if lhs.branchDisplayPriority != rhs.branchDisplayPriority {
-                return lhs.branchDisplayPriority < rhs.branchDisplayPriority
-            }
-            if lhs.isAuxiliaryNode != rhs.isAuxiliaryNode {
-                return !lhs.isAuxiliaryNode && rhs.isAuxiliaryNode
-            }
-            if lhs.order != rhs.order {
-                return lhs.order < rhs.order
-            }
-            return lhs.id < rhs.id
-        }
-        for candidate in sortedCandidates where !seen.contains(candidate.id) {
+        for candidate in candidates.sorted(by: { $0.order < $1.order }) where !seen.contains(candidate.id) {
             seen.insert(candidate.id)
             deduplicated.append(candidate)
         }
@@ -263,9 +251,7 @@ enum StructureTreePreviewLayout {
             limit = metrics.collapsedBranchLimit
         }
 
-        let preferredCandidates = deduplicated.filter { !$0.isAuxiliaryNode }
-        let source = preferredCandidates.isEmpty ? deduplicated : preferredCandidates + deduplicated.filter(\.isAuxiliaryNode)
-        var visible = Array(source.prefix(limit))
+        var visible = Array(deduplicated.prefix(limit))
         if let highlightedChildID,
            let highlightedChild = deduplicated.first(where: { $0.id == highlightedChildID }),
            !visible.contains(where: { $0.id == highlightedChildID }) {
