@@ -62,7 +62,9 @@ enum AIResponseIdentityGuard {
                 "actual_sentence_id=\(actual?.sentenceID ?? "nil")",
                 "expected_hash=\(expected.sentenceTextHash)",
                 "actual_hash=\(actual?.sentenceTextHash ?? "nil")",
-                "discard_reason=\(reason.debugLabel)"
+                "discard_reason=\(reason.debugLabel)",
+                "currentResultSource=discardedMismatch",
+                "current_result_source=discardedMismatch"
             ].joined(separator: " "),
             severity: .warning
         )

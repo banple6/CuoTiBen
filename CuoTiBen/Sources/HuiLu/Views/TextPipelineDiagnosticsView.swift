@@ -38,6 +38,13 @@ struct TextPipelineDiagnosticsView: View {
         DocumentParseRouteStatus(events: events)
     }
 
+    private var latestMaterialGateStatus: MaterialGateStatus? {
+        events
+            .filter { $0.stage == "PP" && $0.message.contains("[PP][Gate]") }
+            .last
+            .flatMap { MaterialGateStatus(event: $0) }
+    }
+
     private var latestAIGatewayStatus: AIGatewayEventStatus? {
         [latestSentenceAIStatus, latestPassageAIStatus]
             .compactMap { $0 }
@@ -84,9 +91,19 @@ struct TextPipelineDiagnosticsView: View {
                 }
 
                 List {
+                    Section("Build") {
+                        RuntimeBuildFingerprintCard(fingerprint: RuntimeBuildFingerprint.current)
+                    }
+
                     if let documentParseStatus = latestDocumentParseRouteStatus {
                         Section("Document parse") {
                             DocumentParseRouteStatusCard(status: documentParseStatus)
+                        }
+                    }
+
+                    if let materialGateStatus = latestMaterialGateStatus {
+                        Section("Material gate") {
+                            MaterialGateStatusCard(status: materialGateStatus)
                         }
                     }
 
@@ -192,6 +209,23 @@ struct TextPipelineDiagnosticsView: View {
     }
 }
 
+private struct RuntimeBuildFingerprintCard: View {
+    let fingerprint: RuntimeBuildFingerprint
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            DiagnosticKeyValueRow(label: "gitSHA", value: fingerprint.gitSHA)
+            DiagnosticKeyValueRow(label: "branch", value: fingerprint.branchName)
+            DiagnosticKeyValueRow(label: "buildTime", value: fingerprint.buildTime)
+            DiagnosticKeyValueRow(label: "appConfiguration", value: fingerprint.appConfiguration)
+            DiagnosticKeyValueRow(label: "aiBackendBaseURL", value: fingerprint.aiBackendBaseURL)
+            DiagnosticKeyValueRow(label: "documentParseEndpoint", value: fingerprint.documentParseEndpointStatus)
+            DiagnosticKeyValueRow(label: "isDebugBuild", value: fingerprint.isDebugBuild ? "true" : "false")
+        }
+        .padding(.vertical, 4)
+    }
+}
+
 private struct DocumentParseRouteStatus {
     let endpointConfigured: Bool
     let endpointURL: String
@@ -233,6 +267,56 @@ private struct DocumentParseRouteStatusCard: View {
             DiagnosticKeyValueRow(label: "documentParseRemoteStatus", value: status.remoteStatus)
             DiagnosticKeyValueRow(label: "skippedBecauseUnconfigured", value: status.skippedBecauseUnconfigured ? "true" : "false")
             DiagnosticKeyValueRow(label: "cloudDocumentParseAttempted", value: status.cloudDocumentParseAttempted ? "true" : "false")
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+private struct MaterialGateStatus {
+    let materialMode: String
+    let rawTextLength: String
+    let sentenceDrafts: String
+    let rawTextTooShort: Bool
+    let sentenceDraftsZero: Bool
+    let noPassageBody: Bool
+    let mostlyQuestionBlocks: Bool
+    let mostlyChineseInstruction: Bool
+    let earlyFailConvertedToFallback: Bool
+    let reason: String
+
+    init?(event: TextPipelineDiagnostics.PipelineEvent) {
+        let values = DiagnosticsEventParser.parseKeyValuePairs(from: event.message)
+        guard let materialMode = values["material_mode"] else { return nil }
+        let reason = values["reason"] ?? ""
+
+        self.materialMode = materialMode
+        rawTextLength = values["raw_text_length"] ?? "nil"
+        sentenceDrafts = values["sentence_drafts"] ?? "nil"
+        rawTextTooShort = reason.contains("rawTextTooShort")
+        sentenceDraftsZero = reason.contains("sentenceDrafts=0")
+        noPassageBody = reason.contains("noPassageBody")
+        mostlyQuestionBlocks = reason.contains("mostlyQuestionBlocks")
+        mostlyChineseInstruction = reason.contains("mostlyChineseInstruction")
+        earlyFailConvertedToFallback = (values["early_fail_converted_to_fallback"] ?? "false") == "true"
+        self.reason = reason.replacingOccurrences(of: "||", with: " | ")
+    }
+}
+
+private struct MaterialGateStatusCard: View {
+    let status: MaterialGateStatus
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            DiagnosticKeyValueRow(label: "materialMode", value: status.materialMode)
+            DiagnosticKeyValueRow(label: "rawTextLength", value: status.rawTextLength)
+            DiagnosticKeyValueRow(label: "sentenceDrafts", value: status.sentenceDrafts)
+            DiagnosticKeyValueRow(label: "rawTextTooShort", value: status.rawTextTooShort ? "true" : "false")
+            DiagnosticKeyValueRow(label: "sentenceDrafts=0", value: status.sentenceDraftsZero ? "true" : "false")
+            DiagnosticKeyValueRow(label: "noPassageBody", value: status.noPassageBody ? "true" : "false")
+            DiagnosticKeyValueRow(label: "mostlyQuestionBlocks", value: status.mostlyQuestionBlocks ? "true" : "false")
+            DiagnosticKeyValueRow(label: "mostlyChineseInstruction", value: status.mostlyChineseInstruction ? "true" : "false")
+            DiagnosticKeyValueRow(label: "earlyFailConverted", value: status.earlyFailConvertedToFallback ? "true" : "false")
+            DiagnosticKeyValueRow(label: "reason", value: status.reason)
         }
         .padding(.vertical, 4)
     }

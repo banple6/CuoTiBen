@@ -1372,7 +1372,9 @@ struct ExplainSentenceRequestBuilder {
         )
 
         let containsEnglish = context.sentence.range(of: "[A-Za-z]", options: .regularExpression) != nil
-        let skipRemoteReason = selectionKind.skipRemoteReason ?? (containsEnglish ? nil : "notPassageSentence")
+        let skipRemoteReason = selectionKind.skipRemoteReason
+            ?? (missingFields.isEmpty ? nil : "missingIdentity")
+            ?? (containsEnglish ? nil : "notPassageSentence")
         let preflightPassed = missingFields.isEmpty && skipRemoteReason == nil
         logPreflight(
             preflightPassed: preflightPassed,
@@ -2217,6 +2219,7 @@ enum AIExplainSentenceService {
         structuredError: AIStructuredError,
         meta: AIServiceResponseMeta? = nil
     ) -> AIExplainSentenceResult {
+        let currentResultSource = structuredError.kind == .invalidRequest ? "localSkeleton" : "requestFailed"
         let resolved = LocalSentenceFallbackBuilder.build(
             context: context,
             requestIdentity: requestIdentity,
@@ -2232,8 +2235,8 @@ enum AIExplainSentenceService {
                 "retry_count=\(resolved.retryCount)",
                 "used_cache=\(resolved.usedCache)",
                 "used_fallback=\(resolved.usedFallback)",
-                "currentResultSource=localSkeleton",
-                "current_result_source=localSkeleton",
+                "currentResultSource=\(currentResultSource)",
+                "current_result_source=\(currentResultSource)",
                 "fallback_reason=\(structuredError.errorCode)"
             ].joined(separator: " "),
             severity: .warning

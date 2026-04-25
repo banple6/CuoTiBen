@@ -60,7 +60,9 @@ enum PassageAnalysisIdentityGuard {
                 "actual_content_hash=\(actual?.contentHash ?? "nil")",
                 "expected_material_mode=\(expected.materialMode.rawValue)",
                 "actual_material_mode=\(actual?.materialMode.rawValue ?? "nil")",
-                "discard_reason=\(decision.reason?.debugLabel ?? "none")"
+                "discard_reason=\(decision.reason?.debugLabel ?? "none")",
+                "currentResultSource=\(isMatch ? "remoteAI" : "discardedMismatch")",
+                "current_result_source=\(isMatch ? "remoteAI" : "discardedMismatch")"
             ].joined(separator: " "),
             severity: isMatch ? .info : .warning
         )

@@ -716,8 +716,8 @@ enum ProfessorAnalysisService {
             "used_fallback=\(meta.usedFallback)",
             "circuit_state=\(meta.circuitState)",
             "cloud_passage_attempted=\(diagnostics.contractPreflightPassed)",
-            "currentResultSource=localSkeleton",
-            "current_result_source=localSkeleton",
+            "currentResultSource=\(diagnostics.contractPreflightPassed ? "requestFailed" : "localSkeleton")",
+            "current_result_source=\(diagnostics.contractPreflightPassed ? "requestFailed" : "localSkeleton")",
             "fallback_reason=\(errorCode)"
         ]
     }

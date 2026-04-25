@@ -1753,7 +1753,7 @@ struct SourceSelectionSkeletonPanel: View {
            lowered.contains("algorithm"),
            lowered.contains("trust"),
            lowered.contains("shared environment") {
-            return "文章可能讨论空气和算法作为公共环境中的信任基础。"
+            return "文章可能讨论公共环境中的信任基础如何从现实空气质量扩展到算法信息环境。"
         }
         return "文章可能围绕标题中的关键词展开，说明它们之间的因果、并列或转折关系。"
     }
@@ -1764,8 +1764,13 @@ struct SourceSelectionSkeletonPanel: View {
             case .heading:
                 SentenceExplainBlock(
                     title: "标题解读",
-                    content: normalizedText.isEmpty ? "当前标题文本为空，已保留标题结构骨架。" : "标题聚焦：\(normalizedText)",
+                    content: "这是一句标题，不是正文句子，因此不会做句子主干解析。",
                     tone: .node
+                )
+                SentenceExplainBlock(
+                    title: "标题含义",
+                    content: normalizedText.isEmpty ? "当前标题文本为空，已保留标题结构骨架。" : headingThemePrediction,
+                    tone: .translation
                 )
                 SentenceExplainBlock(
                     title: "主题预测",
@@ -1784,6 +1789,11 @@ struct SourceSelectionSkeletonPanel: View {
                         "并列对象之间的关系可能成为段落推进或主旨题线索。"
                     ],
                     tone: .rewrite
+                )
+                SentenceExplainListBlock(
+                    title: "学习提示",
+                    items: ["如果要做句子精讲，请选择正文段落中的完整英文句子。"],
+                    tone: .teaching
                 )
             case .question:
                 SentenceExplainBlock(

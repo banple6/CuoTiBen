@@ -80,12 +80,14 @@ enum DocumentParseEndpointConfig {
     }
 
     private static var resolvedBaseURL: String? {
-        if let runtimeBaseURL = normalizedNonEmpty(UserDefaults.standard.string(forKey: runtimeBaseURLStorageKey)) {
+        #if DEBUG
+        if let runtimeBaseURL = normalizedDebugRuntimeBaseURL(UserDefaults.standard.string(forKey: runtimeBaseURLStorageKey)) {
             return runtimeBaseURL
         }
-        if let legacyRuntimeBaseURL = normalizedNonEmpty(UserDefaults.standard.string(forKey: legacyRuntimeBaseURLStorageKey)) {
+        if let legacyRuntimeBaseURL = normalizedDebugRuntimeBaseURL(UserDefaults.standard.string(forKey: legacyRuntimeBaseURLStorageKey)) {
             return legacyRuntimeBaseURL
         }
+        #endif
         if let infoPlistBaseURL = normalizedNonEmpty(Bundle.main.object(forInfoDictionaryKey: infoPlistBaseURLKey) as? String) {
             return infoPlistBaseURL
         }
@@ -95,6 +97,22 @@ enum DocumentParseEndpointConfig {
     private static func normalizedNonEmpty(_ value: String?) -> String? {
         let normalized = normalizeBaseURL(value ?? "")
         return normalized.isEmpty ? nil : normalized
+    }
+
+    private static func normalizedDebugRuntimeBaseURL(_ value: String?) -> String? {
+        guard let normalized = normalizedNonEmpty(value),
+              isLocalParserEndpoint(normalized)
+        else {
+            return nil
+        }
+        return normalized
+    }
+
+    private static func isLocalParserEndpoint(_ value: String) -> Bool {
+        guard let host = URLComponents(string: value)?.host?.lowercased() else {
+            return false
+        }
+        return host == "localhost" || host == "127.0.0.1" || host == "::1"
     }
 
     private static func makeParseEndpointURL(from baseURLString: String) -> URL? {

@@ -94,11 +94,12 @@ struct SourceSelectionState: Codable, Equatable, Hashable {
         sentence: Sentence,
         segment: Segment?
     ) -> SourceSelectionState {
-        let sourceKind = segment?.provenance.sourceKind ?? sentence.provenance.sourceKind
+        let sourceKind = resolvedSourceKind(sentence: sentence, segment: segment)
         return SourceSelectionState(
-            kind: SourceSelectionKind.make(
+            kind: resolvedSelectionKind(
                 sourceKind: sourceKind,
-                hasSentenceID: !normalize(sentence.id).isEmpty
+                hasSentenceID: !normalize(sentence.id).isEmpty,
+                text: sentence.text
             ),
             documentID: document.id.uuidString,
             segmentID: sentence.segmentID,
@@ -116,11 +117,12 @@ struct SourceSelectionState: Codable, Equatable, Hashable {
         sentence: Sentence?,
         segment: Segment?
     ) -> SourceSelectionState {
-        let sourceKind = segment?.provenance.sourceKind ?? sentence?.provenance.sourceKind ?? .unknown
+        let sourceKind = resolvedSourceKind(sentence: sentence, segment: segment)
         return SourceSelectionState(
-            kind: SourceSelectionKind.make(
+            kind: resolvedSelectionKind(
                 sourceKind: sourceKind,
-                hasSentenceID: sentence.map { !normalize($0.id).isEmpty } ?? false
+                hasSentenceID: sentence.map { !normalize($0.id).isEmpty } ?? false,
+                text: text
             ),
             documentID: document.id.uuidString,
             segmentID: sentence?.segmentID ?? segment?.id,
@@ -144,6 +146,51 @@ struct SourceSelectionState: Codable, Equatable, Hashable {
         (value ?? "")
             .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func resolvedSourceKind(sentence: Sentence?, segment: Segment?) -> SourceContentKind {
+        if let sentenceKind = sentence?.provenance.sourceKind,
+           sentenceKind != .unknown,
+           sentenceKind != .synthetic {
+            return sentenceKind
+        }
+        return segment?.provenance.sourceKind ?? .unknown
+    }
+
+    private static func resolvedSelectionKind(
+        sourceKind: SourceContentKind,
+        hasSentenceID: Bool,
+        text: String
+    ) -> SourceSelectionKind {
+        if sourceKind == .passageBody, looksLikeHeading(text) {
+            return .heading
+        }
+        return SourceSelectionKind.make(
+            sourceKind: sourceKind,
+            hasSentenceID: hasSentenceID
+        )
+    }
+
+    private static func looksLikeHeading(_ text: String) -> Bool {
+        let normalized = normalize(text)
+        guard normalized.count >= 12, normalized.count <= 180 else {
+            return false
+        }
+        let wordCount = normalized.split { $0.isWhitespace }.count
+        guard wordCount <= 20 else { return false }
+
+        let terminalPunctuation = CharacterSet(charactersIn: ".?!。？！")
+        let hasTerminalSentencePunctuation = normalized.unicodeScalars.last.map {
+            terminalPunctuation.contains($0)
+        } ?? false
+        if normalized.contains(":"), !hasTerminalSentencePunctuation {
+            return true
+        }
+
+        let uppercaseLetters = normalized.unicodeScalars.filter { CharacterSet.uppercaseLetters.contains($0) }.count
+        let letters = normalized.unicodeScalars.filter { CharacterSet.letters.contains($0) }.count
+        let uppercaseRatio = letters == 0 ? 0 : Double(uppercaseLetters) / Double(letters)
+        return !hasTerminalSentencePunctuation && uppercaseRatio >= 0.18 && wordCount <= 14
     }
 }
 

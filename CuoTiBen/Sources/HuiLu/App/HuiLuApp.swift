@@ -23,6 +23,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         
         // Configure appearance
         configureAppearance()
+        RuntimeBuildFingerprint.logAtLaunch()
         
         return true
     }

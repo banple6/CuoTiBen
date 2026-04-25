@@ -135,6 +135,7 @@
 		B0000000000000000000007E /* AIResponseIdentityGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000007E /* AIResponseIdentityGuard.swift */; };
 		B00000000000000000000092 /* PassageAnalysisIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000092 /* PassageAnalysisIdentity.swift */; };
 		B00000000000000000000093 /* PassageAnalysisIdentityGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000093 /* PassageAnalysisIdentityGuard.swift */; };
+		B00000000000000000000094 /* RuntimeBuildFingerprint.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000094 /* RuntimeBuildFingerprint.swift */; };
 		B0000000000000000000007F /* AIStructuredError.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000007F /* AIStructuredError.swift */; };
 		B00000000000000000000080 /* LocalSentenceFallbackBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000080 /* LocalSentenceFallbackBuilder.swift */; };
 		B00000000000000000000081 /* LocalPassageFallbackBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000081 /* LocalPassageFallbackBuilder.swift */; };
@@ -286,6 +287,7 @@
 		C0000000000000000000007E /* AIResponseIdentityGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIResponseIdentityGuard.swift; sourceTree = "<group>"; };
 		C00000000000000000000092 /* PassageAnalysisIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PassageAnalysisIdentity.swift; sourceTree = "<group>"; };
 		C00000000000000000000093 /* PassageAnalysisIdentityGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PassageAnalysisIdentityGuard.swift; sourceTree = "<group>"; };
+		C00000000000000000000094 /* RuntimeBuildFingerprint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeBuildFingerprint.swift; sourceTree = "<group>"; };
 		C0000000000000000000007F /* AIStructuredError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIStructuredError.swift; sourceTree = "<group>"; };
 		C00000000000000000000080 /* LocalSentenceFallbackBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalSentenceFallbackBuilder.swift; sourceTree = "<group>"; };
 		C00000000000000000000081 /* LocalPassageFallbackBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalPassageFallbackBuilder.swift; sourceTree = "<group>"; };
@@ -408,6 +410,7 @@
 			isa = PBXGroup;
 			children = (
 				C00000000000000000000077 /* AIRequestPolicy.swift */,
+				C00000000000000000000094 /* RuntimeBuildFingerprint.swift */,
 				C00000000000000000000019 /* AIExplainSentenceService.swift */,
 				C0000000000000000000007D /* AIRequestIdentity.swift */,
 				C00000000000000000000078 /* AIRequestSingleFlight.swift */,
@@ -672,6 +675,7 @@
 				3E079BA22F6E5B5A0004FFFC /* Sources */,
 				3E079BA32F6E5B5A0004FFFC /* Frameworks */,
 				3E079BA42F6E5B5A0004FFFC /* Resources */,
+				E00000000000000000000001 /* Stamp Build Fingerprint */,
 			);
 			buildRules = (
 			);
@@ -730,6 +734,28 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		E00000000000000000000001 /* Stamp Build Fingerprint */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Stamp Build Fingerprint";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\nINFO_PLIST=\"${TARGET_BUILD_DIR}/${INFOPLIST_PATH}\"\nif [ ! -f \"$INFO_PLIST\" ]; then\n  exit 0\nfi\nGIT_SHA=$(git -C \"${SRCROOT}\" rev-parse HEAD 2>/dev/null || echo unknown)\nGIT_BRANCH=$(git -C \"${SRCROOT}\" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)\nBUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)\nAPP_CONFIGURATION=${CONFIGURATION:-unknown}\nset_plist_value() {\n  key=\"$1\"\n  value=\"$2\"\n  /usr/libexec/PlistBuddy -c \"Set :${key} ${value}\" \"$INFO_PLIST\" 2>/dev/null || /usr/libexec/PlistBuddy -c \"Add :${key} string ${value}\" \"$INFO_PLIST\"\n}\nset_plist_value GIT_SHA \"$GIT_SHA\"\nset_plist_value GIT_BRANCH \"$GIT_BRANCH\"\nset_plist_value BUILD_TIME \"$BUILD_TIME\"\nset_plist_value APP_CONFIGURATION \"$APP_CONFIGURATION\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		3E079BA22F6E5B5A0004FFFC /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -786,6 +812,7 @@
 				B0000000000000000000007E /* AIResponseIdentityGuard.swift in Sources */,
 				B00000000000000000000092 /* PassageAnalysisIdentity.swift in Sources */,
 				B00000000000000000000093 /* PassageAnalysisIdentityGuard.swift in Sources */,
+				B00000000000000000000094 /* RuntimeBuildFingerprint.swift in Sources */,
 				B0000000000000000000007F /* AIStructuredError.swift in Sources */,
 				B0000000000000000000001B /* AISourceParsingService.swift in Sources */,
 				B00000000000000000000017 /* ReviewListView.swift in Sources */,
@@ -1010,6 +1037,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 2S768KJY2S;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = CuoTiBen/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.6;
@@ -1039,6 +1067,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 2S768KJY2S;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = CuoTiBen/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.6;
