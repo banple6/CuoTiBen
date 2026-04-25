@@ -25,19 +25,22 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
         self.document = document
         self.bundle = bundle
 
-        if let firstSentence = bundle.sentences.first {
+        if let firstSentence = bundle.sentences.first(where: { Self.isPassageSentence($0, in: bundle) }) {
             selectedSentenceID = firstSentence.id
             selectedNodeID = bundle.bestOutlineNode(forSentenceID: firstSentence.id)?.id
         } else if let firstNode = bundle.flattenedOutlineNodes().first {
             selectedNodeID = firstNode.id
-            selectedSentenceID = firstNode.primarySentenceID ?? firstNode.anchor.sentenceID
+            selectedSentenceID = nil
         }
 
         handleSelectedSentenceChange()
     }
 
     var selectedSentence: Sentence? {
-        bundle.sentence(id: selectedSentenceID)
+        guard let sentence = bundle.sentence(id: selectedSentenceID),
+              Self.isPassageSentence(sentence, in: bundle)
+        else { return nil }
+        return sentence
     }
 
     var selectedNode: OutlineNode? {
@@ -62,10 +65,7 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
     }
 
     private var bundledAnalysis: ProfessorSentenceAnalysis? {
-        guard let selectedSentence else {
-            return bundle.displayedSentenceCard(id: selectedSentenceID)?.analysis
-        }
-
+        guard let selectedSentence else { return nil }
         guard let analysis = bundle.displayedSentenceCard(id: selectedSentence.id)?.analysis,
               analysis.isCompatible(with: selectedSentence.text) else {
             return nil
@@ -127,36 +127,50 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
     }
 
     var headerSnapshot: ProfessorTeachingStatusSnapshot {
-        ProfessorTeachingStatusSnapshot(
+        let materialMode = bundle.passageAnalysisDiagnostics?.materialMode ?? .passageReading
+        let isSentenceMode = materialMode == .passageReading && selectedSentence != nil
+        let structureTitle = materialMode.structureTitle
+        return ProfessorTeachingStatusSnapshot(
             documentTitle: document.title,
             currentSentenceAnchor: selectedSentence?.anchorLabel ?? selectedNode?.anchor.label ?? "等待定位",
             currentSentenceFunction: effectiveAnalysis?.renderedSentenceFunction.nonEmpty
-                ?? "先在原文或教学树里选中一句，系统会把当前句的定位、主干和教学焦点同步到这里。",
-            currentParagraphRole: selectedParagraphCard?.argumentRole.displayName ?? "段落角色待识别",
+                ?? (isSentenceMode
+                    ? "先在原文或教学树里选中一句，系统会把当前句的定位、主干和教学焦点同步到这里。"
+                    : "当前资料按\(structureTitle)展示，不进入句子主干解析。"),
+            currentParagraphRole: selectedParagraphCard?.argumentRole.displayName
+                ?? (isSentenceMode ? "段落角色待识别" : "本地结构骨架"),
             currentTeachingFocus: selectedParagraphCard?.teachingFocuses.first?.nonEmpty
                 ?? selectedParagraphCard?.theme.nonEmpty
-                ?? "教学焦点待提取",
-            currentMode: "句子讲解"
+                ?? (isSentenceMode ? "教学焦点待提取" : materialMode.statusTitle),
+            currentMode: isSentenceMode ? "句子讲解" : structureTitle
         )
     }
 
     func selectSentence(_ sentence: Sentence) {
+        guard Self.isPassageSentence(sentence, in: bundle) else {
+            selectedSentenceID = nil
+            selectedNodeID = bundle.bestOutlineNode(forSentenceID: sentence.id)?.id
+                ?? bundle.bestOutlineNode(forSegmentID: sentence.segmentID)?.id
+                ?? selectedNodeID
+            return
+        }
         selectedSentenceID = sentence.id
         selectedNodeID = bundle.bestOutlineNode(forSentenceID: sentence.id)?.id
     }
 
     func selectNode(_ node: OutlineNode) {
         selectedNodeID = node.id
-        if let sentenceID = node.primarySentenceID ?? node.anchor.sentenceID {
+        if let sentenceID = node.primarySentenceID ?? node.anchor.sentenceID,
+           let sentence = bundle.sentence(id: sentenceID),
+           Self.isPassageSentence(sentence, in: bundle) {
             selectedSentenceID = sentenceID
-        } else if let segmentID = node.primarySegmentID ?? node.anchor.segmentID,
-                  let sentence = bundle.sentences.first(where: { $0.segmentID == segmentID }) {
-            selectedSentenceID = sentence.id
+        } else {
+            selectedSentenceID = nil
         }
     }
 
     func anchorLabel(for node: OutlineNode?) -> String {
-        guard let node else { return "Awaiting context" }
+        guard let node else { return "等待定位" }
         return node.anchor.label
     }
 
@@ -301,6 +315,11 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
             sentenceText: sentence.text,
             analysis: result
         ).isEmpty
+    }
+
+    private static func isPassageSentence(_ sentence: Sentence, in bundle: StructuredSourceBundle) -> Bool {
+        let materialMode = bundle.passageAnalysisDiagnostics?.materialMode ?? .passageReading
+        return materialMode == .passageReading && sentence.provenance.sourceKind == .passageBody
     }
 }
 

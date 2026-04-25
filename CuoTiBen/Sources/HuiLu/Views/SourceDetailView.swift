@@ -73,20 +73,25 @@ struct SourceDetailView: View {
     private var currentSentenceForTeachingStatus: Sentence? {
         guard let structuredSource else { return nil }
         if let selectedSentence {
-            return structuredSource.sentence(id: selectedSentence.id) ?? selectedSentence
+            let sentence = structuredSource.sentence(id: selectedSentence.id) ?? selectedSentence
+            return isPassageTeachingSentence(sentence, in: structuredSource) ? sentence : nil
         }
-        if let highlightedSentenceID, let sentence = structuredSource.sentence(id: highlightedSentenceID) {
+        if let highlightedSentenceID,
+           let sentence = structuredSource.sentence(id: highlightedSentenceID),
+           isPassageTeachingSentence(sentence, in: structuredSource) {
             return sentence
         }
         if let node = structuredSource.outlineNode(id: highlightedOutlineNodeID),
-           let sentence = structuredSource.sentence(id: node.primarySentenceID ?? node.anchor.sentenceID) {
+           let sentence = structuredSource.sentence(id: node.primarySentenceID ?? node.anchor.sentenceID),
+           isPassageTeachingSentence(sentence, in: structuredSource) {
             return sentence
         }
         if let firstKeySentence = structuredSource.professorSentenceCards.first,
-           let sentence = structuredSource.sentence(id: firstKeySentence.sentenceID) {
+           let sentence = structuredSource.sentence(id: firstKeySentence.sentenceID),
+           isPassageTeachingSentence(sentence, in: structuredSource) {
             return sentence
         }
-        return structuredSource.sentences.first
+        return structuredSource.sentences.first { isPassageTeachingSentence($0, in: structuredSource) }
     }
 
     private var currentParagraphCardForTeachingStatus: ParagraphTeachingCard? {
@@ -114,6 +119,9 @@ struct SourceDetailView: View {
     }
 
     private var currentModeLabel: String {
+        if let mode = passageMaterialMode, mode != .passageReading {
+            return mode.structureTitle
+        }
         switch selectedTab {
         case .original:
             return "原文"
@@ -125,16 +133,21 @@ struct SourceDetailView: View {
     }
 
     private var teachingStatusSnapshot: ProfessorTeachingStatusSnapshot {
+        let materialMode = passageMaterialMode ?? .passageReading
+        let isSentenceMode = materialMode == .passageReading && currentSentenceForTeachingStatus != nil
+        let structureTitle = materialMode.structureTitle
         let anchor = currentSentenceForTeachingStatus?.anchorLabel
             ?? structuredSource?.outlineNode(id: highlightedOutlineNodeID)?.anchor.label
             ?? "等待定位"
         let sentenceFunction = currentAnalysisForTeachingStatus?.renderedSentenceFunction.nonEmpty
-            ?? "先选中一句或一个教学节点，系统会把当前句的定位、主干和教学焦点放到这里。"
+            ?? (isSentenceMode
+                ? "先选中一句或一个教学节点，系统会把当前句的定位、主干和教学焦点放到这里。"
+                : "当前资料按\(structureTitle)展示，不进入句子主干解析。")
         let paragraphRole = currentParagraphCardForTeachingStatus?.argumentRole.displayName
-            ?? "段落角色待识别"
+            ?? (isSentenceMode ? "段落角色待识别" : "本地结构骨架")
         let teachingFocus = currentParagraphCardForTeachingStatus?.displayedTeachingFocuses.first?.nonEmpty
             ?? currentParagraphCardForTeachingStatus?.displayedTheme.nonEmpty
-            ?? "教学焦点待提取"
+            ?? (isSentenceMode ? "教学焦点待提取" : materialMode.statusTitle)
 
         return ProfessorTeachingStatusSnapshot(
             documentTitle: liveDocument.title,
@@ -156,6 +169,14 @@ struct SourceDetailView: View {
 
     private var allowsPassageRetry: Bool {
         passageMaterialMode == nil || passageMaterialMode == .passageReading
+    }
+
+    private func isPassageTeachingSentence(
+        _ sentence: Sentence,
+        in bundle: StructuredSourceBundle
+    ) -> Bool {
+        let mode = bundle.passageAnalysisDiagnostics?.materialMode ?? .passageReading
+        return mode == .passageReading && sentence.provenance.sourceKind == .passageBody
     }
 
     var body: some View {

@@ -52,7 +52,7 @@ struct EditorialPaperCanvas<AnalysisContent: View>: View {
                             }
 
                             DecorativeNoteBlock(
-                                text: "Teaching note: use the current teaching focus to decide what belongs to the sentence core, what only frames it, and what exam questions are likely to paraphrase."
+                                text: decorativeNoteText
                             )
                         }
                         .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -82,8 +82,24 @@ struct EditorialPaperCanvas<AnalysisContent: View>: View {
         [
             document.documentType.displayName,
             "\(max(document.pageCount, bundle.source.pageCount)) 页",
-            "\(bundle.professorSentenceCards.count) 句重点句"
+            sentenceCountMetadata
         ]
+    }
+
+    private var sentenceCountMetadata: String {
+        let mode = bundle.passageAnalysisDiagnostics?.materialMode ?? .passageReading
+        if mode != .passageReading {
+            return mode.structureTitle
+        }
+        return "\(bundle.professorSentenceCards.count) 句重点句"
+    }
+
+    private var decorativeNoteText: String {
+        let mode = bundle.passageAnalysisDiagnostics?.materialMode ?? .passageReading
+        if mode != .passageReading {
+            return "学习提示：当前展示本地资料结构骨架，请先按标题、题干、词汇和说明块完成归类，再选择真正的正文句子做精讲。"
+        }
+        return "教学提示：先区分句子主干、修饰信息和可能被题目改写的表达，再决定哪些内容需要重点精读。"
     }
 
     private func analysisPanelWidth(for availableWidth: CGFloat) -> CGFloat {

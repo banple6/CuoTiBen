@@ -101,7 +101,8 @@ struct ArchivistWorkspaceView: View {
                     Spacer(minLength: 10)
 
                     ArchivistFooterStrip(
-                        pageText: workspaceViewModel.selectedSentence?.anchorLabel ?? "Page 1",
+                        pageText: workspaceViewModel.selectedSentence?.anchorLabel
+                            ?? workspaceViewModel.anchorLabel(for: workspaceViewModel.selectedNode),
                         masteryText: "Structured Source",
                         helperText: "Digital Archivist"
                     )

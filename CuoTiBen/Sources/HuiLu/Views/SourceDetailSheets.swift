@@ -1599,6 +1599,10 @@ struct ProfessorTeachingStatusHeader: View {
         conciseTeachingHeaderChip(snapshot.currentParagraphRole, fallback: "段落角色待识别")
     }
 
+    private var usesSentenceLabels: Bool {
+        snapshot.currentMode == "句子讲解"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: compact ? 10 : 14) {
             HStack(alignment: .top, spacing: 10) {
@@ -1625,13 +1629,13 @@ struct ProfessorTeachingStatusHeader: View {
             )
 
             statusField(
-                label: "当前句定位",
+                label: usesSentenceLabels ? "当前句定位" : "当前节点说明",
                 content: displayedSentenceFunction,
                 tone: .node
             )
 
             statusField(
-                label: "当前教学焦点",
+                label: usesSentenceLabels ? "当前教学焦点" : "当前结构焦点",
                 content: displayedTeachingFocus,
                 tone: .teaching
             )
