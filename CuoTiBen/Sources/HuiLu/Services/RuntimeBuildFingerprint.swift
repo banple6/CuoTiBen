@@ -41,7 +41,9 @@ struct RuntimeBuildFingerprint: Equatable {
             "[Build] git_sha=\(fingerprint.gitSHA)",
             "[Build] branch=\(fingerprint.branchName)",
             "[Build] build_time=\(fingerprint.buildTime)",
+            "[Build] configuration=\(fingerprint.appConfiguration)",
             "[Build] app_configuration=\(fingerprint.appConfiguration)",
+            "[Build] ai_backend_base_url=\(fingerprint.aiBackendBaseURL)",
             "[Build] ai_backend=\(fingerprint.aiBackendBaseURL)",
             "[Build] document_parse_endpoint=\(fingerprint.documentParseEndpointStatus)",
             "[Build] is_debug_build=\(fingerprint.isDebugBuild)"

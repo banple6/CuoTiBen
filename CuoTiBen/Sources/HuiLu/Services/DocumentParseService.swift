@@ -18,7 +18,7 @@ enum DocumentParseServiceError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .remoteUnavailable: return "文档解析后端未配置，已跳过远端 PP 解析"
+        case .remoteUnavailable: return "文档解析云接口未配置，已使用本地解析。"
         case .missingBackendURL:    return "后端地址未配置"
         case .invalidBackendURL:    return "后端地址格式无效"
         case .uploadFailed(let m):  return "上传失败：\(m)"
@@ -158,7 +158,7 @@ enum DocumentParseService {
         )
         TextPipelineDiagnostics.log(
             "PP",
-            "[PP][Route] skip remote document parse, use local extraction",
+            "[PP][Route] skip remote document parse, use local extraction fallbackMode=localExtraction",
             severity: .warning
         )
     }

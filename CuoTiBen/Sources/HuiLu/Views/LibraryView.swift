@@ -492,6 +492,7 @@ private struct ArchivistLibraryTopBar: View {
 }
 
 private struct ArchivistLibraryFolderCard: View {
+    @EnvironmentObject private var viewModel: AppViewModel
     let document: SourceDocument
     let paletteIndex: Int
 
@@ -507,6 +508,9 @@ private struct ArchivistLibraryFolderCard: View {
     }
 
     private var progress: CGFloat {
+        if viewModel.parseSessionInfo(for: document)?.fallbackUsed == true || viewModel.structuredSource(for: document) != nil {
+            return 1
+        }
         switch document.processingStatus {
         case .ready:
             return 1
@@ -602,6 +606,12 @@ private struct ArchivistLibraryFolderCard: View {
     }
 
     private var progressLabel: String {
+        if let info = viewModel.parseSessionInfo(for: document), info.skippedBecauseUnconfigured {
+            return "LOCAL SKELETON"
+        }
+        if viewModel.parseSessionInfo(for: document)?.fallbackUsed == true {
+            return "LOCAL SKELETON"
+        }
         switch document.processingStatus {
         case .ready: return "ARCHIVED"
         case .parsing: return "PARSING"
@@ -694,6 +704,7 @@ struct LibraryToolbarChip: View {
 }
 
 struct LibraryDocumentCard: View {
+    @EnvironmentObject private var viewModel: AppViewModel
     let document: SourceDocument
     let paletteIndex: Int
 
@@ -711,15 +722,65 @@ struct LibraryDocumentCard: View {
     }
 
     private var status: (label: String, icon: String, color: Color) {
+        if parseInfo?.skippedBecauseUnconfigured == true {
+            return ("文档解析接口未配置", "point.3.connected.trianglepath.dotted", Color.blue.opacity(0.85))
+        }
+        if parseInfo?.fallbackUsed == true {
+            return ("本地骨架", "square.stack.3d.up", Color.blue.opacity(0.85))
+        }
         switch document.processingStatus {
         case .imported:
             return ("已导入", "tray.full.fill", Color.blue.opacity(0.85))
         case .parsing:
-            return ("解析中", "sparkles", Color.orange.opacity(0.9))
+            return ("云端解析中", "sparkles", Color.orange.opacity(0.9))
         case .ready:
-            return ("已就绪", "checkmark.circle.fill", Color.green.opacity(0.85))
+            return ("AI 已分析", "checkmark.circle.fill", Color.green.opacity(0.85))
         case .failed:
-            return ("失败", "exclamationmark.triangle.fill", Color.red.opacity(0.82))
+            return ("请求失败，可重试", "exclamationmark.triangle.fill", Color.red.opacity(0.82))
+        }
+    }
+
+    private var liveDocument: SourceDocument {
+        viewModel.sourceDocuments.first(where: { $0.id == document.id }) ?? document
+    }
+
+    private var parseInfo: ParseSessionInfo? {
+        viewModel.parseSessionInfo(for: liveDocument)
+    }
+
+    private var structuredSource: StructuredSourceBundle? {
+        viewModel.structuredSource(for: liveDocument)
+    }
+
+    private var materialModeLabel: String {
+        structuredSource?.passageAnalysisDiagnostics?.materialMode.rawValue ?? "pending"
+    }
+
+    private var parseStatusText: String {
+        if let info = parseInfo {
+            if info.skippedBecauseUnconfigured {
+                return "文档解析云接口未配置，已使用本地解析。"
+            }
+            if info.fallbackUsed {
+                return info.fallbackReason.map { "本地骨架：\($0)" } ?? "本地骨架"
+            }
+            if info.ppSucceeded {
+                return "云端成功"
+            }
+            return info.documentParseRemoteStatus ?? liveDocument.processingStatus.displayName
+        }
+        return liveDocument.lastProcessingError ?? liveDocument.processingStatus.displayName
+    }
+
+    private var progressText: String {
+        if parseInfo?.fallbackUsed == true || structuredSource != nil {
+            return "100%"
+        }
+        switch liveDocument.processingStatus {
+        case .ready: return "100%"
+        case .parsing: return "42%"
+        case .imported: return "20%"
+        case .failed: return "12%"
         }
     }
 
@@ -741,16 +802,18 @@ struct LibraryDocumentCard: View {
                 }
 
             VStack(alignment: .leading, spacing: 18) {
-                Text(document.title)
+                Text(liveDocument.title)
                     .font(.system(size: 22, weight: .bold, design: .serif))
                     .foregroundStyle(AppPalette.paperInk)
                     .multilineTextAlignment(.leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                 VStack(alignment: .leading, spacing: 10) {
-                    documentLine(icon: "doc", text: document.documentType.displayName)
-                    documentLine(icon: "shippingbox", text: "\(document.chunkCount > 0 ? document.chunkCount : document.pageCount)个知识块")
-                    documentLine(icon: "rectangle.text.magnifyingglass", text: document.generatedCardCount > 0 ? "\(document.generatedCardCount)张草稿" : "结构化预览")
+                    documentLine(icon: "doc", text: "\(liveDocument.documentType.displayName) · \(liveDocument.pageCount) 页")
+                    documentLine(icon: "shippingbox", text: "materialMode=\(materialModeLabel)")
+                    documentLine(icon: "rectangle.text.magnifyingglass", text: parseStatusText)
+                    documentLine(icon: "clock", text: "最近导入 \(formattedImportDate)")
+                    documentLine(icon: "chart.line.uptrend.xyaxis", text: "progress=\(progressText)")
                 }
 
                 HStack {
@@ -765,10 +828,10 @@ struct LibraryDocumentCard: View {
                     Spacer()
 
                     HStack(spacing: 8) {
-                        Text("候选点 \(document.candidateKnowledgePoints.count)")
+                        Text("候选点 \(liveDocument.candidateKnowledgePoints.count)")
                             .font(.system(size: 15, weight: .semibold, design: .serif))
                             .foregroundStyle(AppPalette.paperInk.opacity(0.84))
-                        Image(systemName: document.processingStatus.icon)
+                        Image(systemName: liveDocument.processingStatus.icon)
                             .font(.system(size: 18, weight: .semibold))
                             .foregroundStyle(Color.black.opacity(0.24))
                     }
@@ -788,6 +851,13 @@ struct LibraryDocumentCard: View {
                 .font(.system(size: 16, weight: .medium, design: .serif))
         }
         .foregroundStyle(AppPalette.paperInk.opacity(0.86))
+    }
+
+    private var formattedImportDate: String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        formatter.timeStyle = .short
+        return formatter.string(from: liveDocument.importDate)
     }
 }
 

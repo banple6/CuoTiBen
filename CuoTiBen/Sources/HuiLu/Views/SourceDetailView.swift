@@ -509,6 +509,15 @@ struct SourceDetailView: View {
                 if let structuredSource {
                     SketchBadge(title: "\(structuredSource.source.sentenceCount) 句", tint: AppPalette.paperTape.opacity(0.28))
                 }
+
+                if let info = viewModel.parseSessionInfo(for: liveDocument) {
+                    if info.skippedBecauseUnconfigured {
+                        SketchBadge(title: "文档解析云接口未配置", tint: AppPalette.paperTapeBlue.opacity(0.22))
+                    }
+                    if info.fallbackUsed {
+                        SketchBadge(title: "本地骨架", tint: AppPalette.paperHighlight.opacity(0.34))
+                    }
+                }
             }
         }
     }

@@ -408,18 +408,43 @@ final class AppViewModel: ObservableObject {
                     await self?.loadStructuredSource(for: docForLoading)
                 }
             } catch {
-                var failedDocument = document
-                failedDocument.processingStatus = .failed
-                failedDocument.lastProcessingError = error.localizedDescription
-                replaceSourceDocument(with: failedDocument)
+                if let fallbackDocument = await recoverImportedDocumentWithLocalFallback(
+                    document,
+                    parseError: error
+                ) {
+                    successfulDocuments.append(fallbackDocument)
+                    processedPages += max(fallbackDocument.pageCount, 1)
+                    parsedSectionCount += max(fallbackDocument.sectionTitles.count, 1)
+                    previewChunkCount += max(fallbackDocument.chunkCount, 1)
+                    candidateKnowledgePointCount += fallbackDocument.candidateKnowledgePoints.count
+                } else {
+                    var failedDocument = document
+                    failedDocument.processingStatus = .failed
+                    failedDocument.lastProcessingError = error.localizedDescription
+                    replaceSourceDocument(with: failedDocument)
+                    structuredSourceStages[document.id] = .failed
+                    structuredSourceErrors[document.id] = "请求失败，可重试：\(error.localizedDescription)"
 
-                if firstError == nil {
-                    firstError = error
+                    if firstError == nil {
+                        firstError = error
+                    }
                 }
             }
         }
 
         guard !successfulDocuments.isEmpty else {
+            let visibleDocuments = parsingDocuments.compactMap { original in
+                sourceDocuments.first(where: { $0.id == original.id })
+            }
+            if !visibleDocuments.isEmpty {
+                return MaterialImportSummary(
+                    documents: visibleDocuments,
+                    processedPages: visibleDocuments.reduce(0) { $0 + max($1.pageCount, 1) },
+                    parsedSectionCount: 0,
+                    previewChunkCount: 0,
+                    candidateKnowledgePointCount: 0
+                )
+            }
             throw firstError ?? ImportError.copyFailed("导入流程未生成任何可用结果")
         }
 
@@ -430,6 +455,53 @@ final class AppViewModel: ObservableObject {
             previewChunkCount: previewChunkCount,
             candidateKnowledgePointCount: candidateKnowledgePointCount
         )
+    }
+
+    private func recoverImportedDocumentWithLocalFallback(
+        _ document: SourceDocument,
+        parseError: Error
+    ) async -> SourceDocument? {
+        do {
+            let draft = try await chunkingService.extractSourceDraft(document: document)
+            var fallbackDocument = document
+            fallbackDocument.processingStatus = .ready
+            fallbackDocument.lastProcessingError = nil
+            replaceSourceDocument(with: fallbackDocument)
+
+            let payload = AISourceParsingService.buildLocalFallbackPayload(
+                documentID: document.id,
+                title: document.title,
+                documentType: document.documentType,
+                pageCount: document.pageCount,
+                draft: draft
+            )
+            let decision = StructuredSourceMaterialGate.evaluate(
+                draft: draft,
+                bundle: payload.bundle
+            )
+            applyStructuredMaterialFallback(
+                document: fallbackDocument,
+                payload: payload,
+                decision: decision,
+                convertedFromEarlyFail: true
+            )
+            if let recovered = sourceDocuments.first(where: { $0.id == document.id }) {
+                TextPipelineDiagnostics.log(
+                    "PP",
+                    "[PP][Import] parse_failed_converted_to_local_fallback doc=\(document.id) error=\(parseError.localizedDescription)",
+                    severity: .warning
+                )
+                return recovered
+            }
+            return fallbackDocument
+        } catch {
+            TextPipelineDiagnostics.log(
+                "PP",
+                "[PP][Import] local_fallback_unavailable doc=\(document.id) parse_error=\(parseError.localizedDescription) fallback_error=\(error.localizedDescription)",
+                severity: .error
+            )
+            return nil
+        }
     }
 
     func chunks(for document: SourceDocument) -> [KnowledgeChunk] {
@@ -1168,32 +1240,14 @@ final class AppViewModel: ObservableObject {
             return localPayload
         }
 
-        do {
-            structuredSourceStages[document.id] = .buildingPreview
-            TextPipelineDiagnostics.log(
-                "AI",
-                "[AI][LegacyParse] local fallback too weak, calling remote parse-source quality=\(qualityReport.debugSummary)",
-                severity: .warning
-            )
-            TextPipelineDiagnostics.log("PP", "[PP] fallback → legacy REMOTE doc=\(document.id)", severity: .warning)
-            let payload = try await withTimeoutOrThrow(seconds: 60) { [document, draft] in
-                try await AISourceParsingService.parseSource(
-                    documentID: document.id,
-                    title: document.title,
-                    documentType: document.documentType,
-                    pageCount: document.pageCount,
-                    draft: draft,
-                    localFallback: localPayload
-                )
-            }
-            TextPipelineDiagnostics.log("PP", "[PP] fallback → legacy REMOTE DONE sentences=\(payload.bundle.sentences.count) doc=\(document.id)", severity: .warning)
-            return payload
-        } catch {
-            TextPipelineDiagnostics.log("PP", "[PP] fallback legacy remote also failed: \(error.localizedDescription), using local fallback doc=\(document.id)", severity: .error)
-            structuredSourceStages[document.id] = .buildingTree
-            TextPipelineDiagnostics.log("PP", "[PP] fallback → legacy LOCAL (after remote fail) DONE sentences=\(localPayload.bundle.sentences.count) doc=\(document.id)", severity: .warning)
-            return localPayload
-        }
+        structuredSourceStages[document.id] = .buildingTree
+        TextPipelineDiagnostics.log(
+            "AI",
+            "[AI][LegacyParse] remote parse-source disabled by runtime path lock, using local fallback quality=\(qualityReport.debugSummary)",
+            severity: .warning
+        )
+        TextPipelineDiagnostics.log("PP", "[PP] fallback → legacy LOCAL (remote parse-source disabled) DONE sentences=\(localPayload.bundle.sentences.count) doc=\(document.id)", severity: .warning)
+        return localPayload
     }
 
     /// 带超时的异步操作包装
@@ -2047,6 +2101,7 @@ final class AppViewModel: ObservableObject {
             limit: 12
         )
         updated.pageCount = max(updated.pageCount, payload.bundle.source.pageCount)
+        updated.chunkCount = max(updated.chunkCount, payload.bundle.segments.count)
         updated.lastProcessingError = nil
         sourceDocuments[index] = updated
     }

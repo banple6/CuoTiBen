@@ -107,6 +107,10 @@ struct TextPipelineDiagnosticsView: View {
                         }
                     }
 
+                    Section("Cloud request probe") {
+                        CloudRequestDiagnosticsView()
+                    }
+
                     if let gatewayStatus = latestAIGatewayStatus {
                         Section("AI Gateway") {
                             AIGatewayStatusCard(status: gatewayStatus)
@@ -217,7 +221,7 @@ private struct RuntimeBuildFingerprintCard: View {
             DiagnosticKeyValueRow(label: "gitSHA", value: fingerprint.gitSHA)
             DiagnosticKeyValueRow(label: "branch", value: fingerprint.branchName)
             DiagnosticKeyValueRow(label: "buildTime", value: fingerprint.buildTime)
-            DiagnosticKeyValueRow(label: "appConfiguration", value: fingerprint.appConfiguration)
+            DiagnosticKeyValueRow(label: "configuration", value: fingerprint.appConfiguration)
             DiagnosticKeyValueRow(label: "aiBackendBaseURL", value: fingerprint.aiBackendBaseURL)
             DiagnosticKeyValueRow(label: "documentParseEndpoint", value: fingerprint.documentParseEndpointStatus)
             DiagnosticKeyValueRow(label: "isDebugBuild", value: fingerprint.isDebugBuild ? "true" : "false")
@@ -829,6 +833,9 @@ struct ParseSourceDebugBadge: View {
 
     private var sourceLabel: String {
         guard let info else { return "未知" }
+        if info.skippedBecauseUnconfigured || info.fallbackUsed {
+            return "本地解析"
+        }
         return info.source.rawValue
     }
 
@@ -875,11 +882,14 @@ struct ParseSourceDebugBadge: View {
                     Divider().padding(.vertical, 2)
 
                     if let info {
-                        debugRow("来源", info.source.rawValue)
+                        debugRow("来源", sourceLabel)
                         debugRow("阶段", stage.displayName)
-                        debugRow("PP端点", info.documentParseEndpointConfigured ? "configured" : "unconfigured")
-                        debugRow("PP状态", info.documentParseRemoteStatus ?? "nil")
+                        debugRow("远端文档解析", info.documentParseEndpointConfigured ? (info.documentParseRemoteStatus ?? "configured") : "未配置")
+                        debugRow("本地结果", info.fallbackUsed || info.sentenceCount > 0 || info.segmentCount > 0 ? "可用" : "不可用")
                         debugRow("跳过PP", info.skippedBecauseUnconfigured ? "true" : "false")
+                        if info.skippedBecauseUnconfigured {
+                            debugRow("说明", "文档解析云接口未配置，已使用本地解析。")
+                        }
                         if info.ppAttempted {
                             debugRow("PP尝试", info.ppSucceeded ? "✅ 成功" : "❌ 失败")
                         }
@@ -895,6 +905,8 @@ struct ParseSourceDebugBadge: View {
                         debugRow("句子", "\(info.sentenceCount)")
                         debugRow("大纲", "\(info.outlineNodeCount)")
                         debugRow("分段", "\(info.segmentCount)")
+                        debugRow("结构", info.fallbackUsed ? "本地骨架" : "云端结构")
+                        debugRow("状态", info.fallbackUsed || info.ppSucceeded ? "可继续学习" : stage.displayName)
                         if let d = info.parseDurationMs {
                             debugRow("耗时", "\(d)ms")
                         }

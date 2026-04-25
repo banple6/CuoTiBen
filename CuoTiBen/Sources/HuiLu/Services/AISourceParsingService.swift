@@ -158,110 +158,12 @@ enum AISourceParsingService {
             "本地回退已构建: \(localFallback.bundle.sentences.count)句 \(localFallback.bundle.segments.count)段"
         )
 
-        guard let endpointURL = AIBackendConfig.endpointURL(path: "ai/parse-source") else {
-            TextPipelineDiagnostics.log(
-                "后端响应",
-                "AI 后端未配置，跳过 remote parse-source，直接使用本地回退。",
-                severity: .warning
-            )
-            return localFallback
-        }
-
-        var request = URLRequest(url: endpointURL)
-        request.httpMethod = "POST"
-        request.timeoutInterval = parseSourceTimeout
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(
-            ParseSourceRequest(
-                sourceID: documentID.uuidString,
-                title: title,
-                rawText: draft.rawText,
-                sourceType: documentType.rawValue.lowercased(),
-                pageCount: pageCount,
-                anchors: draft.anchors.map {
-                    ParseSourceRequestAnchor(
-                        anchorID: $0.anchorID,
-                        page: $0.page,
-                        label: $0.label,
-                        text: $0.text
-                    )
-                }
-            )
+        TextPipelineDiagnostics.log(
+            "后端响应",
+            "运行路径锁定：remote parse-source 已关闭，AIBackendConfig 不再用于资料解析，直接使用本地回退。",
+            severity: .warning
         )
-
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw AISourceParsingServiceError.invalidServerResponse
-            }
-
-            TextPipelineDiagnostics.log(
-                "后端响应",
-                "HTTP \(httpResponse.statusCode) 数据量=\(data.count)字节"
-            )
-
-            let decoded = try JSONDecoder().decode(ParseSourceResponseEnvelope.self, from: data)
-
-            if httpResponse.statusCode == 200, decoded.success, let payload = decoded.data {
-                TextPipelineDiagnostics.log(
-                    "后端响应",
-                    "解析成功: \(payload.sentences.count)句 \(payload.segments.count)段 \(payload.outline.count)大纲节点"
-                )
-
-                // 检测后端返回的句子是否存在反转
-                let reversedSentences = payload.sentences.filter {
-                    TextPipelineValidator.isLikelyReversedEnglish($0.text)
-                }
-                if !reversedSentences.isEmpty {
-                    TextPipelineDiagnostics.log(
-                        "后端响应",
-                        "⚠️ 检测到 \(reversedSentences.count)/\(payload.sentences.count) 条后端句子疑似反转，将在合并时自动修复",
-                        severity: .warning
-                    )
-                }
-
-                let remotePayload = StructuredSourceParsePayload(
-                    bundle: bundleWithAdmission(StructuredSourceBundle(
-                        source: payload.source,
-                        segments: payload.segments,
-                        sentences: payload.sentences,
-                        outline: payload.outline
-                    )),
-                    sectionTitles: payload.sectionTitles ?? [],
-                    topicTags: payload.topicTags ?? [],
-                    candidateKnowledgePoints: payload.candidateKnowledgePoints ?? []
-                )
-                let result = mergeRemotePayload(
-                    remotePayload,
-                    withLocalFallback: localFallback,
-                    draft: draft
-                )
-
-                TextPipelineDiagnostics.log(
-                    "合并完成",
-                    "最终输出: \(result.bundle.sentences.count)句 \(result.bundle.segments.count)段"
-                )
-
-                return result
-            }
-
-            if let message = decoded.error, !message.isEmpty {
-                TextPipelineDiagnostics.log("后端响应", "服务端错误: \(message)", severity: .error)
-                throw AISourceParsingServiceError.requestFailed(message)
-            }
-
-            throw AISourceParsingServiceError.invalidServerResponse
-        } catch let error as AISourceParsingServiceError {
-            TextPipelineDiagnostics.log("解析异常", "服务异常: \(error.localizedDescription)", severity: .error)
-            throw error
-        } catch let error as DecodingError {
-            TextPipelineDiagnostics.log("解析异常", "JSON解码失败: \(error)", severity: .error)
-            print("[AISourceParsingService] decode failed: \(error)")
-            throw AISourceParsingServiceError.invalidServerResponse
-        } catch {
-            TextPipelineDiagnostics.log("解析异常", "网络错误: \(error.localizedDescription)", severity: .error)
-            throw AISourceParsingServiceError.transport(error.localizedDescription)
-        }
+        return localFallback
     }
 
     static func materialProfile(for draft: SourceTextDraft) -> EnglishMaterialProfile {
