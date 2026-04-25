@@ -98,11 +98,16 @@ struct AppSettingsSheet: View {
 
                                 HStack(spacing: 10) {
                                     Button {
-                                        DocumentParseService.saveBackendURL(documentParserBaseURL)
+                                        let input = documentParserBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+                                        DocumentParseService.saveBackendURL(input)
                                         documentParserBaseURL = DocumentParseService.backendBaseURL
-                                        documentParserMessage = DocumentParseEndpointConfig.isConfigured
-                                            ? "已启用远端文档解析。"
-                                            : "已清空远端文档解析配置。"
+                                        if input.isEmpty {
+                                            documentParserMessage = "已恢复构建默认解析网关。"
+                                        } else if DocumentParseEndpointConfig.isValidRuntimeBaseURL(input) {
+                                            documentParserMessage = "已启用远端文档解析。"
+                                        } else {
+                                            documentParserMessage = "解析网关地址格式无效，仍使用当前可用配置。"
+                                        }
                                     } label: {
                                         Label("保存解析网关", systemImage: "checkmark.circle.fill")
                                     }
@@ -111,9 +116,10 @@ struct AppSettingsSheet: View {
                                     Button {
                                         documentParserBaseURL = ""
                                         DocumentParseService.saveBackendURL("")
-                                        documentParserMessage = "已清空远端文档解析配置。"
+                                        documentParserBaseURL = DocumentParseService.backendBaseURL
+                                        documentParserMessage = "已恢复构建默认解析网关。"
                                     } label: {
-                                        Label("清空", systemImage: "xmark.circle")
+                                        Label("恢复默认", systemImage: "arrow.counterclockwise.circle")
                                     }
                                     .buttonStyle(.bordered)
                                 }

@@ -37,6 +37,7 @@ enum DocumentParseEndpointConfig {
     private static let legacyRuntimeBaseURLStorageKey = "huiLu.documentParseBackendURL"
     private static let infoPlistBaseURLKey = "DOCUMENT_PARSE_BASE_URL"
     private static let parsePathComponents = ["api", "document", "parse"]
+    private static let debugFallbackBaseURL = "http://127.0.0.1:8900"
 
     struct Snapshot: Equatable {
         let isConfigured: Bool
@@ -70,7 +71,16 @@ enum DocumentParseEndpointConfig {
     }
 
     static func saveRuntimeBaseURL(_ value: String) {
-        UserDefaults.standard.set(normalizeBaseURL(value), forKey: runtimeBaseURLStorageKey)
+        let normalized = normalizeBaseURL(value)
+        if normalized.isEmpty {
+            UserDefaults.standard.removeObject(forKey: runtimeBaseURLStorageKey)
+        } else {
+            UserDefaults.standard.set(normalized, forKey: runtimeBaseURLStorageKey)
+        }
+    }
+
+    static func isValidRuntimeBaseURL(_ value: String) -> Bool {
+        normalizedRuntimeBaseURL(value) != nil
     }
 
     static func normalizeBaseURL(_ value: String) -> String {
@@ -80,18 +90,20 @@ enum DocumentParseEndpointConfig {
     }
 
     private static var resolvedBaseURL: String? {
-        #if DEBUG
-        if let runtimeBaseURL = normalizedDebugRuntimeBaseURL(UserDefaults.standard.string(forKey: runtimeBaseURLStorageKey)) {
+        if let runtimeBaseURL = normalizedRuntimeBaseURL(UserDefaults.standard.string(forKey: runtimeBaseURLStorageKey)) {
             return runtimeBaseURL
         }
-        if let legacyRuntimeBaseURL = normalizedDebugRuntimeBaseURL(UserDefaults.standard.string(forKey: legacyRuntimeBaseURLStorageKey)) {
+        if let legacyRuntimeBaseURL = normalizedRuntimeBaseURL(UserDefaults.standard.string(forKey: legacyRuntimeBaseURLStorageKey)) {
             return legacyRuntimeBaseURL
         }
-        #endif
-        if let infoPlistBaseURL = normalizedNonEmpty(Bundle.main.object(forInfoDictionaryKey: infoPlistBaseURLKey) as? String) {
+        if let infoPlistBaseURL = normalizedRuntimeBaseURL(Bundle.main.object(forInfoDictionaryKey: infoPlistBaseURLKey) as? String) {
             return infoPlistBaseURL
         }
+        #if DEBUG
+        return debugFallbackBaseURL
+        #else
         return nil
+        #endif
     }
 
     private static func normalizedNonEmpty(_ value: String?) -> String? {
@@ -99,7 +111,7 @@ enum DocumentParseEndpointConfig {
         return normalized.isEmpty ? nil : normalized
     }
 
-    private static func normalizedDebugRuntimeBaseURL(_ value: String?) -> String? {
+    private static func normalizedRuntimeBaseURL(_ value: String?) -> String? {
         guard let normalized = normalizedNonEmpty(value),
               isValidParserEndpoint(normalized)
         else {
