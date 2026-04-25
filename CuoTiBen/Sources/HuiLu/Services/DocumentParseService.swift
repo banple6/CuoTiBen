@@ -101,18 +101,21 @@ enum DocumentParseEndpointConfig {
 
     private static func normalizedDebugRuntimeBaseURL(_ value: String?) -> String? {
         guard let normalized = normalizedNonEmpty(value),
-              isLocalParserEndpoint(normalized)
+              isValidParserEndpoint(normalized)
         else {
             return nil
         }
         return normalized
     }
 
-    private static func isLocalParserEndpoint(_ value: String) -> Bool {
-        guard let host = URLComponents(string: value)?.host?.lowercased() else {
+    private static func isValidParserEndpoint(_ value: String) -> Bool {
+        guard let components = URLComponents(string: value),
+              let scheme = components.scheme?.lowercased(),
+              components.host != nil
+        else {
             return false
         }
-        return host == "localhost" || host == "127.0.0.1" || host == "::1"
+        return scheme == "http" || scheme == "https"
     }
 
     private static func makeParseEndpointURL(from baseURLString: String) -> URL? {

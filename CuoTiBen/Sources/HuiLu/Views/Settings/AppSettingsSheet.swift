@@ -3,6 +3,8 @@ import SwiftUI
 struct AppSettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var viewModel: AppViewModel
+    @State private var documentParserBaseURL = DocumentParseService.backendBaseURL
+    @State private var documentParserMessage: String?
 
     var body: some View {
         NavigationStack {
@@ -58,6 +60,69 @@ struct AppSettingsSheet: View {
                                     )
                                 }
                                 .buttonStyle(.plain)
+                            }
+                        }
+
+                        GlassPanel(tone: .light, cornerRadius: 28, padding: 18) {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text("远端文档解析")
+                                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                                    .foregroundStyle(Color.black.opacity(0.82))
+
+                                Text("这里配置的是 PP/FastAPI 文档解析网关，不是 AI 后端。服务默认端口是 8900，App 会自动请求 /api/document/parse。")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundStyle(Color.black.opacity(0.58))
+                                    .lineSpacing(4)
+
+                                TextField("例如 http://192.168.1.10:8900", text: $documentParserBaseURL)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                                    .keyboardType(.URL)
+                                    .font(.system(size: 14, weight: .medium, design: .monospaced))
+                                    .padding(12)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                            .fill(Color.white.opacity(0.84))
+                                    )
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                            .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                                    )
+
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("当前端点：\(DocumentParseEndpointConfig.parseEndpointURL?.absoluteString ?? "未配置")")
+                                    Text("真机不要填 127.0.0.1，需填 Mac 局域网 IP 或线上解析服务器地址。")
+                                }
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(Color.black.opacity(0.52))
+
+                                HStack(spacing: 10) {
+                                    Button {
+                                        DocumentParseService.saveBackendURL(documentParserBaseURL)
+                                        documentParserBaseURL = DocumentParseService.backendBaseURL
+                                        documentParserMessage = DocumentParseEndpointConfig.isConfigured
+                                            ? "已启用远端文档解析。"
+                                            : "已清空远端文档解析配置。"
+                                    } label: {
+                                        Label("保存解析网关", systemImage: "checkmark.circle.fill")
+                                    }
+                                    .buttonStyle(.borderedProminent)
+
+                                    Button {
+                                        documentParserBaseURL = ""
+                                        DocumentParseService.saveBackendURL("")
+                                        documentParserMessage = "已清空远端文档解析配置。"
+                                    } label: {
+                                        Label("清空", systemImage: "xmark.circle")
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
+
+                                if let documentParserMessage {
+                                    Text(documentParserMessage)
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundStyle(Color.blue.opacity(0.82))
+                                }
                             }
                         }
                     }
