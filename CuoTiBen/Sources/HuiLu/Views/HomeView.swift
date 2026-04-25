@@ -152,7 +152,9 @@ struct HomeView: View {
         DashboardCard(cornerRadius: 24, padding: 14, tint: AppPalette.paperBackgroundDeep) {
             VStack(spacing: 18) {
                 DashboardRailItem(icon: "house", title: "首页", isSelected: true, action: {})
-                DashboardRailItem(icon: "books.vertical", title: "知识库", isSelected: false, action: {})
+                DashboardRailItem(icon: "books.vertical", title: "知识库", isSelected: false) {
+                    NotificationCenter.default.post(name: .switchToLibraryTab, object: nil)
+                }
                 DashboardRailItem(icon: "note.text", title: "笔记", isSelected: false) {
                     showsNotesHome = true
                 }

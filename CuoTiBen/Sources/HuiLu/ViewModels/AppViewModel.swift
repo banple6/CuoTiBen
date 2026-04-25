@@ -606,10 +606,17 @@ final class AppViewModel: ObservableObject {
         guard force || structuredSources[document.id] == nil else { return }
         guard !structuredSourceLoadingIDs.contains(document.id) else { return }
 
+        var recoveredDraft: SourceTextDraft?
+        var recoveredPayload: StructuredSourceParsePayload?
         structuredSourceLoadingIDs.insert(document.id)
         structuredSourceErrors[document.id] = nil
         structuredSourceStages[document.id] = .extracting
         defer {
+            recoverNonTerminalStructuredLoadIfPossible(
+                document: document,
+                draft: recoveredDraft,
+                payload: recoveredPayload
+            )
             structuredSourceLoadingIDs.remove(document.id)
             let stage = structuredSourceStages[document.id]
             if stage != .ready && stage != .localFallbackReady && stage != .failed && stage != .timedOut && stage != .fallbackLegacy && stage != .partialReady && stage != .aiEnriching {
@@ -627,12 +634,27 @@ final class AppViewModel: ObservableObject {
             let draft: SourceTextDraft = try await withTimeoutOrThrow(seconds: 60) { [chunkingService, document] in
                 try await chunkingService.extractSourceDraft(document: document)
             }
+            recoveredDraft = draft
             let localFallbackPayload = AISourceParsingService.buildLocalFallbackPayload(
                 documentID: document.id,
                 title: document.title,
                 documentType: document.documentType,
                 pageCount: document.pageCount,
                 draft: draft
+            )
+            recoveredPayload = localFallbackPayload
+            TextPipelineDiagnostics.log(
+                "PP",
+                [
+                    "[PP][Gate]",
+                    "material_gate_input=true",
+                    "doc=\(document.id)",
+                    "raw_text_length=\(draft.rawText.count)",
+                    "sentence_drafts=\(draft.sentenceDrafts.count)",
+                    "local_segments=\(localFallbackPayload.bundle.segments.count)",
+                    "local_sentences=\(localFallbackPayload.bundle.sentences.count)"
+                ].joined(separator: " "),
+                severity: .info
             )
             let earlyMaterialDecision = StructuredSourceMaterialGate.evaluate(
                 draft: draft,
@@ -741,6 +763,21 @@ final class AppViewModel: ObservableObject {
                 severity: .info
             )
         } catch {
+            if let draft = recoveredDraft,
+               let payload = recoveredPayload {
+                TextPipelineDiagnostics.log(
+                    "PP",
+                    "[PP][Recovery] structured load error converted to local material fallback doc=\(document.id) error=\(error.localizedDescription)",
+                    severity: .warning
+                )
+                forceStructuredMaterialFallback(
+                    document: document,
+                    draft: draft,
+                    payload: payload,
+                    reason: "structuredLoadError:\(error.localizedDescription)"
+                )
+                return
+            }
             let errorMessage: String
             if error is TimeoutError {
                 errorMessage = "资料解析超时，请稍后重试。"
@@ -1044,6 +1081,87 @@ final class AppViewModel: ObservableObject {
         seedWorkbenchProgressIfNeeded(for: document, with: enrichedPayload.bundle)
         structuredSourceErrors[document.id] = localFallback.message
         structuredSourceStages[document.id] = .localFallbackReady
+    }
+
+    private func recoverNonTerminalStructuredLoadIfPossible(
+        document: SourceDocument,
+        draft: SourceTextDraft?,
+        payload: StructuredSourceParsePayload?
+    ) {
+        let stage = structuredSourceStages[document.id]
+        let alreadyRecovered = structuredSources[document.id] != nil
+        let needsRecovery = stage == nil
+            || stage == .extracting
+            || stage == .grouping
+            || stage == .classifying
+            || stage == .buildingPreview
+            || stage == .buildingTree
+            || (stage == .failed && !alreadyRecovered)
+
+        guard needsRecovery,
+              let draft,
+              let payload else { return }
+
+        TextPipelineDiagnostics.log(
+            "PP",
+            [
+                "[PP][Recovery]",
+                "non_terminal_stage_converted_to_local_fallback=true",
+                "doc=\(document.id)",
+                "stage=\(stage?.rawValue ?? "nil")",
+                "raw_text_length=\(draft.rawText.count)",
+                "sentence_drafts=\(draft.sentenceDrafts.count)"
+            ].joined(separator: " "),
+            severity: .warning
+        )
+        forceStructuredMaterialFallback(
+            document: document,
+            draft: draft,
+            payload: payload,
+            reason: "nonTerminalStage:\(stage?.rawValue ?? "nil")"
+        )
+    }
+
+    private func forceStructuredMaterialFallback(
+        document: SourceDocument,
+        draft: SourceTextDraft,
+        payload: StructuredSourceParsePayload,
+        reason: String
+    ) {
+        let decision = StructuredSourceMaterialGate
+            .evaluate(draft: draft, bundle: payload.bundle)
+            .withFallbackOverride(
+                mode: preferredForcedFallbackMode(for: payload.bundle),
+                appendedReason: reason
+            )
+        applyStructuredMaterialFallback(
+            document: document,
+            payload: payload,
+            decision: decision,
+            convertedFromEarlyFail: true
+        )
+    }
+
+    private func preferredForcedFallbackMode(for bundle: StructuredSourceBundle) -> StructuredSourceMaterialMode {
+        let nonEmptySegments = bundle.segments.filter {
+            !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        let counts = Dictionary(grouping: nonEmptySegments, by: { $0.provenance.sourceKind })
+            .mapValues(\.count)
+        let questionCount = (counts[.question] ?? 0) + (counts[.answerKey] ?? 0)
+        let vocabularyCount = (counts[.vocabularySupport] ?? 0) + (counts[.bilingualNote] ?? 0)
+        let learningCount = (counts[.chineseInstruction] ?? 0) + (counts[.passageHeading] ?? 0)
+
+        if questionCount >= max(vocabularyCount, learningCount), questionCount > 0 {
+            return .questionSheet
+        }
+        if vocabularyCount >= max(questionCount, learningCount), vocabularyCount > 0 {
+            return .vocabularyNotes
+        }
+        if learningCount > 0 {
+            return .learningMaterial
+        }
+        return nonEmptySegments.isEmpty ? .insufficientText : .auxiliaryOnlyMap
     }
 
     private func baseStructuredStage(
