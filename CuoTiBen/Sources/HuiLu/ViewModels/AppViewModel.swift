@@ -252,6 +252,7 @@ final class AppViewModel: ObservableObject {
     @Published var structuredSourceErrors: [UUID: String]
     @Published var structuredSourceStages: [UUID: StructuredLoadingStage]
     @Published var parseSessionInfos: [UUID: ParseSessionInfo]
+    @Published private var sentenceExplainResults: [AIRequestIdentity.SemanticKey: AIExplainSentenceResult]
     @Published var dailyGoal: Int = 50
     @Published var completedToday: Int = 0
     @Published var totalCardsLearned: Int = 0
@@ -311,6 +312,7 @@ final class AppViewModel: ObservableObject {
         self.structuredSourceErrors = [:]
         self.structuredSourceStages = [:]
         self.parseSessionInfos = [:]
+        self.sentenceExplainResults = [:]
         self.dailyProgress = dailyProgress
         self.completedToday = dailyProgress.completedToday
         self.totalCardsLearned = dailyProgress.completedToday + 240
@@ -1554,6 +1556,48 @@ final class AppViewModel: ObservableObject {
 
     func explainSentenceRequestIdentity(for sentence: Sentence, in document: SourceDocument) -> AIRequestIdentity? {
         AIRequestIdentity.make(document: document, sentence: sentence)
+    }
+
+    func cachedSentenceExplanation(for sentence: Sentence, in document: SourceDocument) -> AIExplainSentenceResult? {
+        guard let requestIdentity = explainSentenceRequestIdentity(for: sentence, in: document),
+              let cached = sentenceExplainResults[requestIdentity.semanticKey],
+              AIResponseIdentityGuard.validate(
+                expected: requestIdentity,
+                actual: cached.analysisIdentity
+              ).isAllowed else {
+            return nil
+        }
+        return cached
+    }
+
+    func rememberSentenceExplanation(
+        _ result: AIExplainSentenceResult,
+        for sentence: Sentence,
+        in document: SourceDocument
+    ) {
+        guard !result.usedFallback,
+              !result.fallbackAvailable,
+              result.localFallbackAnalysis.isAIGenerated,
+              let requestIdentity = explainSentenceRequestIdentity(for: sentence, in: document),
+              AIResponseIdentityGuard.validate(
+                expected: requestIdentity,
+                actual: result.analysisIdentity
+              ).isAllowed else {
+            return
+        }
+
+        sentenceExplainResults[requestIdentity.semanticKey] = result
+        TextPipelineDiagnostics.log(
+            "AI",
+            [
+                "[AI][SentenceExplain] stable_ui_cache_store",
+                "sentence_id=\(requestIdentity.sentenceID)",
+                "request_id=\(result.requestID ?? "nil")",
+                "used_cache=\(result.usedCache)",
+                "is_ai_generated=\(result.localFallbackAnalysis.isAIGenerated)"
+            ].joined(separator: " "),
+            severity: .info
+        )
     }
 
     func sourceSelectionState(for sentence: Sentence, in document: SourceDocument) -> SourceSelectionState {
