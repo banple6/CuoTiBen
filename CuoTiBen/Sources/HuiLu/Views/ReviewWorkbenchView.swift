@@ -1315,6 +1315,7 @@ private struct ReviewWorkbenchSentencePanel: View {
     @State private var actionNote: String?
     @State private var explanationTask: Task<Void, Never>?
     @State private var activeExplanationRequestID: String?
+    @State private var activeExplanationSentenceKey: AIRequestIdentity.SemanticKey?
 
     private var breadcrumb: SentenceBreadcrumb {
         viewModel.sentenceBreadcrumb(for: sentence, in: document)
@@ -1407,6 +1408,7 @@ private struct ReviewWorkbenchSentencePanel: View {
             errorMessage = nil
             isLoading = false
             activeExplanationRequestID = nil
+            activeExplanationSentenceKey = nil
             maybeAutoLoadExplanation()
         }
         .onAppear {
@@ -1416,6 +1418,7 @@ private struct ReviewWorkbenchSentencePanel: View {
             explanationTask?.cancel()
             explanationTask = nil
             activeExplanationRequestID = nil
+            activeExplanationSentenceKey = nil
         }
     }
 
@@ -1618,11 +1621,22 @@ private struct ReviewWorkbenchSentencePanel: View {
     }
 
     private func scheduleExplanationLoad(force: Bool) {
-        if !force, isLoading || result != nil {
-            return
+        let currentSentence = sentence
+        let sentenceKey = AIRequestIdentity.make(document: document, sentence: currentSentence)?.semanticKey
+        if !force {
+            if let result, isResultVisible(result, for: currentSentence) {
+                return
+            }
+            if isLoading, activeExplanationSentenceKey == sentenceKey {
+                TextPipelineDiagnostics.log(
+                    "AI",
+                    "[AI][SentenceExplain] skip duplicate active request sentence_id=\(currentSentence.id)",
+                    severity: .info
+                )
+                return
+            }
         }
 
-        let currentSentence = sentence
         explanationTask?.cancel()
         explanationTask = Task {
             await loadExplanation(for: currentSentence, forceRefresh: force)
@@ -1640,6 +1654,7 @@ private struct ReviewWorkbenchSentencePanel: View {
             errorMessage = nil
             result = nil
             activeExplanationRequestID = nil
+            activeExplanationSentenceKey = nil
         }
 
         guard let requestIdentity = viewModel.explainSentenceRequestIdentity(for: currentSentence, in: document) else {
@@ -1655,6 +1670,7 @@ private struct ReviewWorkbenchSentencePanel: View {
                 errorMessage = fallback.displayFallbackMessage
                 isLoading = false
                 activeExplanationRequestID = nil
+                activeExplanationSentenceKey = nil
             }
             return
         }
@@ -1662,6 +1678,7 @@ private struct ReviewWorkbenchSentencePanel: View {
         await MainActor.run {
             guard sentence.id == currentSentence.id else { return }
             activeExplanationRequestID = requestIdentity.clientRequestID
+            activeExplanationSentenceKey = requestIdentity.semanticKey
         }
 
         do {
@@ -1682,6 +1699,7 @@ private struct ReviewWorkbenchSentencePanel: View {
                     guard sentence.id == currentSentence.id else { return }
                     guard activeExplanationRequestID == requestIdentity.clientRequestID else { return }
                     isLoading = false
+                    activeExplanationSentenceKey = nil
                 }
                 return
             }
@@ -1700,6 +1718,7 @@ private struct ReviewWorkbenchSentencePanel: View {
                 errorMessage = fetched.shouldShowFallbackBanner ? fetched.displayFallbackMessage : nil
                 isLoading = false
                 activeExplanationRequestID = nil
+                activeExplanationSentenceKey = nil
             }
         } catch is CancellationError {
             await MainActor.run {
@@ -1707,6 +1726,7 @@ private struct ReviewWorkbenchSentencePanel: View {
                 isLoading = false
                 if activeExplanationRequestID == requestIdentity.clientRequestID {
                     activeExplanationRequestID = nil
+                    activeExplanationSentenceKey = nil
                 }
             }
         } catch {
@@ -1729,6 +1749,7 @@ private struct ReviewWorkbenchSentencePanel: View {
                 errorMessage = fallback.displayFallbackMessage
                 isLoading = false
                 activeExplanationRequestID = nil
+                activeExplanationSentenceKey = nil
             }
         }
     }

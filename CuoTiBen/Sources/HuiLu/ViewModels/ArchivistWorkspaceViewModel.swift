@@ -20,6 +20,7 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
     /// 当前分析任务，用于取消
     private var analysisTask: Task<Void, Never>?
     private var currentAnalysisIdentity: AIRequestIdentity?
+    private var activeAnalysisKey: AIRequestIdentity.SemanticKey?
 
     init(document: SourceDocument, bundle: StructuredSourceBundle) {
         self.document = document
@@ -95,7 +96,10 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
     }
 
     var shouldAutoLoadAnalysis: Bool {
-        guard !isLoadingAnalysis, analysisResult == nil, let selectedSentence else { return false }
+        guard !isLoadingAnalysis, let selectedSentence else { return false }
+        if let analysisResult, isResultVisible(analysisResult, for: selectedSentence) {
+            return false
+        }
         guard let bundled = bundledAnalysis else { return true }
         return bundled.shouldPreferSentenceExplain(for: selectedSentence.text)
     }
@@ -157,6 +161,11 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
                 ?? selectedNodeID
             return
         }
+        TextPipelineDiagnostics.log(
+            "AI",
+            "[AI][SentenceExplain] selection_changed sentence_id=\(sentence.id) segment_id=\(sentence.segmentID) anchor_label=\(sentence.anchorLabel)",
+            severity: .info
+        )
         selectedSentenceID = sentence.id
         selectedNodeID = bundle.bestOutlineNode(forSentenceID: sentence.id)?.id
     }
@@ -181,15 +190,14 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
     func cancelAnalysis() {
         analysisTask?.cancel()
         analysisTask = nil
+        activeAnalysisKey = nil
         isLoadingAnalysis = false
     }
 
     func loadAnalysis(using appViewModel: AppViewModel) async {
-        // 取消之前的分析请求
-        analysisTask?.cancel()
-
         guard let sentence = selectedSentence else {
             currentAnalysisIdentity = nil
+            activeAnalysisKey = nil
             analysisResult = nil
             analysisError = nil
             isLoadingAnalysis = false
@@ -208,36 +216,39 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
             isLoadingAnalysis = false
             return
         }
+
+        if isLoadingAnalysis, activeAnalysisKey == targetIdentity.semanticKey {
+            TextPipelineDiagnostics.log(
+                "AI",
+                "[AI][SentenceExplain] skip duplicate active request sentence_id=\(targetIdentity.sentenceID)",
+                severity: .info
+            )
+            return
+        }
+
+        analysisTask?.cancel()
+        analysisTask = nil
         currentAnalysisIdentity = targetIdentity
+        activeAnalysisKey = targetIdentity.semanticKey
+        isLoadingAnalysis = true
+        analysisError = nil
         let currentDocument = document
 
         let task = Task { @MainActor [weak self] in
             defer {
                 if self?.matchesCurrentSelection(identity: targetIdentity) == true {
                     self?.isLoadingAnalysis = false
+                    self?.activeAnalysisKey = nil
                 }
             }
 
             do {
                 try Task.checkCancellation()
                 let context = appViewModel.explainSentenceContext(for: sentence, in: currentDocument)
-
-                // 新模型响应更慢，给工作台留足等待窗口，避免未完成就被本地超时打断。
-                let result = try await withThrowingTaskGroup(of: AIExplainSentenceResult.self) { group in
-                    group.addTask {
-                        try await AIExplainSentenceService.fetchExplanationWithCache(
-                            for: context,
-                            requestIdentity: targetIdentity
-                        )
-                    }
-                    group.addTask {
-                        try await Task.sleep(nanoseconds: 80_000_000_000)
-                        throw CancellationError()
-                    }
-                    let first = try await group.next()!
-                    group.cancelAll()
-                    return first
-                }
+                let result = try await AIExplainSentenceService.fetchExplanationWithCache(
+                    for: context,
+                    requestIdentity: targetIdentity
+                )
 
                 try Task.checkCancellation()
 
@@ -286,6 +297,7 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
     private func handleSelectedSentenceChange() {
         analysisTask?.cancel()
         analysisTask = nil
+        activeAnalysisKey = nil
         analysisResult = nil
         analysisError = nil
         isLoadingAnalysis = false

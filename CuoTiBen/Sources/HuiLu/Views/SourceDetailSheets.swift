@@ -64,6 +64,7 @@ struct SentenceExplainDetailSheet: View {
     @State private var activeKnowledgePoint: KnowledgePoint?
     @State private var explanationTask: Task<Void, Never>?
     @State private var activeExplanationRequestID: String?
+    @State private var activeExplanationSentenceKey: AIRequestIdentity.SemanticKey?
 
     init(document: SourceDocument, sentence: Sentence) {
         self.document = document
@@ -237,6 +238,7 @@ struct SentenceExplainDetailSheet: View {
             errorMessage = nil
             isLoading = false
             activeExplanationRequestID = nil
+            activeExplanationSentenceKey = nil
             maybeAutoLoadExplanation()
         }
         .onAppear {
@@ -246,6 +248,7 @@ struct SentenceExplainDetailSheet: View {
             explanationTask?.cancel()
             explanationTask = nil
             activeExplanationRequestID = nil
+            activeExplanationSentenceKey = nil
         }
     }
 
@@ -487,8 +490,19 @@ struct SentenceExplainDetailSheet: View {
 
     private func scheduleExplanationLoad(force: Bool) {
         let sentence = activeSentence
-        if !force, isLoading || result != nil {
-            return
+        let sentenceKey = AIRequestIdentity.make(document: document, sentence: sentence)?.semanticKey
+        if !force {
+            if let result, isResultVisible(result, for: sentence) {
+                return
+            }
+            if isLoading, activeExplanationSentenceKey == sentenceKey {
+                TextPipelineDiagnostics.log(
+                    "AI",
+                    "[AI][SentenceExplain] skip duplicate active request sentence_id=\(sentence.id)",
+                    severity: .info
+                )
+                return
+            }
         }
 
         explanationTask?.cancel()
@@ -508,6 +522,7 @@ struct SentenceExplainDetailSheet: View {
             errorMessage = nil
             result = nil
             activeExplanationRequestID = nil
+            activeExplanationSentenceKey = nil
         }
 
         guard let requestIdentity = viewModel.explainSentenceRequestIdentity(for: sentence, in: document) else {
@@ -523,6 +538,7 @@ struct SentenceExplainDetailSheet: View {
                 errorMessage = fallback.displayFallbackMessage
                 isLoading = false
                 activeExplanationRequestID = nil
+                activeExplanationSentenceKey = nil
             }
             return
         }
@@ -530,6 +546,7 @@ struct SentenceExplainDetailSheet: View {
         await MainActor.run {
             guard activeSentence.id == sentence.id else { return }
             activeExplanationRequestID = requestIdentity.clientRequestID
+            activeExplanationSentenceKey = requestIdentity.semanticKey
         }
 
         do {
@@ -550,6 +567,7 @@ struct SentenceExplainDetailSheet: View {
                     guard activeSentence.id == sentence.id else { return }
                     guard activeExplanationRequestID == requestIdentity.clientRequestID else { return }
                     isLoading = false
+                    activeExplanationSentenceKey = nil
                 }
                 return
             }
@@ -568,6 +586,7 @@ struct SentenceExplainDetailSheet: View {
                 errorMessage = fetched.shouldShowFallbackBanner ? fetched.displayFallbackMessage : nil
                 isLoading = false
                 activeExplanationRequestID = nil
+                activeExplanationSentenceKey = nil
             }
         } catch is CancellationError {
             await MainActor.run {
@@ -575,6 +594,7 @@ struct SentenceExplainDetailSheet: View {
                 isLoading = false
                 if activeExplanationRequestID == requestIdentity.clientRequestID {
                     activeExplanationRequestID = nil
+                    activeExplanationSentenceKey = nil
                 }
             }
         } catch {
@@ -597,6 +617,7 @@ struct SentenceExplainDetailSheet: View {
                 errorMessage = fallback.displayFallbackMessage
                 isLoading = false
                 activeExplanationRequestID = nil
+                activeExplanationSentenceKey = nil
             }
         }
     }
