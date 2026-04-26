@@ -280,6 +280,18 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
 
                 self.analysisResult = result
                 self.analysisError = result.shouldShowFallbackBanner ? result.displayFallbackMessage : nil
+                TextPipelineDiagnostics.log(
+                    "AI",
+                    [
+                        "[AI][SentenceExplain] ui_state_applied",
+                        "sentence_id=\(targetIdentity.sentenceID)",
+                        "request_id=\(result.requestID ?? "nil")",
+                        "used_fallback=\(result.usedFallback)",
+                        "used_cache=\(result.usedCache)",
+                        "is_ai_generated=\(result.localFallbackAnalysis.isAIGenerated)"
+                    ].joined(separator: " "),
+                    severity: .info
+                )
             } catch is CancellationError {
                 // 被取消，不更新状态
             } catch {

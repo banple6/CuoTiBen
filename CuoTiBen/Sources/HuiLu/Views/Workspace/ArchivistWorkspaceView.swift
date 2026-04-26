@@ -442,15 +442,15 @@ private struct ArchivistContextAssistant: View {
                         .font(ArchivistTypography.annotation)
                         .tint(ArchivistColors.primaryInk)
                 }
-            } else if let errorMessage {
-                ContextAnalysisCard(title: "教授式解析", tapeColor: ArchivistColors.pinkWash, offset: CGSize(width: 8, height: -6)) {
-                    Text(errorMessage)
-                        .font(ArchivistTypography.annotation)
-                        .foregroundStyle(ArchivistColors.mutedInk)
-                }
             } else if let analysis {
                 ContextAnalysisCard(title: "教授式解析", tapeColor: ArchivistColors.yellowWash, offset: CGSize(width: 6, height: -4)) {
                     ScrollView(showsIndicators: false) {
+                        if let errorMessage, !analysis.isAIGenerated {
+                            Text(errorMessage)
+                                .font(ArchivistTypography.annotation)
+                                .foregroundStyle(ArchivistColors.mutedInk)
+                                .padding(.bottom, 10)
+                        }
                         ProfessorAnalysisPanel(
                             analysis: analysis,
                             keywordMinimumWidth: 118,
@@ -460,6 +460,12 @@ private struct ArchivistContextAssistant: View {
                         )
                     }
                     .frame(maxHeight: 520)
+                }
+            } else if let errorMessage {
+                ContextAnalysisCard(title: "教授式解析", tapeColor: ArchivistColors.pinkWash, offset: CGSize(width: 8, height: -6)) {
+                    Text(errorMessage)
+                        .font(ArchivistTypography.annotation)
+                        .foregroundStyle(ArchivistColors.mutedInk)
                 }
             }
         }
