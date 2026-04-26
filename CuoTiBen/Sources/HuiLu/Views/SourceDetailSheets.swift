@@ -115,10 +115,9 @@ struct SentenceExplainDetailSheet: View {
     }
 
     private var shouldAutoLoadRemoteExplanation: Bool {
-        guard !isLoading, result == nil else { return false }
+        guard !isLoading, visibleResult == nil else { return false }
         guard selectionState.allowsCloudSentenceExplain else { return false }
-        guard let bundled = bundledAnalysis else { return true }
-        return bundled.shouldPreferSentenceExplain(for: activeSentence.text)
+        return true
     }
 
     private let contentBottomInset: CGFloat = 170

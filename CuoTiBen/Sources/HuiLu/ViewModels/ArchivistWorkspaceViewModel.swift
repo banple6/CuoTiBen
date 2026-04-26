@@ -100,8 +100,7 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
         if let analysisResult, isResultVisible(analysisResult, for: selectedSentence) {
             return false
         }
-        guard let bundled = bundledAnalysis else { return true }
-        return bundled.shouldPreferSentenceExplain(for: selectedSentence.text)
+        return true
     }
 
     var relatedEvidenceItems: [String] {

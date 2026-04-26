@@ -1361,10 +1361,9 @@ private struct ReviewWorkbenchSentencePanel: View {
     }
 
     private var shouldAutoLoadRemoteExplanation: Bool {
-        guard !isLoading, result == nil else { return false }
+        guard !isLoading, visibleResult == nil else { return false }
         guard selectionState.allowsCloudSentenceExplain else { return false }
-        guard let bundled = bundledAnalysis else { return true }
-        return bundled.shouldPreferSentenceExplain(for: sentence.text)
+        return true
     }
 
     var body: some View {
