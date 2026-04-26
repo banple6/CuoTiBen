@@ -2,6 +2,15 @@ import { AppError } from "../lib/appError.js";
 import { geminiCircuitBreaker } from "./GeminiCircuitBreaker.js";
 
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+const INVALID_RESPONSE_PATTERNS = [
+  /invalid response/i,
+  /invalid response body/i,
+  /unexpected token/i,
+  /failed to parse/i,
+  /malformed/i,
+  /choices/i,
+  /completion/i
+];
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -61,12 +70,21 @@ function classifyError(error) {
       retryable: true
     };
   }
+  const message = typeof error?.message === "string" ? error.message.trim() : "";
+  const looksLikeInvalidProviderResponse = status === 200
+    || INVALID_RESPONSE_PATTERNS.some((pattern) => pattern.test(message));
+  if (looksLikeInvalidProviderResponse) {
+    return {
+      statusCode: 502,
+      code: "GEMINI_INVALID_RESPONSE",
+      message: message || "AI 返回异常响应。",
+      retryable: true
+    };
+  }
   return {
     statusCode: 502,
     code: "GEMINI_INVALID_RESPONSE",
-    message: typeof error?.message === "string" && error.message.trim()
-      ? error.message.trim()
-      : "AI 返回异常响应。",
+    message: message || "AI 返回异常响应。",
     retryable: false
   };
 }
