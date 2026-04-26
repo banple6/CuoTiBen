@@ -30,8 +30,7 @@ enum AIServiceAvailabilityPolicy {
 
     static func cooldown(for error: URLError) -> TimeInterval? {
         switch error.code {
-        case .timedOut,
-             .cannotFindHost,
+        case .cannotFindHost,
              .cannotConnectToHost,
              .dnsLookupFailed:
             return 90
@@ -68,6 +67,22 @@ enum AIServiceAvailabilityPolicy {
         }
 
         return "\(service.displayName)暂时不可用，请稍后重试。"
+    }
+
+    static func cooldown(
+        for statusCode: Int,
+        service: AIEndpointService
+    ) -> TimeInterval? {
+        guard service != .sentenceExplain else { return nil }
+        return cooldown(for: statusCode)
+    }
+
+    static func cooldown(
+        for error: URLError,
+        service: AIEndpointService
+    ) -> TimeInterval? {
+        guard service != .sentenceExplain else { return nil }
+        return cooldown(for: error)
     }
 }
 
@@ -2002,7 +2017,10 @@ enum AIExplainSentenceService {
                         await aiServiceAvailabilityGate.recordFailure(
                             for: .sentenceExplain,
                             technicalReason: bodySnippet.isEmpty ? "HTTP \(httpResponse.statusCode)" : "HTTP \(httpResponse.statusCode): \(bodySnippet)",
-                            cooldown: AIServiceAvailabilityPolicy.cooldown(for: httpResponse.statusCode)
+                            cooldown: AIServiceAvailabilityPolicy.cooldown(
+                                for: httpResponse.statusCode,
+                                service: .sentenceExplain
+                            )
                         )
 
                         if shouldRetryEndpoint(statusCode: httpResponse.statusCode), index < endpointURLs.count - 1 {
@@ -2140,7 +2158,10 @@ enum AIExplainSentenceService {
                     await aiServiceAvailabilityGate.recordFailure(
                         for: .sentenceExplain,
                         technicalReason: error.localizedDescription,
-                        cooldown: AIServiceAvailabilityPolicy.cooldown(for: error)
+                        cooldown: AIServiceAvailabilityPolicy.cooldown(
+                            for: error,
+                            service: .sentenceExplain
+                        )
                     )
                     if shouldRetrySameEndpoint(for: error), attempt == 0 {
                         TextPipelineDiagnostics.log(
