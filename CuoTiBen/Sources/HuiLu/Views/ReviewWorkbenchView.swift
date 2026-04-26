@@ -1354,10 +1354,10 @@ private struct ReviewWorkbenchSentencePanel: View {
     }
 
     private var visibleResult: AIExplainSentenceResult? {
-        guard let result, isResultVisible(result, for: sentence) else {
-            return nil
+        if let result, isResultVisible(result, for: sentence) {
+            return result
         }
-        return result
+        return viewModel.cachedSentenceExplanation(for: sentence, in: document)
     }
 
     private var shouldAutoLoadRemoteExplanation: Bool {
@@ -1713,6 +1713,7 @@ private struct ReviewWorkbenchSentencePanel: View {
                     )
                     return
                 }
+                viewModel.rememberSentenceExplanation(fetched, for: currentSentence, in: document)
                 result = fetched
                 errorMessage = fetched.shouldShowFallbackBanner ? fetched.displayFallbackMessage : nil
                 isLoading = false

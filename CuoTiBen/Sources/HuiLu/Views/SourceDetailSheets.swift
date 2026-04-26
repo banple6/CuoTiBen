@@ -108,10 +108,10 @@ struct SentenceExplainDetailSheet: View {
     }
 
     private var visibleResult: AIExplainSentenceResult? {
-        guard let result, isResultVisible(result, for: activeSentence) else {
-            return nil
+        if let result, isResultVisible(result, for: activeSentence) {
+            return result
         }
-        return result
+        return viewModel.cachedSentenceExplanation(for: activeSentence, in: document)
     }
 
     private var shouldAutoLoadRemoteExplanation: Bool {
@@ -581,6 +581,7 @@ struct SentenceExplainDetailSheet: View {
                     )
                     return
                 }
+                viewModel.rememberSentenceExplanation(fetched, for: sentence, in: document)
                 result = fetched
                 errorMessage = fetched.shouldShowFallbackBanner ? fetched.displayFallbackMessage : nil
                 isLoading = false
