@@ -1067,7 +1067,7 @@ export async function analyzePassage({ requestID, title = "", paragraphs = [], k
     const response = await requestGeminiCompletion({
       requestID,
       breakerKey: "analyze-passage",
-      timeoutMs: 45_000,
+      timeoutMs: 120_000,
       invoke: () => requestModel(buildAnalyzePassagePrompt({
         title,
         paragraphs: effectiveParagraphs,

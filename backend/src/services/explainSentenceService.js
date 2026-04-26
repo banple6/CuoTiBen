@@ -1467,6 +1467,8 @@ function buildExplainSentenceRepairPrompt({
 }
 
 function enrichExplainResult(result, {
+  client_request_id,
+  document_id,
   sentence,
   paragraph_theme,
   paragraph_role,
@@ -1530,9 +1532,18 @@ function enrichExplainResult(result, {
       explanation: [item.function, item.why_it_matters ? `为什么重要：${item.why_it_matters}` : ""].filter(Boolean).join("｜")
     }))
   });
+  const identity = {
+    client_request_id: client_request_id || "",
+    document_id: document_id || "",
+    sentence_id: sentence_id || "",
+    sentence_text_hash: sentence_text_hash || "",
+    anchor_label: anchor_label || "",
+    segment_id: segment_id || ""
+  };
 
   return {
     ...result,
+    identity,
     analysis_identity: {
       source_sentence_id: sentence_id || "",
       source_sentence_text_hash: sentence_text_hash || "",
@@ -1617,6 +1628,8 @@ export async function explainSentence({
   paragraph_theme = "",
   paragraph_role = "",
   question_prompt = "",
+  document_id = "",
+  client_request_id = "",
   sentence_id = "",
   sentence_text_hash = "",
   anchor_label = "",
@@ -1683,7 +1696,7 @@ export async function explainSentence({
     const { completion, retryCount } = await requestGeminiCompletion({
       requestID,
       breakerKey: "explain-sentence",
-      timeoutMs: 20_000,
+      timeoutMs: 60_000,
       invoke: () => requestModel(buildExplainSentencePrompt({
         title,
         sentence,
@@ -1745,6 +1758,8 @@ export async function explainSentence({
   }
 
     const result = enrichExplainResult(normalized, {
+      client_request_id: client_request_id || requestID,
+      document_id,
       sentence,
       paragraph_theme,
       paragraph_role,

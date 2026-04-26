@@ -392,7 +392,7 @@ struct AIExplainSentenceResult: Codable, Equatable {
         self.init(
             originalSentence: Self.firstString(in: dictionary, keys: ["original_sentence", "originalSentence", "sentence"]) ?? sourceSentence,
             evidenceType: evidenceType,
-            analysisIdentity: (dictionary["identity"] as? [String: Any]).flatMap(AIResponseIdentity.init(dictionary:)),
+            analysisIdentity: Self.responseIdentity(in: dictionary),
             sentenceFunction: sentenceFunction,
             coreSkeleton: parsedCoreSkeleton,
             chunkLayers: parsedChunkLayers,
@@ -442,6 +442,18 @@ struct AIExplainSentenceResult: Codable, Equatable {
     private static func nonEmpty(_ value: String) -> String? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func responseIdentity(in dictionary: [String: Any]) -> AIResponseIdentity? {
+        if let identity = dictionary["identity"] as? [String: Any],
+           let parsed = AIResponseIdentity(dictionary: identity) {
+            return parsed
+        }
+        if let legacyIdentity = dictionary["analysis_identity"] as? [String: Any],
+           let parsed = AIResponseIdentity(dictionary: legacyIdentity) {
+            return parsed
+        }
+        return nil
     }
 
     var localFallbackAnalysis: ProfessorSentenceAnalysis {
@@ -1601,7 +1613,7 @@ enum AIBackendConfig {
 
 enum AIExplainSentenceService {
     private static let preferredAIPort = 3000
-    private static let explainSentenceTimeout: TimeInterval = 75
+    private static let explainSentenceTimeout: TimeInterval = 180
     private static let aiRequestPolicy = AIRequestPolicy.default
     private static let sentenceAnalysisCacheStore = SentenceAnalysisCacheStore()
     private static let requestSingleFlight = AIRequestSingleFlight<AIExplainSentenceResult>()

@@ -26,6 +26,7 @@ test("validateExplainSentenceRequest trims strings and preserves optional defaul
     sentence_text_hash: "",
     anchor_label: "",
     segment_id: "",
+    document_id: "",
     client_request_id: ""
   });
 });

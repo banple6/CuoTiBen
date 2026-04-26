@@ -53,6 +53,7 @@ export function validateExplainSentenceRequest(body) {
   const sentenceTextHash = normalizeOptionalString(body.sentence_text_hash, "sentence_text_hash", MAX_ID_LENGTH);
   const anchorLabel = normalizeOptionalString(body.anchor_label, "anchor_label", MAX_ID_LENGTH);
   const segmentID = normalizeOptionalString(body.segment_id, "segment_id", MAX_ID_LENGTH);
+  const documentID = normalizeOptionalString(body.document_id, "document_id", MAX_ID_LENGTH);
   const clientRequestID = normalizeOptionalString(body.client_request_id, "client_request_id", MAX_ID_LENGTH);
 
   if (!sentence) {
@@ -73,6 +74,7 @@ export function validateExplainSentenceRequest(body) {
     sentence_text_hash: sentenceTextHash,
     anchor_label: anchorLabel,
     segment_id: segmentID,
+    document_id: documentID,
     client_request_id: clientRequestID
   };
 }

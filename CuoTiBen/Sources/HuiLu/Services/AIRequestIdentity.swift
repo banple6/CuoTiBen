@@ -405,10 +405,10 @@ struct AIResponseIdentity: Codable, Equatable, Hashable {
         self.init(
             clientRequestID: dictionary["client_request_id"] as? String,
             documentID: dictionary["document_id"] as? String,
-            sentenceID: dictionary["sentence_id"] as? String,
-            segmentID: dictionary["segment_id"] as? String,
-            sentenceTextHash: dictionary["sentence_text_hash"] as? String,
-            anchorLabel: dictionary["anchor_label"] as? String
+            sentenceID: (dictionary["sentence_id"] as? String) ?? (dictionary["source_sentence_id"] as? String),
+            segmentID: (dictionary["segment_id"] as? String) ?? (dictionary["source_segment_id"] as? String),
+            sentenceTextHash: (dictionary["sentence_text_hash"] as? String) ?? (dictionary["source_sentence_text_hash"] as? String),
+            anchorLabel: (dictionary["anchor_label"] as? String) ?? (dictionary["source_anchor_label"] as? String)
         )
     }
 
