@@ -262,15 +262,14 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
                     return
                 }
 
-                let warnings = AnalysisConsistencyGuard.warnings(
-                    expectedIdentity: targetIdentity,
-                    sentenceText: sentence.text,
-                    analysis: result
+                let identityDecision = AIResponseIdentityGuard.validate(
+                    expected: targetIdentity,
+                    actual: result.analysisIdentity
                 )
-                guard warnings.isEmpty else {
+                guard identityDecision.isAllowed else {
                     TextPipelineDiagnostics.log(
                         "句子分析",
-                        "分析结果身份或内容不一致，静默丢弃：\(warnings.joined(separator: "；")) sentence=\(targetIdentity.sentenceID)",
+                        "分析结果身份不一致，静默丢弃：\(identityDecision.reason?.debugLabel ?? "unknown") sentence=\(targetIdentity.sentenceID)",
                         severity: .warning
                     )
                     self.analysisResult = nil
@@ -336,11 +335,7 @@ final class ArchivistWorkspaceViewModel: ObservableObject {
         return AIResponseIdentityGuard.validate(
             expected: expectedIdentity,
             actual: identity
-        ).isAllowed && AnalysisConsistencyGuard.warnings(
-            expectedIdentity: expectedIdentity,
-            sentenceText: sentence.text,
-            analysis: result
-        ).isEmpty
+        ).isAllowed
     }
 
     private static func isPassageSentence(_ sentence: Sentence, in bundle: StructuredSourceBundle) -> Bool {

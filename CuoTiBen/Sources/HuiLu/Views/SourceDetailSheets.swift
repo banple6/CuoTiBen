@@ -586,6 +586,18 @@ struct SentenceExplainDetailSheet: View {
                 isLoading = false
                 activeExplanationRequestID = nil
                 activeExplanationSentenceKey = nil
+                TextPipelineDiagnostics.log(
+                    "AI",
+                    [
+                        "[AI][SentenceExplain] detail_ui_state_applied",
+                        "sentence_id=\(requestIdentity.sentenceID)",
+                        "request_id=\(fetched.requestID ?? "nil")",
+                        "used_fallback=\(fetched.usedFallback)",
+                        "used_cache=\(fetched.usedCache)",
+                        "is_ai_generated=\(fetched.localFallbackAnalysis.isAIGenerated)"
+                    ].joined(separator: " "),
+                    severity: .info
+                )
             }
         } catch is CancellationError {
             await MainActor.run {
@@ -664,11 +676,7 @@ struct SentenceExplainDetailSheet: View {
         return AIResponseIdentityGuard.validate(
             expected: expectedIdentity,
             actual: result.analysisIdentity
-        ).isAllowed && AnalysisConsistencyGuard.warnings(
-            expectedIdentity: expectedIdentity,
-            sentenceText: sentence.text,
-            analysis: result
-        ).isEmpty
+        ).isAllowed
     }
 
     @ViewBuilder
