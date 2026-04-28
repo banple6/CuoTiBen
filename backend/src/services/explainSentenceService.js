@@ -2,7 +2,14 @@ import { getDashScopeConfig } from "../config/env.js";
 import { AppError } from "../lib/appError.js";
 import { getDashScopeClient } from "../lib/dashscope.js";
 import { aiResponseCache } from "./AIResponseCache.js";
+import {
+  SENTENCE_EXPLAIN_PROMPT_VERSION,
+  buildSentenceExplainCacheKey,
+  getAIPersistentCacheStore
+} from "./AIPersistentCacheStore.js";
 import { requestGeminiCompletion } from "./GeminiRetryClient.js";
+
+let explainSentenceModelInvokerForTests = null;
 
 export function buildExplainSentencePrompt({ title, sentence, context, paragraph_theme, paragraph_role, question_prompt }) {
   const safeTitle = title?.trim() || "未提供";
@@ -1620,6 +1627,109 @@ function parseModelJson(content) {
   });
 }
 
+function normalizePersistentIdentityPart(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+export function makePersistentExplainCacheIdentity({
+  document_id,
+  sentence_id,
+  sentence_text_hash,
+  modelName
+}) {
+  const documentID = normalizePersistentIdentityPart(document_id);
+  const sentenceID = normalizePersistentIdentityPart(sentence_id);
+  const sentenceTextHash = normalizePersistentIdentityPart(sentence_text_hash);
+  const model_name = normalizePersistentIdentityPart(modelName);
+
+  if (!documentID || !sentenceID || !sentenceTextHash || !model_name) {
+    return null;
+  }
+
+  return {
+    document_id: documentID,
+    sentence_id: sentenceID,
+    sentence_text_hash: sentenceTextHash,
+    prompt_version: SENTENCE_EXPLAIN_PROMPT_VERSION,
+    model_name
+  };
+}
+
+function stripPersistentCacheInternalFields(result) {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return result;
+  }
+
+  const {
+    current_result_source: _currentResultSourceSnake,
+    currentResultSource: _currentResultSourceCamel,
+    ...publicResult
+  } = result;
+  return publicResult;
+}
+
+function buildPersistentCacheHitResult(cached, requestID) {
+  return {
+    ...stripPersistentCacheInternalFields(cached.result),
+    request_id: requestID,
+    used_cache: true,
+    used_fallback: false,
+    retry_count: 0
+  };
+}
+
+function persistentErrorCodeFrom(error) {
+  return error?.code || error?.error_code || "EXPLAIN_SENTENCE_FAILED";
+}
+
+function storePersistentExplainFailedIfEligible({
+  store,
+  identity,
+  cacheKey,
+  requestID,
+  error
+}) {
+  if (!store || !identity || !cacheKey) return false;
+
+  store.storeFailed({
+    ...identity,
+    cache_key: cacheKey,
+    request_id: requestID,
+    error_code: persistentErrorCodeFrom(error)
+  });
+  return true;
+}
+
+function storePersistentExplainReadyIfEligible({
+  store,
+  identity,
+  cacheKey,
+  requestID,
+  result
+}) {
+  if (!store || !identity || !cacheKey || result?.used_fallback === true) {
+    return false;
+  }
+
+  return store.storeReady({
+    ...identity,
+    cache_key: cacheKey,
+    request_id: requestID,
+    result: {
+      ...result,
+      current_result_source: "remoteAI"
+    }
+  });
+}
+
+function setExplainSentenceModelInvokerForTests(invoker) {
+  explainSentenceModelInvokerForTests = typeof invoker === "function" ? invoker : null;
+}
+
+function resetExplainSentenceModelInvokerForTests() {
+  explainSentenceModelInvokerForTests = null;
+}
+
 export async function explainSentence({
   requestID,
   title = "",
@@ -1635,26 +1745,33 @@ export async function explainSentence({
   anchor_label = "",
   segment_id = ""
 }) {
-  const client = getDashScopeClient();
   const { modelName } = getDashScopeConfig();
+  const persistentIdentity = makePersistentExplainCacheIdentity({
+    document_id,
+    sentence_id,
+    sentence_text_hash,
+    modelName
+  });
+  const persistentStore = persistentIdentity ? getAIPersistentCacheStore() : null;
+  const persistentCacheKey = persistentIdentity
+    ? buildSentenceExplainCacheKey(persistentIdentity)
+    : "";
 
-  if (!client) {
-    throw new AppError("DASHSCOPE_API_KEY 或 DASHSCOPE_BASE_URL 未配置。", {
-      statusCode: 500,
-      code: "MODEL_CONFIG_MISSING",
-      requestID,
-      fallbackAvailable: true
-    });
+  if (persistentStore && persistentCacheKey) {
+    const persistentCached = persistentStore.getReady(persistentCacheKey);
+    if (persistentCached) {
+      return buildPersistentCacheHitResult(persistentCached, requestID);
+    }
   }
 
-  const cacheKey = aiResponseCache.makeKey([
+  const memoryCacheKey = aiResponseCache.makeKey([
     "explain-sentence.v2",
     sentence_id,
     sentence_text_hash,
     anchor_label,
     segment_id
   ]);
-  const cached = aiResponseCache.get(cacheKey);
+  const cached = aiResponseCache.get(memoryCacheKey);
   if (cached) {
     return {
       ...cached,
@@ -1665,6 +1782,25 @@ export async function explainSentence({
     };
   }
 
+  const client = explainSentenceModelInvokerForTests ? null : getDashScopeClient();
+
+  if (!explainSentenceModelInvokerForTests && !client) {
+    const error = new AppError("DASHSCOPE_API_KEY 或 DASHSCOPE_BASE_URL 未配置。", {
+      statusCode: 500,
+      code: "MODEL_CONFIG_MISSING",
+      requestID,
+      fallbackAvailable: true
+    });
+    storePersistentExplainFailedIfEligible({
+      store: persistentStore,
+      identity: persistentIdentity,
+      cacheKey: persistentCacheKey,
+      requestID,
+      error
+    });
+    throw error;
+  }
+
   console.log("[ai/explain-sentence] calling model", {
     modelName,
     sentenceLength: sentence.length,
@@ -1673,6 +1809,25 @@ export async function explainSentence({
   });
 
   const requestModel = async (prompt) => {
+    if (explainSentenceModelInvokerForTests) {
+      return explainSentenceModelInvokerForTests({
+        prompt,
+        modelName,
+        requestID,
+        title,
+        sentence,
+        context,
+        paragraph_theme,
+        paragraph_role,
+        question_prompt,
+        document_id,
+        sentence_id,
+        sentence_text_hash,
+        anchor_label,
+        segment_id
+      });
+    }
+
     return client.chat.completions.create({
       model: modelName,
       temperature: 0.2,
@@ -1776,7 +1931,14 @@ export async function explainSentence({
       used_fallback: false,
       retry_count: retryCount
     };
-    aiResponseCache.set(cacheKey, response);
+    aiResponseCache.set(memoryCacheKey, response);
+    storePersistentExplainReadyIfEligible({
+      store: persistentStore,
+      identity: persistentIdentity,
+      cacheKey: persistentCacheKey,
+      requestID,
+      result: response
+    });
     return response;
   } catch (error) {
     if (cached) {
@@ -1788,6 +1950,13 @@ export async function explainSentence({
         retry_count: 0
       };
     }
+    storePersistentExplainFailedIfEligible({
+      store: persistentStore,
+      identity: persistentIdentity,
+      cacheKey: persistentCacheKey,
+      requestID,
+      error
+    });
     throw error;
   }
 }
@@ -1797,5 +1966,8 @@ export const __testables = {
   normalizeCoreSkeleton,
   normalizeGrammarFocus,
   renderCoreSkeleton,
-  localizeGrammarFocusItem
+  localizeGrammarFocusItem,
+  setExplainSentenceModelInvokerForTests,
+  resetExplainSentenceModelInvokerForTests,
+  storePersistentExplainReadyIfEligible
 };
