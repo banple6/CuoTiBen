@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { AppError } from "../src/lib/appError.js";
 import { validateExplainSentenceRequest } from "../src/validators/explainSentence.js";
 import { validateParseSourceRequest } from "../src/validators/parseSource.js";
+import { validatePrewarmDocumentRequest } from "../src/validators/prewarmDocument.js";
 
 test("validateExplainSentenceRequest trims strings and preserves optional defaults", () => {
   const result = validateExplainSentenceRequest({
@@ -81,4 +82,21 @@ test("validateParseSourceRequest rejects non-object anchors", () => {
     () => validateParseSourceRequest({ raw_text: "text", anchors: ["bad"] }),
     (error) => error instanceof AppError && error.message === "anchors[0] 必须是对象。"
   );
+});
+
+test("validatePrewarmDocumentRequest can be imported and keeps passage sentence", () => {
+  const result = validatePrewarmDocumentRequest({
+    document_id: "doc-1",
+    sentences: [
+      {
+        sentence_id: "sen_1",
+        sentence_text_hash: "hash_1",
+        text: "This sentence belongs to the passage body.",
+        kind: "passageSentence"
+      }
+    ]
+  });
+
+  assert.equal(result.sentences.length, 1);
+  assert.equal(result.sentences[0].is_passage_sentence, true);
 });
