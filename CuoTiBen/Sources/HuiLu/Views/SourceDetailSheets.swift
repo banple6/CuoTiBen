@@ -114,6 +114,13 @@ struct SentenceExplainDetailSheet: View {
         return viewModel.cachedSentenceExplanation(for: activeSentence, in: document)
     }
 
+    private var prewarmStatusText: String {
+        if let progress = viewModel.documentExplainPrewarmStatusMessage(for: document) {
+            return "\(progress)\n本地结构可用，可立即学习"
+        }
+        return "本地结构可用，可立即学习"
+    }
+
     private var shouldAutoLoadRemoteExplanation: Bool {
         guard !isLoading, visibleResult == nil else { return false }
         guard selectionState.allowsCloudSentenceExplain else { return false }
@@ -338,6 +345,7 @@ struct SentenceExplainDetailSheet: View {
         let currentSelection = selectionState
         if !currentSelection.allowsCloudSentenceExplain {
             VStack(alignment: .leading, spacing: 16) {
+                prewarmStatusBlock
                 SentenceExplainBlock(
                     title: "本地骨架",
                     content: "当前展示的是本地结构骨架，远端 AI 精讲尚未成功获取。",
@@ -348,6 +356,7 @@ struct SentenceExplainDetailSheet: View {
             }
         } else if let analysis = effectiveAnalysis {
             VStack(alignment: .leading, spacing: 16) {
+                prewarmStatusBlock
                 if isLoading {
                     ProgressView("正在获取教授式精讲…")
                         .font(.system(size: 14, weight: .medium))
@@ -402,10 +411,14 @@ struct SentenceExplainDetailSheet: View {
                 relatedContextPanel
             }
         } else if isLoading {
-            ProgressView("正在获取讲解…")
-                .font(.system(size: 15, weight: .medium))
+            VStack(alignment: .leading, spacing: 12) {
+                prewarmStatusBlock
+                ProgressView("正在获取讲解…")
+                    .font(.system(size: 15, weight: .medium))
+            }
         } else if let errorMessage {
             VStack(alignment: .leading, spacing: 10) {
+                prewarmStatusBlock
                 Text("讲解获取失败")
                     .font(.system(size: 16, weight: .bold))
 
@@ -422,6 +435,7 @@ struct SentenceExplainDetailSheet: View {
             }
         } else {
             VStack(alignment: .leading, spacing: 10) {
+                prewarmStatusBlock
                 Text("当前未自动请求云端讲解")
                     .font(.system(size: 16, weight: .bold))
 
@@ -432,6 +446,14 @@ struct SentenceExplainDetailSheet: View {
                 remoteExplanationButton(title: "获取 AI 精讲")
             }
         }
+    }
+
+    private var prewarmStatusBlock: some View {
+        SentenceExplainBlock(
+            title: "AI 精讲预生成",
+            content: prewarmStatusText,
+            tone: .neutral
+        )
     }
 
     private func remoteExplanationButton(title: String) -> some View {

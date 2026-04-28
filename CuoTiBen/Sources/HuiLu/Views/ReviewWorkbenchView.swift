@@ -1366,6 +1366,13 @@ private struct ReviewWorkbenchSentencePanel: View {
         return true
     }
 
+    private var prewarmStatusText: String {
+        if let progress = viewModel.documentExplainPrewarmStatusMessage(for: document) {
+            return "\(progress)\n本地结构可用，可立即学习"
+        }
+        return "本地结构可用，可立即学习"
+    }
+
     var body: some View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
@@ -1506,6 +1513,7 @@ private struct ReviewWorkbenchSentencePanel: View {
         let currentSelection = selectionState
         if !currentSelection.allowsCloudSentenceExplain {
             VStack(alignment: .leading, spacing: 14) {
+                prewarmStatusBlock
                 SentenceExplainBlock(
                     title: "本地骨架",
                     content: "当前展示的是本地结构骨架，远端 AI 精讲尚未成功获取。",
@@ -1515,6 +1523,7 @@ private struct ReviewWorkbenchSentencePanel: View {
             }
         } else if let analysis = effectiveAnalysis {
             VStack(alignment: .leading, spacing: 14) {
+                prewarmStatusBlock
                 if isLoading {
                     ProgressView("正在获取教授式精讲…")
                         .font(.system(size: 15, weight: .medium))
@@ -1555,10 +1564,15 @@ private struct ReviewWorkbenchSentencePanel: View {
                 }
             }
         } else if isLoading {
-            ProgressView("正在获取教授式精讲…")
-                .font(.system(size: 15, weight: .medium))
+            VStack(alignment: .leading, spacing: 14) {
+                prewarmStatusBlock
+                ProgressView("正在获取教授式精讲…")
+                    .font(.system(size: 15, weight: .medium))
+            }
         } else if let errorMessage {
             VStack(alignment: .leading, spacing: 10) {
+                prewarmStatusBlock
+
                 Text("讲解获取失败")
                     .font(.system(size: 16, weight: .bold))
 
@@ -1575,6 +1589,8 @@ private struct ReviewWorkbenchSentencePanel: View {
             }
         } else {
             VStack(alignment: .leading, spacing: 10) {
+                prewarmStatusBlock
+
                 Text("当前未自动请求云端讲解")
                     .font(.system(size: 16, weight: .bold))
 
@@ -1585,6 +1601,14 @@ private struct ReviewWorkbenchSentencePanel: View {
                 remoteExplanationButton(title: "获取 AI 精讲")
             }
         }
+    }
+
+    private var prewarmStatusBlock: some View {
+        SentenceExplainBlock(
+            title: "AI 精讲预生成",
+            content: prewarmStatusText,
+            tone: .neutral
+        )
     }
 
     private func remoteExplanationButton(title: String) -> some View {

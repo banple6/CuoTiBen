@@ -52,6 +52,13 @@ struct TextPipelineDiagnosticsView: View {
             .last
     }
 
+    private var latestPrewarmDiagnosticsStatus: PrewarmDiagnosticsStatus? {
+        events
+            .filter { $0.stage == "AI" && $0.message.contains("[AI][Prewarm]") }
+            .last
+            .flatMap { PrewarmDiagnosticsStatus(event: $0) }
+    }
+
     private var fallbackSummary: FallbackSummary? {
         FallbackSummary(
             sentenceStatus: latestSentenceAIStatus,
@@ -114,6 +121,12 @@ struct TextPipelineDiagnosticsView: View {
                     if let gatewayStatus = latestAIGatewayStatus {
                         Section("AI Gateway") {
                             AIGatewayStatusCard(status: gatewayStatus)
+                        }
+                    }
+
+                    if let prewarmStatus = latestPrewarmDiagnosticsStatus {
+                        Section("AI Prewarm") {
+                            PrewarmDiagnosticsStatusCard(status: prewarmStatus)
                         }
                     }
 
@@ -557,6 +570,62 @@ private struct AIGatewayStatusCard: View {
                 DiagnosticKeyValueRow(label: "nonPassageRatio", value: status.nonPassageRatio ?? "nil")
                 DiagnosticKeyValueRow(label: "reason", value: status.reason ?? "nil")
             }
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+private struct PrewarmDiagnosticsStatus {
+    let timestamp: Date
+    let prewarmJobID: String?
+    let prewarmStatus: String?
+    let totalCount: String?
+    let readyCount: String?
+    let failedCount: String?
+    let processingCount: String?
+    let queuedCount: String?
+    let latestRecoveryAttempted: String?
+    let payloadEligibleSentenceCount: String?
+    let payloadFilteredSentenceCount: String?
+    let lastPrewarmRequestID: String?
+    let lastPrewarmErrorCode: String?
+
+    init?(event: TextPipelineDiagnostics.PipelineEvent) {
+        guard event.stage == "AI", event.message.contains("[AI][Prewarm]") else { return nil }
+        let values = DiagnosticsEventParser.parseKeyValuePairs(from: event.message)
+        timestamp = event.timestamp
+        prewarmJobID = values["prewarmJobID"] ?? values["job_id"]
+        prewarmStatus = values["prewarmStatus"] ?? values["status"]
+        totalCount = values["totalCount"]
+        readyCount = values["readyCount"]
+        failedCount = values["failedCount"]
+        processingCount = values["processingCount"]
+        queuedCount = values["queuedCount"]
+        latestRecoveryAttempted = values["latestRecoveryAttempted"]
+        payloadEligibleSentenceCount = values["payloadEligibleSentenceCount"] ?? values["payload_sentences"]
+        payloadFilteredSentenceCount = values["payloadFilteredSentenceCount"] ?? values["skipped_non_passage"]
+        lastPrewarmRequestID = values["lastPrewarmRequestID"] ?? values["request_id"]
+        lastPrewarmErrorCode = values["lastPrewarmErrorCode"] ?? values["error_code"]
+    }
+}
+
+private struct PrewarmDiagnosticsStatusCard: View {
+    let status: PrewarmDiagnosticsStatus
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            DiagnosticKeyValueRow(label: "prewarmJobID", value: status.prewarmJobID ?? "nil")
+            DiagnosticKeyValueRow(label: "prewarmStatus", value: status.prewarmStatus ?? "nil")
+            DiagnosticKeyValueRow(label: "totalCount", value: status.totalCount ?? "nil")
+            DiagnosticKeyValueRow(label: "readyCount", value: status.readyCount ?? "nil")
+            DiagnosticKeyValueRow(label: "failedCount", value: status.failedCount ?? "nil")
+            DiagnosticKeyValueRow(label: "processingCount", value: status.processingCount ?? "nil")
+            DiagnosticKeyValueRow(label: "queuedCount", value: status.queuedCount ?? "nil")
+            DiagnosticKeyValueRow(label: "latestRecoveryAttempted", value: status.latestRecoveryAttempted ?? "nil")
+            DiagnosticKeyValueRow(label: "payloadEligibleSentenceCount", value: status.payloadEligibleSentenceCount ?? "nil")
+            DiagnosticKeyValueRow(label: "payloadFilteredSentenceCount", value: status.payloadFilteredSentenceCount ?? "nil")
+            DiagnosticKeyValueRow(label: "lastPrewarmRequestID", value: status.lastPrewarmRequestID ?? "nil")
+            DiagnosticKeyValueRow(label: "lastPrewarmErrorCode", value: status.lastPrewarmErrorCode ?? "nil")
         }
         .padding(.vertical, 4)
     }
