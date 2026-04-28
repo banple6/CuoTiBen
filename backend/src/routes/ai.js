@@ -2,11 +2,114 @@ import { Router } from "express";
 import { explainSentence } from "../services/explainSentenceService.js";
 import { parseSource } from "../services/parseSourceService.js";
 import { analyzePassage } from "../services/analyzePassageService.js";
+import { getDocumentExplainPrewarmQueue } from "../services/DocumentExplainPrewarmQueueRegistry.js";
 import { validateExplainSentenceRequest } from "../validators/explainSentence.js";
 import { validateParseSourceRequest } from "../validators/parseSource.js";
+import { validatePrewarmDocumentRequest } from "../validators/prewarmDocument.js";
 import { normalizeClientRequestID, resolveRequestID } from "../lib/requestId.js";
 
 const router = Router();
+
+function prewarmRequestID(req) {
+  const body = typeof req.body === "object" && req.body !== null ? req.body : {};
+  return resolveRequestID(body.client_request_id || req.headers["x-client-request-id"]);
+}
+
+function buildPrewarmJobPayload(job) {
+  return {
+    job_id: job.job_id,
+    document_id: job.document_id,
+    title: job.title || "",
+    status: job.status,
+    total_count: Number(job.total_count || 0),
+    ready_count: Number(job.ready_count || 0),
+    failed_count: Number(job.failed_count || 0),
+    processing_count: Number(job.processing_count || 0),
+    queued_count: Number(job.queued_count || 0),
+    created_at: job.created_at,
+    updated_at: job.updated_at
+  };
+}
+
+function missingDocumentIDResponse(res, requestID) {
+  return res.status(400).json({
+    success: false,
+    error_code: "MISSING_DOCUMENT_ID",
+    message: "缺少 document_id。",
+    request_id: requestID,
+    retryable: false,
+    fallback_available: false
+  });
+}
+
+function prewarmJobNotFoundResponse(res, requestID) {
+  return res.status(404).json({
+    success: false,
+    error_code: "PREWARM_JOB_NOT_FOUND",
+    message: "该资料暂无 AI 精讲预生成任务。",
+    request_id: requestID,
+    retryable: false,
+    fallback_available: false
+  });
+}
+
+router.post("/prewarm-document", async (req, res) => {
+  const requestID = prewarmRequestID(req);
+  req.requestID = requestID;
+
+  const payload = validatePrewarmDocumentRequest(req.body);
+  const queue = getDocumentExplainPrewarmQueue();
+  const job = queue.enqueueDocument(payload);
+
+  return res.json({
+    success: true,
+    data: buildPrewarmJobPayload(job),
+    request_id: requestID,
+    used_cache: false,
+    used_fallback: false
+  });
+});
+
+router.get("/prewarm-document/latest", async (req, res) => {
+  const requestID = resolveRequestID(req.headers["x-client-request-id"]);
+  req.requestID = requestID;
+
+  const documentID = typeof req.query.document_id === "string"
+    ? req.query.document_id.trim()
+    : "";
+  if (!documentID) {
+    return missingDocumentIDResponse(res, requestID);
+  }
+
+  const queue = getDocumentExplainPrewarmQueue();
+  const job = queue.getLatestJobForDocument(documentID);
+  if (!job) {
+    return prewarmJobNotFoundResponse(res, requestID);
+  }
+
+  return res.json({
+    success: true,
+    data: buildPrewarmJobPayload(job),
+    request_id: requestID
+  });
+});
+
+router.get("/prewarm-document/:job_id", async (req, res) => {
+  const requestID = resolveRequestID(req.headers["x-client-request-id"]);
+  req.requestID = requestID;
+
+  const queue = getDocumentExplainPrewarmQueue();
+  const job = queue.getJobStatus(req.params.job_id);
+  if (!job) {
+    return prewarmJobNotFoundResponse(res, requestID);
+  }
+
+  return res.json({
+    success: true,
+    data: buildPrewarmJobPayload(job),
+    request_id: requestID
+  });
+});
 
 router.post("/explain-sentence", async (req, res) => {
   const payload = validateExplainSentenceRequest(req.body);
