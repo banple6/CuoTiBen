@@ -13,6 +13,7 @@ AI_CACHE_DB_PATH=".data/local-smoke-ai-cache.sqlite3" \
 PORT=3100 \
 AI_PROVIDER=claude \
 AI_MODEL=claude-opus-4-6 \
+MODEL_NAME=claude-opus-4-6 \
 AI_BASE_URL="http://127.0.0.1:3999" \
 AI_API_KIND=anthropic-messages \
 AI_TIMEOUT_MS=3000 \
@@ -20,6 +21,8 @@ AI_MAX_RETRIES=1 \
 AI_CIRCUIT_BREAKER_ENABLED=true \
 npm start
 ```
+
+`MODEL_NAME` 当前仍是后端 `getServerConfig()` / explain-sentence cache key 路径读取的模型名；`AI_MODEL` 保留给 AI Gateway 风格配置。为了让 HTTP cache-hit smoke 的 seed cache 和 `/ai/explain-sentence` lookup 使用同一个 `model_name`，本地 smoke 需要同时设置两者。后续如统一到 `AI_MODEL`，应单独做配置 cleanup，不在本 runbook 中假设已经统一。
 
 期望：
 
