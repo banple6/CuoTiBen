@@ -10,6 +10,7 @@ import {
   buildSentenceExplainCacheKey
 } from "../src/services/AIPersistentCacheStore.js";
 import {
+  buildPrewarmExplainSentencePayload,
   DocumentExplainPrewarmQueue,
   rankPrewarmSentence
 } from "../src/services/DocumentExplainPrewarmQueue.js";
@@ -44,10 +45,10 @@ function sentence(index, overrides = {}) {
   };
 }
 
-function remoteResult(row) {
+function remoteResult(payload) {
   return {
-    original_sentence: row.payload.text,
-    faithful_translation: `翻译 ${row.sentence_id}`,
+    original_sentence: payload.sentence,
+    faithful_translation: `翻译 ${payload.sentence_id}`,
     grammar: [],
     used_cache: false,
     used_fallback: false,
@@ -100,9 +101,9 @@ test("queue processes successful remoteAI sentence jobs into ready cache and com
   const queue = new DocumentExplainPrewarmQueue({
     store,
     modelName: "model-a",
-    explainSentence: async (row) => ({
-      ...remoteResult(row),
-      request_id: `req-${row.sentence_id}`
+    explainSentence: async (payload) => ({
+      ...remoteResult(payload),
+      request_id: `req-${payload.sentence_id}`
     }),
     autoStart: false
   });
@@ -132,14 +133,14 @@ test("single sentence failure does not fail the whole document job", async () =>
   const queue = new DocumentExplainPrewarmQueue({
     store,
     modelName: "model-a",
-    explainSentence: async (row) => {
-      if (row.sentence_id === "sen_2") {
+    explainSentence: async (payload) => {
+      if (payload.sentence_id === "sen_2") {
         const error = new Error("provider busy");
         error.code = "GEMINI_UPSTREAM_503";
         error.requestID = "req-failed";
         throw error;
       }
-      return remoteResult(row);
+      return remoteResult(payload);
     },
     autoStart: false
   });
@@ -236,7 +237,7 @@ test("recoverAbandonedWork requeues persisted processing sentences and recalcula
   const queue = new DocumentExplainPrewarmQueue({
     store,
     modelName,
-    explainSentence: async (row) => remoteResult(row),
+    explainSentence: async (payload) => remoteResult(payload),
     autoStart: false
   });
 
@@ -253,4 +254,69 @@ test("recoverAbandonedWork requeues persisted processing sentences and recalcula
   assert.equal(job.status, "queued");
   assert.equal(job.queued_count, 1);
   assert.equal(job.processing_count, 0);
+}));
+
+test("buildPrewarmExplainSentencePayload creates full explain-sentence identity", () => {
+  const row = {
+    job_id: "job-1",
+    document_id: "doc-1",
+    sentence_id: "s-1",
+    sentence_text_hash: "hash-s-1",
+    payload_json: JSON.stringify({
+      text: "A passage sentence.",
+      context: "A passage sentence in context.",
+      anchor_label: "",
+      segment_id: "",
+      paragraph_role: "passageBody",
+      paragraph_theme: "theme"
+    })
+  };
+
+  const payload = buildPrewarmExplainSentencePayload(row);
+
+  assert.equal(payload.identity.document_id, "doc-1");
+  assert.equal(payload.identity.sentence_id, "s-1");
+  assert.equal(payload.identity.sentence_text_hash, "hash-s-1");
+  assert.equal(payload.identity.segment_id, "s-1");
+  assert.equal(payload.identity.anchor_label, "s-1");
+  assert.equal(payload.document_id, "doc-1");
+  assert.equal(payload.sentence_id, "s-1");
+  assert.equal(payload.sentence, "A passage sentence.");
+  assert.equal(payload.context, "A passage sentence in context.");
+  assert.equal(payload.paragraph_role, "passageBody");
+});
+
+test("prewarm queue passes full explain-sentence identity payload", async () => withStore(async (store) => {
+  const seen = [];
+  const queue = new DocumentExplainPrewarmQueue({
+    store,
+    modelName: "model-a",
+    concurrency: 1,
+    explainSentence: async (payload) => {
+      seen.push(payload);
+      assert.equal(payload.identity.document_id, "doc-1");
+      assert.equal(payload.identity.sentence_id, "sen_1");
+      assert.equal(payload.identity.sentence_text_hash, "hash_1");
+      assert.ok(payload.identity.segment_id);
+      assert.ok(payload.identity.anchor_label);
+      assert.equal(payload.document_id, "doc-1");
+      assert.equal(payload.sentence_id, "sen_1");
+      assert.equal(payload.sentence_text_hash, "hash_1");
+      return remoteResult(payload);
+    },
+    autoStart: false
+  });
+
+  const job = queue.enqueueDocument({
+    document_id: "doc-1",
+    title: "Demo",
+    sentences: [sentence(1)]
+  });
+
+  await queue.drainForTests();
+
+  const status = queue.getJobStatus(job.job_id);
+  assert.equal(status.status, "completed");
+  assert.equal(status.ready_count, 1);
+  assert.equal(seen.length, 1);
 }));

@@ -91,6 +91,51 @@ async function withServer(fn) {
   }
 }
 
+async function withFakeAnthropicUpstream(fn) {
+  const requests = [];
+  const upstream = createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) {
+      chunks.push(chunk);
+    }
+    const bodyText = Buffer.concat(chunks).toString("utf8");
+    requests.push({
+      method: request.method,
+      url: request.url,
+      headers: request.headers,
+      body: bodyText ? JSON.parse(bodyText) : null
+    });
+
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({
+      id: "msg_fake",
+      type: "message",
+      role: "assistant",
+      model: "claude-opus-4-6",
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(explainResult())
+        }
+      ]
+    }));
+  });
+  upstream.listen(0, "127.0.0.1");
+  await once(upstream, "listening");
+  const { port } = upstream.address();
+
+  try {
+    await fn(`http://127.0.0.1:${port}`, requests);
+  } finally {
+    await new Promise((resolve, reject) => {
+      upstream.close((error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    });
+  }
+}
+
 test("/ai/explain-sentence route envelope remains stable", () => withServer(async (baseURL) => {
   setExplainSentenceModelInvokerForTests(async () => ({
     choices: [{ message: { content: JSON.stringify(explainResult()) } }]
@@ -126,4 +171,79 @@ test("/ai/explain-sentence route envelope remains stable", () => withServer(asyn
   assert.equal(body.data.identity.document_id, "doc-route");
   assert.equal(body.data.analysis_identity.source_sentence_id, "sen-route");
   assert.equal(typeof body.data.faithful_translation, "string");
+}));
+
+test("/ai/explain-sentence supports anthropic-messages upstream responses", () => withFakeAnthropicUpstream(async (upstreamURL, upstreamRequests) => {
+  const upstreamKeyEnv = "NOVAI" + "_API_KEY";
+  const originalEnv = {
+    MODEL_NAME: process.env.MODEL_NAME,
+    AI_MODEL: process.env.AI_MODEL,
+    AI_API_KIND: process.env.AI_API_KIND,
+    AI_BASE_URL: process.env.AI_BASE_URL,
+    [upstreamKeyEnv]: process.env[upstreamKeyEnv],
+    DASHSCOPE_API_KEY: process.env.DASHSCOPE_API_KEY,
+    DASHSCOPE_BASE_URL: process.env.DASHSCOPE_BASE_URL
+  };
+  const dir = mkdtempSync(join(tmpdir(), "cuotiben-anthropic-route-cache-"));
+  process.env.MODEL_NAME = "claude-opus-4-6";
+  process.env.AI_MODEL = "claude-opus-4-6";
+  process.env.AI_API_KIND = "anthropic-messages";
+  process.env.AI_BASE_URL = upstreamURL;
+  process.env[upstreamKeyEnv] = "test-key";
+  delete process.env.DASHSCOPE_API_KEY;
+  delete process.env.DASHSCOPE_BASE_URL;
+  resetAIPersistentCacheStoreForTests({ dbPath: join(dir, "cache.sqlite3") });
+  resetExplainSentenceModelInvokerForTests();
+  const server = createServer(createApp());
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const { port } = server.address();
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/ai/explain-sentence`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        client_request_id: "anthropic-route-request",
+        title: "Demo",
+        sentence: SENTENCE,
+        context: "The passage discusses policy timing.",
+        paragraph_theme: "Policy timing",
+        paragraph_role: "support",
+        document_id: "doc-anthropic",
+        sentence_id: "sen-anthropic",
+        sentence_text_hash: "hash-anthropic",
+        anchor_label: "第1页 第1句",
+        segment_id: "seg-anthropic"
+      })
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.success, true);
+    assert.equal(body.request_id, "anthropic-route-request");
+    assert.equal(body.used_cache, false);
+    assert.equal(body.data.original_sentence, SENTENCE);
+    assert.ok(upstreamRequests.length >= 1);
+    assert.equal(upstreamRequests[0].method, "POST");
+    assert.equal(upstreamRequests[0].url, "/v1/messages");
+    assert.equal(upstreamRequests[0].body.model, "claude-opus-4-6");
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    });
+    resetExplainSentenceModelInvokerForTests();
+    resetAIPersistentCacheStoreForTests();
+    rmSync(dir, { recursive: true, force: true });
+    for (const [key, value] of Object.entries(originalEnv)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
 }));

@@ -20,7 +20,11 @@ export function rankPrewarmSentence(sentence, index = 0) {
 function isRemoteAIResult(result) {
   if (!result || result.used_fallback === true) return false;
   const source = result.current_result_source || result.currentResultSource;
-  return source === "remoteAI";
+  if (source) {
+    return source === "remoteAI";
+  }
+  return result.used_cache === true
+    || (result.used_fallback === false && typeof result.original_sentence === "string" && result.original_sentence.trim());
 }
 
 function requestIDFrom(result) {
@@ -31,6 +35,53 @@ function invalidResultError(result) {
   return {
     code: result?.used_fallback === true ? "PREWARM_USED_FALLBACK" : "PREWARM_INVALID_RESULT",
     requestID: requestIDFrom(result)
+  };
+}
+
+function parsePayload(row) {
+  if (row?.payload && typeof row.payload === "object") {
+    return row.payload;
+  }
+  if (!row?.payload_json) {
+    return {};
+  }
+  try {
+    return JSON.parse(row.payload_json);
+  } catch {
+    return {};
+  }
+}
+
+export function buildPrewarmExplainSentencePayload(row) {
+  const payload = parsePayload(row);
+  const sentenceID = row?.sentence_id || payload.sentence_id || "";
+  const sentenceTextHash = row?.sentence_text_hash || payload.sentence_text_hash || "";
+  const documentID = row?.document_id || payload.document_id || "";
+  const stableAnchorLabel = payload.anchor_label || sentenceID || "";
+  const stableSegmentID = payload.segment_id || sentenceID || "";
+
+  return {
+    identity: {
+      client_request_id: `prewarm:${row?.job_id || ""}:${sentenceID}`,
+      document_id: documentID,
+      sentence_id: sentenceID,
+      segment_id: stableSegmentID,
+      sentence_text_hash: sentenceTextHash,
+      anchor_label: stableAnchorLabel
+    },
+    requestID: `prewarm:${row?.job_id || ""}:${sentenceID}`,
+    client_request_id: `prewarm:${row?.job_id || ""}:${sentenceID}`,
+    document_id: documentID,
+    sentence_id: sentenceID,
+    sentence_text_hash: sentenceTextHash,
+    segment_id: stableSegmentID,
+    anchor_label: stableAnchorLabel,
+    title: payload.title || payload.document_title || "",
+    sentence: payload.text || payload.sentence || "",
+    context: payload.context || payload.text || "",
+    paragraph_theme: payload.paragraph_theme || "",
+    paragraph_role: payload.paragraph_role || "passageBody",
+    question_prompt: payload.question_prompt || ""
   };
 }
 
@@ -140,12 +191,15 @@ export class DocumentExplainPrewarmQueue {
 
   async processSentence(row) {
     try {
-      const result = await this.explainSentence(row);
+      const result = await this.explainSentence(buildPrewarmExplainSentencePayload(row));
       if (!isRemoteAIResult(result)) {
         this.store.markSentencePrewarmFailed(row, invalidResultError(result));
         return;
       }
-      this.store.markSentencePrewarmReady(row, result);
+      this.store.markSentencePrewarmReady(row, {
+        ...result,
+        current_result_source: result?.current_result_source || result?.currentResultSource || "remoteAI"
+      });
     } catch (error) {
       this.store.markSentencePrewarmFailed(row, error);
     }

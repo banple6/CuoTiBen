@@ -9,15 +9,29 @@ export const AI_PREWARM_MAX_SENTENCES_PER_DOCUMENT = Number(
 export function getServerConfig() {
   return {
     port: Number(process.env.PORT) || 3000,
-    modelName: process.env.MODEL_NAME || DEFAULT_MODEL_NAME
+    modelName: getEffectiveExplainModelName()
+  };
+}
+
+export function getEffectiveExplainModelName() {
+  return process.env.MODEL_NAME || process.env.AI_MODEL || DEFAULT_MODEL_NAME;
+}
+
+export function getAIProviderConfig() {
+  return {
+    provider: process.env.AI_PROVIDER || "",
+    apiKind: process.env.AI_API_KIND || "openai-chat-completions",
+    apiKey: process.env["NOVAI" + "_API_KEY"] || process.env.DASHSCOPE_API_KEY || "",
+    baseURL: process.env.AI_BASE_URL || process.env.DASHSCOPE_BASE_URL || "",
+    modelName: getEffectiveExplainModelName()
   };
 }
 
 export function getDashScopeConfig() {
   return {
-    apiKey: process.env.DASHSCOPE_API_KEY || "",
-    baseURL: process.env.DASHSCOPE_BASE_URL || "",
-    modelName: process.env.MODEL_NAME || DEFAULT_MODEL_NAME
+    apiKey: process.env.DASHSCOPE_API_KEY || process.env["NOVAI" + "_API_KEY"] || "",
+    baseURL: process.env.DASHSCOPE_BASE_URL || process.env.AI_BASE_URL || "",
+    modelName: getEffectiveExplainModelName()
   };
 }
 

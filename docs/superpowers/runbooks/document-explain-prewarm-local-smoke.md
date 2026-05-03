@@ -22,7 +22,7 @@ AI_CIRCUIT_BREAKER_ENABLED=true \
 npm start
 ```
 
-`MODEL_NAME` 当前仍是后端 `getServerConfig()` / explain-sentence cache key 路径读取的模型名；`AI_MODEL` 保留给 AI Gateway 风格配置。为了让 HTTP cache-hit smoke 的 seed cache 和 `/ai/explain-sentence` lookup 使用同一个 `model_name`，本地 smoke 需要同时设置两者。后续如统一到 `AI_MODEL`，应单独做配置 cleanup，不在本 runbook 中假设已经统一。
+`MODEL_NAME` 仍是 explain-sentence cache key 的优先模型名，`AI_MODEL` 是兼容 AI Gateway 风格配置的后备模型名。为了让 HTTP cache-hit smoke 的 seed cache 和 `/ai/explain-sentence` lookup 使用同一个 `model_name`，本地 smoke 建议同时设置两者。`AI_API_KIND=anthropic-messages` 时，后端会按 Anthropic Messages 形态调用模型上游；本地 smoke 仍故意把上游指向不可用端口，避免真实模型调用。
 
 期望：
 

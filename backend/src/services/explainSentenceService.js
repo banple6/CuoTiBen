@@ -1,4 +1,4 @@
-import { getDashScopeConfig } from "../config/env.js";
+import { getAIProviderConfig } from "../config/env.js";
 import { AppError } from "../lib/appError.js";
 import { getDashScopeClient } from "../lib/dashscope.js";
 import { aiResponseCache } from "./AIResponseCache.js";
@@ -1627,6 +1627,132 @@ function parseModelJson(content) {
   });
 }
 
+function normalizeCompletionText(value) {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (typeof item?.text === "string") return item.text;
+        if (typeof item?.content === "string") return item.content;
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+  if (typeof value?.text === "string") {
+    return value.text.trim();
+  }
+  if (typeof value?.content === "string") {
+    return value.content.trim();
+  }
+  return "";
+}
+
+function extractModelCompletionText(completion) {
+  const candidates = [
+    completion?.choices?.[0]?.message?.content,
+    completion?.content,
+    completion?.output_text,
+    completion?.text
+  ];
+
+  for (const candidate of candidates) {
+    const text = normalizeCompletionText(candidate);
+    if (text) return text;
+  }
+
+  return "";
+}
+
+function anthropicMessagesURL(baseURL) {
+  const trimmed = String(baseURL || "").replace(/\/+$/, "");
+  if (trimmed.endsWith("/messages")) {
+    return trimmed;
+  }
+  if (trimmed.endsWith("/v1")) {
+    return `${trimmed}/messages`;
+  }
+  return `${trimmed}/v1/messages`;
+}
+
+async function requestAnthropicMessagesCompletion({
+  apiKey,
+  baseURL,
+  modelName,
+  prompt,
+  requestID
+}) {
+  const endpoint = anthropicMessagesURL(baseURL);
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01"
+    },
+    body: JSON.stringify({
+      model: modelName,
+      max_tokens: 4096,
+      temperature: 0.2,
+      system: "你是严格输出 JSON 的英语句子讲解助手。无论任何情况都只返回 JSON 对象。",
+      messages: [
+        {
+          role: "user",
+          content: prompt
+        }
+      ]
+    })
+  });
+  const rawBody = await response.text();
+  const contentType = response.headers.get("content-type") || "";
+  let body = null;
+  try {
+    body = rawBody ? JSON.parse(rawBody) : null;
+  } catch {
+    body = null;
+  }
+  const extractedTextLength = extractModelCompletionText(body).length;
+
+  if (!response.ok) {
+    console.warn("[ai/explain-sentence] upstream request failed", {
+      provider: "claude",
+      modelName,
+      apiKind: "anthropic-messages",
+      upstreamStatus: response.status,
+      responseContentType: contentType,
+      rawBodyLength: rawBody.length,
+      extractedTextLength,
+      requestID
+    });
+    throw new AppError("AI 上游请求失败。", {
+      statusCode: response.status,
+      code: response.status === 429 ? "GEMINI_RATE_LIMIT" : "GEMINI_UPSTREAM_503",
+      retryable: response.status >= 500 || response.status === 429,
+      fallbackAvailable: true,
+      requestID
+    });
+  }
+
+  if (!extractedTextLength) {
+    console.warn("[ai/explain-sentence] upstream returned empty text", {
+      provider: "claude",
+      modelName,
+      apiKind: "anthropic-messages",
+      upstreamStatus: response.status,
+      responseContentType: contentType,
+      rawBodyLength: rawBody.length,
+      extractedTextLength,
+      requestID
+    });
+  }
+
+  return body;
+}
+
 function normalizePersistentIdentityPart(value) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -1745,7 +1871,8 @@ export async function explainSentence({
   anchor_label = "",
   segment_id = ""
 }) {
-  const { modelName } = getDashScopeConfig();
+  const providerConfig = getAIProviderConfig();
+  const { modelName } = providerConfig;
   const persistentIdentity = makePersistentExplainCacheIdentity({
     document_id,
     sentence_id,
@@ -1782,10 +1909,28 @@ export async function explainSentence({
     };
   }
 
-  const client = explainSentenceModelInvokerForTests ? null : getDashScopeClient();
+  const usesAnthropicMessages = providerConfig.apiKind === "anthropic-messages";
+  const client = explainSentenceModelInvokerForTests || usesAnthropicMessages ? null : getDashScopeClient();
 
-  if (!explainSentenceModelInvokerForTests && !client) {
-    const error = new AppError("DASHSCOPE_API_KEY 或 DASHSCOPE_BASE_URL 未配置。", {
+  if (!explainSentenceModelInvokerForTests && usesAnthropicMessages && (!providerConfig.apiKey || !providerConfig.baseURL)) {
+    const error = new AppError("AI 模型服务未配置。", {
+      statusCode: 500,
+      code: "MODEL_CONFIG_MISSING",
+      requestID,
+      fallbackAvailable: true
+    });
+    storePersistentExplainFailedIfEligible({
+      store: persistentStore,
+      identity: persistentIdentity,
+      cacheKey: persistentCacheKey,
+      requestID,
+      error
+    });
+    throw error;
+  }
+
+  if (!explainSentenceModelInvokerForTests && !usesAnthropicMessages && !client) {
+    const error = new AppError("AI 模型服务未配置。", {
       statusCode: 500,
       code: "MODEL_CONFIG_MISSING",
       requestID,
@@ -1828,6 +1973,16 @@ export async function explainSentence({
       });
     }
 
+    if (usesAnthropicMessages) {
+      return requestAnthropicMessagesCompletion({
+        apiKey: providerConfig.apiKey,
+        baseURL: providerConfig.baseURL,
+        modelName,
+        prompt,
+        requestID
+      });
+    }
+
     return client.chat.completions.create({
       model: modelName,
       temperature: 0.2,
@@ -1862,43 +2017,43 @@ export async function explainSentence({
       }))
     });
 
-    const content = completion.choices?.[0]?.message?.content;
-  let normalized = normalizeExplainResult(parseModelJson(content), sentence, paragraph_role);
-  let qualityWarnings = validateExplainResultQuality(normalized, sentence);
-  let consistency = validateExplainResultConsistency(normalized, sentence);
-  qualityWarnings = [...qualityWarnings, ...consistency.warnings];
+    const content = extractModelCompletionText(completion);
+    let normalized = normalizeExplainResult(parseModelJson(content), sentence, paragraph_role);
+    let qualityWarnings = validateExplainResultQuality(normalized, sentence);
+    let consistency = validateExplainResultConsistency(normalized, sentence);
+    qualityWarnings = [...qualityWarnings, ...consistency.warnings];
 
-  if (qualityWarnings.length >= 2) {
-    console.warn("[ai/explain-sentence] quality warnings after first pass", qualityWarnings);
+    if (qualityWarnings.length >= 2) {
+      console.warn("[ai/explain-sentence] quality warnings after first pass", qualityWarnings);
 
-    try {
-      const repairedCompletion = await requestModel(buildExplainSentenceRepairPrompt({
-        title,
-        sentence,
-        context,
-        paragraph_theme,
-        paragraph_role,
-        question_prompt,
-        previousResult: normalized,
-        warnings: qualityWarnings
-      }));
-      const repairedContent = repairedCompletion.choices?.[0]?.message?.content;
-      const repairedNormalized = normalizeExplainResult(parseModelJson(repairedContent), sentence, paragraph_role);
-      const repairedConsistency = validateExplainResultConsistency(repairedNormalized, sentence);
-      const repairedWarnings = [
-        ...validateExplainResultQuality(repairedNormalized, sentence),
-        ...repairedConsistency.warnings
-      ];
+      try {
+        const repairedCompletion = await requestModel(buildExplainSentenceRepairPrompt({
+          title,
+          sentence,
+          context,
+          paragraph_theme,
+          paragraph_role,
+          question_prompt,
+          previousResult: normalized,
+          warnings: qualityWarnings
+        }));
+        const repairedContent = extractModelCompletionText(repairedCompletion);
+        const repairedNormalized = normalizeExplainResult(parseModelJson(repairedContent), sentence, paragraph_role);
+        const repairedConsistency = validateExplainResultConsistency(repairedNormalized, sentence);
+        const repairedWarnings = [
+          ...validateExplainResultQuality(repairedNormalized, sentence),
+          ...repairedConsistency.warnings
+        ];
 
-      if (repairedWarnings.length <= qualityWarnings.length) {
-        normalized = repairedNormalized;
-        qualityWarnings = repairedWarnings;
-        consistency = repairedConsistency;
+        if (repairedWarnings.length <= qualityWarnings.length) {
+          normalized = repairedNormalized;
+          qualityWarnings = repairedWarnings;
+          consistency = repairedConsistency;
+        }
+      } catch (error) {
+        console.warn("[ai/explain-sentence] repair pass failed", error?.message || error);
       }
-    } catch (error) {
-      console.warn("[ai/explain-sentence] repair pass failed", error?.message || error);
     }
-  }
 
   if (consistency.critical) {
     console.warn("[ai/explain-sentence] consistency validation failed", consistency.warnings);
@@ -1969,5 +2124,6 @@ export const __testables = {
   localizeGrammarFocusItem,
   setExplainSentenceModelInvokerForTests,
   resetExplainSentenceModelInvokerForTests,
-  storePersistentExplainReadyIfEligible
+  storePersistentExplainReadyIfEligible,
+  extractModelCompletionText
 };
