@@ -138,6 +138,7 @@
 		B00000000000000000000094 /* RuntimeBuildFingerprint.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000094 /* RuntimeBuildFingerprint.swift */; };
 		B00000000000000000000095 /* CloudRequestProbeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000095 /* CloudRequestProbeService.swift */; };
 		B00000000000000000000096 /* CloudRequestDiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000096 /* CloudRequestDiagnosticsView.swift */; };
+		B00000000000000000000097 /* DocumentExplainPrewarmService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000097 /* DocumentExplainPrewarmService.swift */; };
 		B0000000000000000000007F /* AIStructuredError.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000007F /* AIStructuredError.swift */; };
 		B00000000000000000000080 /* LocalSentenceFallbackBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000080 /* LocalSentenceFallbackBuilder.swift */; };
 		B00000000000000000000081 /* LocalPassageFallbackBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000081 /* LocalPassageFallbackBuilder.swift */; };
@@ -292,6 +293,7 @@
 		C00000000000000000000094 /* RuntimeBuildFingerprint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeBuildFingerprint.swift; sourceTree = "<group>"; };
 		C00000000000000000000095 /* CloudRequestProbeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudRequestProbeService.swift; sourceTree = "<group>"; };
 		C00000000000000000000096 /* CloudRequestDiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudRequestDiagnosticsView.swift; sourceTree = "<group>"; };
+		C00000000000000000000097 /* DocumentExplainPrewarmService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentExplainPrewarmService.swift; sourceTree = "<group>"; };
 		C0000000000000000000007F /* AIStructuredError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIStructuredError.swift; sourceTree = "<group>"; };
 		C00000000000000000000080 /* LocalSentenceFallbackBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalSentenceFallbackBuilder.swift; sourceTree = "<group>"; };
 		C00000000000000000000081 /* LocalPassageFallbackBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalPassageFallbackBuilder.swift; sourceTree = "<group>"; };
@@ -416,6 +418,7 @@
 				C00000000000000000000077 /* AIRequestPolicy.swift */,
 				C00000000000000000000094 /* RuntimeBuildFingerprint.swift */,
 				C00000000000000000000095 /* CloudRequestProbeService.swift */,
+				C00000000000000000000097 /* DocumentExplainPrewarmService.swift */,
 				C00000000000000000000019 /* AIExplainSentenceService.swift */,
 				C0000000000000000000007D /* AIRequestIdentity.swift */,
 				C00000000000000000000078 /* AIRequestSingleFlight.swift */,
@@ -820,6 +823,7 @@
 				B00000000000000000000093 /* PassageAnalysisIdentityGuard.swift in Sources */,
 				B00000000000000000000094 /* RuntimeBuildFingerprint.swift in Sources */,
 				B00000000000000000000095 /* CloudRequestProbeService.swift in Sources */,
+				B00000000000000000000097 /* DocumentExplainPrewarmService.swift in Sources */,
 				B0000000000000000000007F /* AIStructuredError.swift in Sources */,
 				B0000000000000000000001B /* AISourceParsingService.swift in Sources */,
 				B00000000000000000000017 /* ReviewListView.swift in Sources */,

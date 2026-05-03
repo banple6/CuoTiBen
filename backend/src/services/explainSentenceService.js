@@ -1,8 +1,15 @@
-import { getDashScopeConfig } from "../config/env.js";
+import { getAIProviderConfig } from "../config/env.js";
 import { AppError } from "../lib/appError.js";
 import { getDashScopeClient } from "../lib/dashscope.js";
 import { aiResponseCache } from "./AIResponseCache.js";
+import {
+  SENTENCE_EXPLAIN_PROMPT_VERSION,
+  buildSentenceExplainCacheKey,
+  getAIPersistentCacheStore
+} from "./AIPersistentCacheStore.js";
 import { requestGeminiCompletion } from "./GeminiRetryClient.js";
+
+let explainSentenceModelInvokerForTests = null;
 
 export function buildExplainSentencePrompt({ title, sentence, context, paragraph_theme, paragraph_role, question_prompt }) {
   const safeTitle = title?.trim() || "未提供";
@@ -1620,6 +1627,235 @@ function parseModelJson(content) {
   });
 }
 
+function normalizeCompletionText(value) {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (typeof item?.text === "string") return item.text;
+        if (typeof item?.content === "string") return item.content;
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+  if (typeof value?.text === "string") {
+    return value.text.trim();
+  }
+  if (typeof value?.content === "string") {
+    return value.content.trim();
+  }
+  return "";
+}
+
+function extractModelCompletionText(completion) {
+  const candidates = [
+    completion?.choices?.[0]?.message?.content,
+    completion?.content,
+    completion?.output_text,
+    completion?.text
+  ];
+
+  for (const candidate of candidates) {
+    const text = normalizeCompletionText(candidate);
+    if (text) return text;
+  }
+
+  return "";
+}
+
+function anthropicMessagesURL(baseURL) {
+  const trimmed = String(baseURL || "").replace(/\/+$/, "");
+  if (trimmed.endsWith("/messages")) {
+    return trimmed;
+  }
+  if (trimmed.endsWith("/v1")) {
+    return `${trimmed}/messages`;
+  }
+  return `${trimmed}/v1/messages`;
+}
+
+async function requestAnthropicMessagesCompletion({
+  apiKey,
+  baseURL,
+  modelName,
+  prompt,
+  requestID
+}) {
+  const endpoint = anthropicMessagesURL(baseURL);
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01"
+    },
+    body: JSON.stringify({
+      model: modelName,
+      max_tokens: 4096,
+      temperature: 0.2,
+      system: "你是严格输出 JSON 的英语句子讲解助手。无论任何情况都只返回 JSON 对象。",
+      messages: [
+        {
+          role: "user",
+          content: prompt
+        }
+      ]
+    })
+  });
+  const rawBody = await response.text();
+  const contentType = response.headers.get("content-type") || "";
+  let body = null;
+  try {
+    body = rawBody ? JSON.parse(rawBody) : null;
+  } catch {
+    body = null;
+  }
+  const extractedTextLength = extractModelCompletionText(body).length;
+
+  if (!response.ok) {
+    console.warn("[ai/explain-sentence] upstream request failed", {
+      provider: "claude",
+      modelName,
+      apiKind: "anthropic-messages",
+      upstreamStatus: response.status,
+      responseContentType: contentType,
+      rawBodyLength: rawBody.length,
+      extractedTextLength,
+      requestID
+    });
+    throw new AppError("AI 上游请求失败。", {
+      statusCode: response.status,
+      code: response.status === 429 ? "GEMINI_RATE_LIMIT" : "GEMINI_UPSTREAM_503",
+      retryable: response.status >= 500 || response.status === 429,
+      fallbackAvailable: true,
+      requestID
+    });
+  }
+
+  if (!extractedTextLength) {
+    console.warn("[ai/explain-sentence] upstream returned empty text", {
+      provider: "claude",
+      modelName,
+      apiKind: "anthropic-messages",
+      upstreamStatus: response.status,
+      responseContentType: contentType,
+      rawBodyLength: rawBody.length,
+      extractedTextLength,
+      requestID
+    });
+  }
+
+  return body;
+}
+
+function normalizePersistentIdentityPart(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+export function makePersistentExplainCacheIdentity({
+  document_id,
+  sentence_id,
+  sentence_text_hash,
+  modelName
+}) {
+  const documentID = normalizePersistentIdentityPart(document_id);
+  const sentenceID = normalizePersistentIdentityPart(sentence_id);
+  const sentenceTextHash = normalizePersistentIdentityPart(sentence_text_hash);
+  const model_name = normalizePersistentIdentityPart(modelName);
+
+  if (!documentID || !sentenceID || !sentenceTextHash || !model_name) {
+    return null;
+  }
+
+  return {
+    document_id: documentID,
+    sentence_id: sentenceID,
+    sentence_text_hash: sentenceTextHash,
+    prompt_version: SENTENCE_EXPLAIN_PROMPT_VERSION,
+    model_name
+  };
+}
+
+function stripPersistentCacheInternalFields(result) {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return result;
+  }
+
+  const {
+    current_result_source: _currentResultSourceSnake,
+    currentResultSource: _currentResultSourceCamel,
+    ...publicResult
+  } = result;
+  return publicResult;
+}
+
+function buildPersistentCacheHitResult(cached, requestID) {
+  return {
+    ...stripPersistentCacheInternalFields(cached.result),
+    request_id: requestID,
+    used_cache: true,
+    used_fallback: false,
+    retry_count: 0
+  };
+}
+
+function persistentErrorCodeFrom(error) {
+  return error?.code || error?.error_code || "EXPLAIN_SENTENCE_FAILED";
+}
+
+function storePersistentExplainFailedIfEligible({
+  store,
+  identity,
+  cacheKey,
+  requestID,
+  error
+}) {
+  if (!store || !identity || !cacheKey) return false;
+
+  store.storeFailed({
+    ...identity,
+    cache_key: cacheKey,
+    request_id: requestID,
+    error_code: persistentErrorCodeFrom(error)
+  });
+  return true;
+}
+
+function storePersistentExplainReadyIfEligible({
+  store,
+  identity,
+  cacheKey,
+  requestID,
+  result
+}) {
+  if (!store || !identity || !cacheKey || result?.used_fallback === true) {
+    return false;
+  }
+
+  return store.storeReady({
+    ...identity,
+    cache_key: cacheKey,
+    request_id: requestID,
+    result: {
+      ...result,
+      current_result_source: "remoteAI"
+    }
+  });
+}
+
+function setExplainSentenceModelInvokerForTests(invoker) {
+  explainSentenceModelInvokerForTests = typeof invoker === "function" ? invoker : null;
+}
+
+function resetExplainSentenceModelInvokerForTests() {
+  explainSentenceModelInvokerForTests = null;
+}
+
 export async function explainSentence({
   requestID,
   title = "",
@@ -1635,26 +1871,34 @@ export async function explainSentence({
   anchor_label = "",
   segment_id = ""
 }) {
-  const client = getDashScopeClient();
-  const { modelName } = getDashScopeConfig();
+  const providerConfig = getAIProviderConfig();
+  const { modelName } = providerConfig;
+  const persistentIdentity = makePersistentExplainCacheIdentity({
+    document_id,
+    sentence_id,
+    sentence_text_hash,
+    modelName
+  });
+  const persistentStore = persistentIdentity ? getAIPersistentCacheStore() : null;
+  const persistentCacheKey = persistentIdentity
+    ? buildSentenceExplainCacheKey(persistentIdentity)
+    : "";
 
-  if (!client) {
-    throw new AppError("DASHSCOPE_API_KEY 或 DASHSCOPE_BASE_URL 未配置。", {
-      statusCode: 500,
-      code: "MODEL_CONFIG_MISSING",
-      requestID,
-      fallbackAvailable: true
-    });
+  if (persistentStore && persistentCacheKey) {
+    const persistentCached = persistentStore.getReady(persistentCacheKey);
+    if (persistentCached) {
+      return buildPersistentCacheHitResult(persistentCached, requestID);
+    }
   }
 
-  const cacheKey = aiResponseCache.makeKey([
+  const memoryCacheKey = aiResponseCache.makeKey([
     "explain-sentence.v2",
     sentence_id,
     sentence_text_hash,
     anchor_label,
     segment_id
   ]);
-  const cached = aiResponseCache.get(cacheKey);
+  const cached = aiResponseCache.get(memoryCacheKey);
   if (cached) {
     return {
       ...cached,
@@ -1665,6 +1909,43 @@ export async function explainSentence({
     };
   }
 
+  const usesAnthropicMessages = providerConfig.apiKind === "anthropic-messages";
+  const client = explainSentenceModelInvokerForTests || usesAnthropicMessages ? null : getDashScopeClient();
+
+  if (!explainSentenceModelInvokerForTests && usesAnthropicMessages && (!providerConfig.apiKey || !providerConfig.baseURL)) {
+    const error = new AppError("AI 模型服务未配置。", {
+      statusCode: 500,
+      code: "MODEL_CONFIG_MISSING",
+      requestID,
+      fallbackAvailable: true
+    });
+    storePersistentExplainFailedIfEligible({
+      store: persistentStore,
+      identity: persistentIdentity,
+      cacheKey: persistentCacheKey,
+      requestID,
+      error
+    });
+    throw error;
+  }
+
+  if (!explainSentenceModelInvokerForTests && !usesAnthropicMessages && !client) {
+    const error = new AppError("AI 模型服务未配置。", {
+      statusCode: 500,
+      code: "MODEL_CONFIG_MISSING",
+      requestID,
+      fallbackAvailable: true
+    });
+    storePersistentExplainFailedIfEligible({
+      store: persistentStore,
+      identity: persistentIdentity,
+      cacheKey: persistentCacheKey,
+      requestID,
+      error
+    });
+    throw error;
+  }
+
   console.log("[ai/explain-sentence] calling model", {
     modelName,
     sentenceLength: sentence.length,
@@ -1673,6 +1954,35 @@ export async function explainSentence({
   });
 
   const requestModel = async (prompt) => {
+    if (explainSentenceModelInvokerForTests) {
+      return explainSentenceModelInvokerForTests({
+        prompt,
+        modelName,
+        requestID,
+        title,
+        sentence,
+        context,
+        paragraph_theme,
+        paragraph_role,
+        question_prompt,
+        document_id,
+        sentence_id,
+        sentence_text_hash,
+        anchor_label,
+        segment_id
+      });
+    }
+
+    if (usesAnthropicMessages) {
+      return requestAnthropicMessagesCompletion({
+        apiKey: providerConfig.apiKey,
+        baseURL: providerConfig.baseURL,
+        modelName,
+        prompt,
+        requestID
+      });
+    }
+
     return client.chat.completions.create({
       model: modelName,
       temperature: 0.2,
@@ -1707,43 +2017,43 @@ export async function explainSentence({
       }))
     });
 
-    const content = completion.choices?.[0]?.message?.content;
-  let normalized = normalizeExplainResult(parseModelJson(content), sentence, paragraph_role);
-  let qualityWarnings = validateExplainResultQuality(normalized, sentence);
-  let consistency = validateExplainResultConsistency(normalized, sentence);
-  qualityWarnings = [...qualityWarnings, ...consistency.warnings];
+    const content = extractModelCompletionText(completion);
+    let normalized = normalizeExplainResult(parseModelJson(content), sentence, paragraph_role);
+    let qualityWarnings = validateExplainResultQuality(normalized, sentence);
+    let consistency = validateExplainResultConsistency(normalized, sentence);
+    qualityWarnings = [...qualityWarnings, ...consistency.warnings];
 
-  if (qualityWarnings.length >= 2) {
-    console.warn("[ai/explain-sentence] quality warnings after first pass", qualityWarnings);
+    if (qualityWarnings.length >= 2) {
+      console.warn("[ai/explain-sentence] quality warnings after first pass", qualityWarnings);
 
-    try {
-      const repairedCompletion = await requestModel(buildExplainSentenceRepairPrompt({
-        title,
-        sentence,
-        context,
-        paragraph_theme,
-        paragraph_role,
-        question_prompt,
-        previousResult: normalized,
-        warnings: qualityWarnings
-      }));
-      const repairedContent = repairedCompletion.choices?.[0]?.message?.content;
-      const repairedNormalized = normalizeExplainResult(parseModelJson(repairedContent), sentence, paragraph_role);
-      const repairedConsistency = validateExplainResultConsistency(repairedNormalized, sentence);
-      const repairedWarnings = [
-        ...validateExplainResultQuality(repairedNormalized, sentence),
-        ...repairedConsistency.warnings
-      ];
+      try {
+        const repairedCompletion = await requestModel(buildExplainSentenceRepairPrompt({
+          title,
+          sentence,
+          context,
+          paragraph_theme,
+          paragraph_role,
+          question_prompt,
+          previousResult: normalized,
+          warnings: qualityWarnings
+        }));
+        const repairedContent = extractModelCompletionText(repairedCompletion);
+        const repairedNormalized = normalizeExplainResult(parseModelJson(repairedContent), sentence, paragraph_role);
+        const repairedConsistency = validateExplainResultConsistency(repairedNormalized, sentence);
+        const repairedWarnings = [
+          ...validateExplainResultQuality(repairedNormalized, sentence),
+          ...repairedConsistency.warnings
+        ];
 
-      if (repairedWarnings.length <= qualityWarnings.length) {
-        normalized = repairedNormalized;
-        qualityWarnings = repairedWarnings;
-        consistency = repairedConsistency;
+        if (repairedWarnings.length <= qualityWarnings.length) {
+          normalized = repairedNormalized;
+          qualityWarnings = repairedWarnings;
+          consistency = repairedConsistency;
+        }
+      } catch (error) {
+        console.warn("[ai/explain-sentence] repair pass failed", error?.message || error);
       }
-    } catch (error) {
-      console.warn("[ai/explain-sentence] repair pass failed", error?.message || error);
     }
-  }
 
   if (consistency.critical) {
     console.warn("[ai/explain-sentence] consistency validation failed", consistency.warnings);
@@ -1776,7 +2086,14 @@ export async function explainSentence({
       used_fallback: false,
       retry_count: retryCount
     };
-    aiResponseCache.set(cacheKey, response);
+    aiResponseCache.set(memoryCacheKey, response);
+    storePersistentExplainReadyIfEligible({
+      store: persistentStore,
+      identity: persistentIdentity,
+      cacheKey: persistentCacheKey,
+      requestID,
+      result: response
+    });
     return response;
   } catch (error) {
     if (cached) {
@@ -1788,6 +2105,13 @@ export async function explainSentence({
         retry_count: 0
       };
     }
+    storePersistentExplainFailedIfEligible({
+      store: persistentStore,
+      identity: persistentIdentity,
+      cacheKey: persistentCacheKey,
+      requestID,
+      error
+    });
     throw error;
   }
 }
@@ -1797,5 +2121,9 @@ export const __testables = {
   normalizeCoreSkeleton,
   normalizeGrammarFocus,
   renderCoreSkeleton,
-  localizeGrammarFocusItem
+  localizeGrammarFocusItem,
+  setExplainSentenceModelInvokerForTests,
+  resetExplainSentenceModelInvokerForTests,
+  storePersistentExplainReadyIfEligible,
+  extractModelCompletionText
 };

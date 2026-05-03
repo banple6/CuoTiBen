@@ -190,6 +190,21 @@ struct ParseSessionInfo: Equatable {
     }
 }
 
+struct DocumentExplainPrewarmDiagnostics: Equatable {
+    var prewarmJobID: String?
+    var prewarmStatus: String?
+    var totalCount: Int = 0
+    var readyCount: Int = 0
+    var failedCount: Int = 0
+    var processingCount: Int = 0
+    var queuedCount: Int = 0
+    var latestRecoveryAttempted: Bool = false
+    var payloadEligibleSentenceCount: Int = 0
+    var payloadFilteredSentenceCount: Int = 0
+    var lastPrewarmRequestID: String?
+    var lastPrewarmErrorCode: String?
+}
+
 struct MaterialImportSummary {
     let documents: [SourceDocument]
     let processedPages: Int
@@ -252,6 +267,8 @@ final class AppViewModel: ObservableObject {
     @Published var structuredSourceErrors: [UUID: String]
     @Published var structuredSourceStages: [UUID: StructuredLoadingStage]
     @Published var parseSessionInfos: [UUID: ParseSessionInfo]
+    @Published private(set) var documentExplainPrewarmStatuses: [UUID: DocumentExplainPrewarmStatus]
+    @Published private(set) var documentExplainPrewarmDiagnostics: [UUID: DocumentExplainPrewarmDiagnostics]
     @Published private var sentenceExplainResults: [AIRequestIdentity.SemanticKey: AIExplainSentenceResult]
     @Published var dailyGoal: Int = 50
     @Published var completedToday: Int = 0
@@ -274,6 +291,9 @@ final class AppViewModel: ObservableObject {
     private var cachedKnowledgePointLookup: [String: KnowledgePoint]?
     private var cachedLearningRecordContextService: LearningRecordContextService?
     private var cachedSourceJumpCoordinator: SourceJumpCoordinator?
+    private let documentExplainPrewarmService = DocumentExplainPrewarmService()
+    private var documentExplainPrewarmTasks: [UUID: Task<Void, Never>] = [:]
+    private var documentExplainPrewarmJobIDs: [UUID: String] = [:]
 
     init(
         importService: ImportService? = nil,
@@ -312,6 +332,8 @@ final class AppViewModel: ObservableObject {
         self.structuredSourceErrors = [:]
         self.structuredSourceStages = [:]
         self.parseSessionInfos = [:]
+        self.documentExplainPrewarmStatuses = [:]
+        self.documentExplainPrewarmDiagnostics = [:]
         self.sentenceExplainResults = [:]
         self.dailyProgress = dailyProgress
         self.completedToday = dailyProgress.completedToday
@@ -319,6 +341,10 @@ final class AppViewModel: ObservableObject {
         self.streakDays = dailyProgress.streakDays
         self.dailyGoal = max(dailyProgress.pendingReviewsCount, 20)
         self.sourceReaderMode = Self.restoreSourceReaderMode()
+
+        Task { @MainActor [weak self] in
+            await self?.recoverRecentDocumentExplainPrewarmJobs()
+        }
     }
 
     private func makeDependencyContainer() -> DependencyContainer {
@@ -603,9 +629,47 @@ final class AppViewModel: ObservableObject {
         parseSessionInfos[document.id]
     }
 
+    func documentExplainPrewarmStatus(for document: SourceDocument) -> DocumentExplainPrewarmStatus? {
+        documentExplainPrewarmStatuses[document.id]
+    }
+
+    func documentExplainPrewarmStatusMessage(for document: SourceDocument) -> String? {
+        documentExplainPrewarmStatuses[document.id]?.progressText
+    }
+
+    func documentExplainPrewarmDiagnostics(for document: SourceDocument) -> DocumentExplainPrewarmDiagnostics? {
+        documentExplainPrewarmDiagnostics[document.id]
+    }
+
+    func recoverDocumentExplainPrewarmIfNeeded(for document: SourceDocument) async {
+        guard documentExplainPrewarmJobIDs[document.id] == nil else { return }
+        guard documentExplainPrewarmTasks[document.id] == nil else { return }
+
+        updateDocumentExplainPrewarmDiagnostics(for: document.id) { diagnostics in
+            diagnostics.latestRecoveryAttempted = true
+        }
+
+        documentExplainPrewarmTasks[document.id] = Task { [weak self] in
+            await self?.recoverAndPollDocumentExplainPrewarm(for: document)
+        }
+    }
+
+    func pollDocumentExplainPrewarmStatus(documentID: UUID, jobID: String) {
+        guard documentExplainPrewarmTasks[documentID] == nil else { return }
+        documentExplainPrewarmTasks[documentID] = Task { [weak self] in
+            await self?.pollDocumentExplainPrewarmLoop(documentID: documentID, jobID: jobID)
+            await MainActor.run {
+                self?.documentExplainPrewarmTasks[documentID] = nil
+            }
+        }
+    }
+
     func loadStructuredSource(for document: SourceDocument, force: Bool = false) async {
         guard document.processingStatus == .ready else { return }
-        guard force || structuredSources[document.id] == nil else { return }
+        if !force, let existingBundle = structuredSources[document.id] {
+            startDocumentExplainPrewarmIfNeeded(for: document, structuredSource: existingBundle)
+            return
+        }
         guard !structuredSourceLoadingIDs.contains(document.id) else { return }
 
         var recoveredDraft: SourceTextDraft?
@@ -749,6 +813,7 @@ final class AppViewModel: ObservableObject {
                 seedWorkbenchProgressIfNeeded(for: document, with: ppPayload.bundle)
                 structuredSourceErrors[document.id] = nil
                 structuredSourceStages[document.id] = baseStructuredStage(for: document, bundle: ppPayload.bundle)
+                startDocumentExplainPrewarmIfNeeded(for: document, structuredSource: ppPayload.bundle)
                 TextPipelineDiagnostics.log(
                     "AI",
                     "[AI][Policy] import skip professor enrich doc=\(document.id)",
@@ -809,6 +874,7 @@ final class AppViewModel: ObservableObject {
             mergeStructuredSourcePayload(legacyPayload, into: document)
             seedWorkbenchProgressIfNeeded(for: document, with: legacyPayload.bundle)
             structuredSourceStages[document.id] = baseStructuredStage(for: document, bundle: legacyPayload.bundle)
+            startDocumentExplainPrewarmIfNeeded(for: document, structuredSource: legacyPayload.bundle)
             TextPipelineDiagnostics.log(
                 "AI",
                 "[AI][Policy] import skip professor enrich doc=\(document.id)",
@@ -858,6 +924,284 @@ final class AppViewModel: ObservableObject {
             )
             TextPipelineDiagnostics.log("PP", "[PP] loadStructuredSource failed doc=\(document.id): \(errorMessage)", severity: .error)
         }
+    }
+
+    private struct DocumentExplainPrewarmPayloadBuildResult {
+        let sentences: [DocumentExplainPrewarmSentencePayload]
+        let eligibleCount: Int
+        let filteredCount: Int
+    }
+
+    private func recoverRecentDocumentExplainPrewarmJobs() async {
+        for document in sourceDocuments.prefix(8) {
+            await recoverDocumentExplainPrewarmIfNeeded(for: document)
+        }
+    }
+
+    private func startDocumentExplainPrewarmIfNeeded(
+        for document: SourceDocument,
+        structuredSource: StructuredSourceBundle
+    ) {
+        guard documentExplainPrewarmJobIDs[document.id] == nil else { return }
+        guard documentExplainPrewarmTasks[document.id] == nil else { return }
+        if let status = documentExplainPrewarmStatuses[document.id], status.status.isTerminal {
+            return
+        }
+
+        documentExplainPrewarmTasks[document.id] = Task { [weak self] in
+            await self?.runStartAndPollDocumentExplainPrewarm(
+                for: document,
+                structuredSource: structuredSource
+            )
+        }
+    }
+
+    private func runStartAndPollDocumentExplainPrewarm(
+        for document: SourceDocument,
+        structuredSource: StructuredSourceBundle
+    ) async {
+        defer {
+            documentExplainPrewarmTasks[document.id] = nil
+        }
+
+        let payloadResult = makePrewarmPayload(for: document, structuredSource: structuredSource)
+        updateDocumentExplainPrewarmDiagnostics(for: document.id) { diagnostics in
+            diagnostics.payloadEligibleSentenceCount = payloadResult.eligibleCount
+            diagnostics.payloadFilteredSentenceCount = payloadResult.filteredCount
+            diagnostics.lastPrewarmErrorCode = nil
+        }
+
+        TextPipelineDiagnostics.log(
+            "AI",
+            [
+                "[AI][Prewarm] start",
+                "doc=\(document.id)",
+                "payload_sentences=\(payloadResult.sentences.count)",
+                "skipped_non_passage=\(payloadResult.filteredCount)"
+            ].joined(separator: " "),
+            severity: .info
+        )
+
+        guard !payloadResult.sentences.isEmpty else {
+            TextPipelineDiagnostics.log(
+                "AI",
+                "[AI][Prewarm] skipped empty payload doc=\(document.id)",
+                severity: .info
+            )
+            return
+        }
+
+        do {
+            let status = try await documentExplainPrewarmService.start(
+                documentID: document.id,
+                title: document.title,
+                sentences: payloadResult.sentences,
+                clientRequestID: UUID().uuidString.lowercased()
+            )
+            applyDocumentExplainPrewarmStatus(status, for: document.id)
+            TextPipelineDiagnostics.log(
+                "AI",
+                "[AI][Prewarm] job_id=\(status.jobID) doc=\(document.id)",
+                severity: .info
+            )
+            if !status.status.isTerminal {
+                await pollDocumentExplainPrewarmLoop(documentID: document.id, jobID: status.jobID)
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            let code = prewarmErrorCode(from: error)
+            updateDocumentExplainPrewarmDiagnostics(for: document.id) { diagnostics in
+                diagnostics.lastPrewarmErrorCode = code
+            }
+            TextPipelineDiagnostics.log(
+                "AI",
+                "[AI][Prewarm] start failed doc=\(document.id) error_code=\(code)",
+                severity: .warning
+            )
+        }
+    }
+
+    private func recoverAndPollDocumentExplainPrewarm(for document: SourceDocument) async {
+        defer {
+            documentExplainPrewarmTasks[document.id] = nil
+        }
+
+        do {
+            let status = try await documentExplainPrewarmService.latest(documentID: document.id)
+            applyDocumentExplainPrewarmStatus(status, for: document.id)
+            if !status.status.isTerminal {
+                await pollDocumentExplainPrewarmLoop(documentID: document.id, jobID: status.jobID)
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            let code = prewarmErrorCode(from: error)
+            updateDocumentExplainPrewarmDiagnostics(for: document.id) { diagnostics in
+                diagnostics.lastPrewarmErrorCode = code == "PREWARM_JOB_NOT_FOUND" ? nil : code
+            }
+            if code == "PREWARM_JOB_NOT_FOUND" {
+                if let structuredSource = structuredSources[document.id] {
+                    await runStartAndPollDocumentExplainPrewarm(
+                        for: document,
+                        structuredSource: structuredSource
+                    )
+                }
+                return
+            }
+            TextPipelineDiagnostics.log(
+                "AI",
+                "[AI][Prewarm] latest recovery failed doc=\(document.id) error_code=\(code)",
+                severity: .warning
+            )
+        }
+    }
+
+    private func pollDocumentExplainPrewarmLoop(documentID: UUID, jobID: String) async {
+        for attempt in 0..<60 {
+            if Task.isCancelled { return }
+            if attempt > 0 {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+            }
+
+            do {
+                let status = try await documentExplainPrewarmService.status(jobID: jobID)
+                applyDocumentExplainPrewarmStatus(status, for: documentID)
+                if status.status.isTerminal { return }
+            } catch is CancellationError {
+                return
+            } catch {
+                let code = prewarmErrorCode(from: error)
+                updateDocumentExplainPrewarmDiagnostics(for: documentID) { diagnostics in
+                    diagnostics.lastPrewarmErrorCode = code
+                }
+                TextPipelineDiagnostics.log(
+                    "AI",
+                    "[AI][Prewarm] status failed doc=\(documentID) job_id=\(jobID) error_code=\(code)",
+                    severity: .warning
+                )
+                return
+            }
+        }
+    }
+
+    private func applyDocumentExplainPrewarmStatus(
+        _ status: DocumentExplainPrewarmStatus,
+        for documentID: UUID
+    ) {
+        documentExplainPrewarmStatuses[documentID] = status
+        documentExplainPrewarmJobIDs[documentID] = status.jobID
+        updateDocumentExplainPrewarmDiagnostics(for: documentID) { diagnostics in
+            diagnostics.prewarmJobID = status.jobID
+            diagnostics.prewarmStatus = status.status.rawValue
+            diagnostics.totalCount = status.totalCount
+            diagnostics.readyCount = status.readyCount
+            diagnostics.failedCount = status.failedCount
+            diagnostics.processingCount = status.processingCount
+            diagnostics.queuedCount = status.queuedCount
+            diagnostics.lastPrewarmRequestID = status.requestID
+            diagnostics.lastPrewarmErrorCode = nil
+        }
+        let diagnostics = documentExplainPrewarmDiagnostics[documentID]
+        TextPipelineDiagnostics.log(
+            "AI",
+            [
+                "[AI][Prewarm] status",
+                "doc=\(documentID)",
+                "prewarmJobID=\(status.jobID)",
+                "prewarmStatus=\(status.status.rawValue)",
+                "totalCount=\(status.totalCount)",
+                "readyCount=\(status.readyCount)",
+                "failedCount=\(status.failedCount)",
+                "processingCount=\(status.processingCount)",
+                "queuedCount=\(status.queuedCount)",
+                "latestRecoveryAttempted=\(diagnostics?.latestRecoveryAttempted == true ? "true" : "false")",
+                "payloadEligibleSentenceCount=\(diagnostics?.payloadEligibleSentenceCount ?? 0)",
+                "payloadFilteredSentenceCount=\(diagnostics?.payloadFilteredSentenceCount ?? 0)",
+                "lastPrewarmRequestID=\(status.requestID ?? "nil")",
+                "lastPrewarmErrorCode=\(diagnostics?.lastPrewarmErrorCode ?? "nil")"
+            ].joined(separator: " "),
+            severity: .info
+        )
+    }
+
+    private func updateDocumentExplainPrewarmDiagnostics(
+        for documentID: UUID,
+        mutate: (inout DocumentExplainPrewarmDiagnostics) -> Void
+    ) {
+        var diagnostics = documentExplainPrewarmDiagnostics[documentID] ?? DocumentExplainPrewarmDiagnostics()
+        mutate(&diagnostics)
+        documentExplainPrewarmDiagnostics[documentID] = diagnostics
+    }
+
+    private func makePrewarmPayload(
+        for document: SourceDocument,
+        structuredSource: StructuredSourceBundle
+    ) -> DocumentExplainPrewarmPayloadBuildResult {
+        let currentProgress = reviewWorkbenchProgress(for: document)
+        let currentPage = structuredSource.sentence(id: currentProgress.lastSentenceID)?.page
+        let keySentenceIDs = Set(structuredSource.professorSentenceCards.filter(\.isKeySentence).map(\.sentenceID))
+        let coreSentenceIDs = Set(structuredSource.paragraphTeachingCards.compactMap(\.coreSentenceID))
+        var payloads: [DocumentExplainPrewarmSentencePayload] = []
+        var filteredCount = 0
+
+        for sentence in structuredSource.sentences {
+            let sentenceText = sentence.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !sentenceText.isEmpty else {
+                filteredCount += 1
+                continue
+            }
+
+            let segment = structuredSource.segment(id: sentence.segmentID)
+            let sentenceKind = sentence.provenance.sourceKind
+            let segmentKind = segment?.provenance.sourceKind
+            guard sentenceKind == .passageBody || segmentKind == .passageBody else {
+                filteredCount += 1
+                continue
+            }
+
+            guard let identity = AIRequestIdentity.make(document: document, sentence: sentence) else {
+                filteredCount += 1
+                continue
+            }
+
+            let paragraphCard = structuredSource.paragraphCard(forSegmentID: sentence.segmentID)
+            let context = segment?.text.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? sentenceText
+            payloads.append(
+                DocumentExplainPrewarmSentencePayload(
+                    sentenceID: identity.sentenceID,
+                    sentenceTextHash: identity.sentenceTextHash,
+                    text: sentenceText,
+                    context: context,
+                    anchorLabel: identity.anchorLabel,
+                    segmentID: identity.segmentID,
+                    pageIndex: sentence.page,
+                    paragraphRole: "passageBody",
+                    paragraphTheme: paragraphCard?.displayedTheme ?? "",
+                    questionPrompt: "",
+                    isCurrentPage: currentPage != nil && sentence.page == currentPage,
+                    isKeySentence: keySentenceIDs.contains(sentence.id) || coreSentenceIDs.contains(sentence.id),
+                    isPassageSentence: true,
+                    kind: "passageSentence"
+                )
+            )
+        }
+
+        return DocumentExplainPrewarmPayloadBuildResult(
+            sentences: payloads,
+            eligibleCount: payloads.count,
+            filteredCount: filteredCount
+        )
+    }
+
+    private func prewarmErrorCode(from error: Error) -> String {
+        if let structured = error as? AIStructuredError {
+            return structured.errorCode
+        }
+        if error is CancellationError {
+            return "CANCELLED"
+        }
+        return "PREWARM_REQUEST_FAILED"
     }
 
     func ensureProfessorAnalysis(
@@ -1145,6 +1489,7 @@ final class AppViewModel: ObservableObject {
         seedWorkbenchProgressIfNeeded(for: document, with: enrichedPayload.bundle)
         structuredSourceErrors[document.id] = localFallback.message
         structuredSourceStages[document.id] = .localFallbackReady
+        startDocumentExplainPrewarmIfNeeded(for: document, structuredSource: enrichedPayload.bundle)
     }
 
     private func recoverNonTerminalStructuredLoadIfPossible(

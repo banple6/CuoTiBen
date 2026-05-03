@@ -756,11 +756,31 @@ private struct HomeRecentMaterialRow: View {
         viewModel.parseSessionInfo(for: liveDocument)
     }
 
-    private var materialMode: String {
-        viewModel.structuredSource(for: liveDocument)?
-            .passageAnalysisDiagnostics?
-            .materialMode
-            .rawValue ?? "pending"
+    private var materialModeLabel: String {
+        guard let bundle = viewModel.structuredSource(for: liveDocument) else {
+            return "等待识别"
+        }
+        if let mode = bundle.passageAnalysisDiagnostics?.materialMode {
+            switch mode {
+            case .passageReading:
+                return "英文正文"
+            case .learningMaterial:
+                return "学习讲义"
+            case .vocabularyNotes:
+                return "词汇注释"
+            case .questionSheet:
+                return "题目练习"
+            case .auxiliaryOnlyMap:
+                return "辅助资料"
+            case .insufficientText:
+                return "正文不足"
+            }
+        }
+        return bundle.sentences.isEmpty ? "等待识别" : "英文正文"
+    }
+
+    private var prewarmStatusText: String? {
+        viewModel.documentExplainPrewarmStatusMessage(for: liveDocument)
     }
 
     private var statusText: String {
@@ -792,7 +812,7 @@ private struct HomeRecentMaterialRow: View {
                         .foregroundStyle(AppPalette.paperInk)
                         .lineLimit(2)
 
-                    Text("\(liveDocument.documentType.displayName) · \(liveDocument.pageCount) 页 · \(statusText)")
+                    Text("\(materialModeLabel) · \(liveDocument.pageCount) 页 · \(liveDocument.chunkCount) 段")
                         .font(.system(size: 12, weight: .medium, design: .serif))
                         .foregroundStyle(AppPalette.paperMuted)
                 }
@@ -804,19 +824,20 @@ private struct HomeRecentMaterialRow: View {
                     .foregroundStyle(AppPalette.paperMuted)
             }
 
-            Text("materialMode=\(materialMode) · progress=\(progressText)")
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                .foregroundStyle(AppPalette.paperInk.opacity(0.58))
+            HStack(spacing: 8) {
+                FocusPill(icon: "doc.text", text: statusText)
+                FocusPill(icon: "checkmark.seal", text: "本地结构可用，可立即学习")
+            }
+
+            if let prewarmStatusText {
+                Text(prewarmStatusText)
+                    .font(.system(size: 12, weight: .semibold, design: .serif))
+                    .foregroundStyle(AppPalette.paperInk.opacity(0.72))
+            }
         }
         .padding(.vertical, 8)
-    }
-
-    private var progressText: String {
-        switch liveDocument.processingStatus {
-        case .ready: return "100%"
-        case .parsing: return "42%"
-        case .imported: return "20%"
-        case .failed: return parseInfo?.fallbackUsed == true ? "100%" : "12%"
+        .task(id: liveDocument.id) {
+            await viewModel.recoverDocumentExplainPrewarmIfNeeded(for: liveDocument)
         }
     }
 
