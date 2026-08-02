@@ -116,16 +116,21 @@ class ExplanationTests(unittest.TestCase):
         from app.main import app
         with tempfile.TemporaryDirectory() as tmp:
             store, problem, _ = self.make_verified(Path(tmp))
-            with patch.object(math_routes, "_get_store", return_value=store):
-                client = TestClient(app)
-                response = client.post(f"/api/v1/math-problems/{problem['id']}/explanation", headers={"X-User-Id": "u"}, json={"expected_revision": problem["revision"], "teaching_profile": {"language": "zh-CN", "level": "beginner", "detail": "detailed"}})
-                self.assertEqual(response.status_code, 200)
-                body = response.json(); self.assertEqual(body["status"], "validated"); self.assertEqual(body["explanation"]["final_answer_latex"], "x=2")
-                self.assertNotIn("raw_model_response_json", body["artifact"])
-                fetched = client.get(f"/api/v1/math-problems/{problem['id']}/explanation", headers={"X-User-Id": "u"})
-                self.assertEqual(fetched.status_code, 200); self.assertEqual(fetched.json()["current_explanation"]["status"], "validated")
-                self.assertNotIn("explanation_input_json", fetched.json()["current_explanation"])
-                self.assertEqual(client.get(f"/api/v1/math-problems/{problem['id']}/explanation", headers={"X-User-Id": "other"}).status_code, 404)
+            old_flag = config.MATH_ALLOW_DEV_USER_HEADER
+            try:
+                config.MATH_ALLOW_DEV_USER_HEADER = True
+                with patch.object(math_routes, "_get_store", return_value=store):
+                    client = TestClient(app)
+                    response = client.post(f"/api/v1/math-problems/{problem['id']}/explanation", headers={"X-User-Id": "u"}, json={"expected_revision": problem["revision"], "teaching_profile": {"language": "zh-CN", "level": "beginner", "detail": "detailed"}})
+                    self.assertEqual(response.status_code, 200)
+                    body = response.json(); self.assertEqual(body["status"], "validated"); self.assertEqual(body["explanation"]["final_answer_latex"], "x=2")
+                    self.assertNotIn("raw_model_response_json", body["artifact"])
+                    fetched = client.get(f"/api/v1/math-problems/{problem['id']}/explanation", headers={"X-User-Id": "u"})
+                    self.assertEqual(fetched.status_code, 200); self.assertEqual(fetched.json()["current_explanation"]["status"], "validated")
+                    self.assertNotIn("explanation_input_json", fetched.json()["current_explanation"])
+                    self.assertEqual(client.get(f"/api/v1/math-problems/{problem['id']}/explanation", headers={"X-User-Id": "other"}).status_code, 404)
+            finally:
+                config.MATH_ALLOW_DEV_USER_HEADER = old_flag
 
     def test_quadratic_no_real_candidate_uses_allowed_explanation_type(self):
         root = parse(tokenize(normalize("x^2+1=0").normalized, "f")); ir = build_problem_ir("p", 1, [root], ["f"])

@@ -29,6 +29,52 @@ class MigrationIntegrityError(RuntimeError):
     """Raised when a migration would leave an invalid foreign-key graph."""
 
 
+def _strip_leading_sql_comments(statement: str) -> str:
+    """Return *statement* without whitespace/comments at its SQL prefix.
+
+    This deliberately scans only the prefix.  SQL string literals later in the
+    statement are left untouched, so a value such as ``'-- not a comment'``
+    cannot change statement classification.
+    """
+
+    index = 0
+    length = len(statement)
+    while True:
+        while index < length and statement[index].isspace():
+            index += 1
+        if statement.startswith("--", index):
+            index += 2
+            while index < length and statement[index] not in "\r\n":
+                index += 1
+            if index >= length:
+                return ""
+            if statement[index] == "\r" and index + 1 < length and statement[index + 1] == "\n":
+                index += 2
+            else:
+                index += 1
+            continue
+        if statement.startswith("/*", index):
+            end = statement.find("*/", index + 2)
+            if end < 0:
+                raise sqlite3.OperationalError("unterminated SQL comment")
+            index = end + 2
+            continue
+        return statement[index:]
+
+
+def _pragma_kind(statement: str) -> str | None:
+    """Classify a foreign-key PRAGMA after removing leading SQL comments."""
+
+    normalized = _strip_leading_sql_comments(statement)
+    if not _FOREIGN_KEYS_RE.match(normalized):
+        return None
+    if re.search(r"=\s*OFF\b", normalized, re.IGNORECASE):
+        return "foreign_keys_off"
+    if re.search(r"=\s*ON\b", normalized, re.IGNORECASE):
+        return "foreign_keys_on"
+    return "foreign_keys"
+
+
 def _statements(script: str) -> Iterator[str]:
     """Yield complete SQL statements without executescript's implicit commit."""
 
@@ -42,15 +88,12 @@ def _statements(script: str) -> Iterator[str]:
             if statement:
                 yield statement
     trailing = "".join(buffer).strip()
-    if trailing and not trailing.startswith("--"):
+    if trailing and _strip_leading_sql_comments(trailing).strip():
         raise sqlite3.OperationalError("incomplete migration statement")
 
 
 def _foreign_keys_off(script: str) -> bool:
-    return any(
-        _FOREIGN_KEYS_RE.match(statement) and re.search(r"=\s*OFF\b", statement, re.IGNORECASE)
-        for statement in _statements(script)
-    )
+    return any(_pragma_kind(statement) == "foreign_keys_off" for statement in _statements(script))
 
 
 def _foreign_key_violations(db: sqlite3.Connection) -> set[tuple[object, ...]]:
@@ -85,7 +128,9 @@ def _apply_one(
             db.execute("PRAGMA foreign_keys=ON")
             return
         for statement in _statements(script):
-            if _FOREIGN_KEYS_RE.match(statement):
+            # PRAGMA foreign_keys is a connection setting and must never run
+            # inside this transaction.  It was applied before BEGIN above.
+            if _pragma_kind(statement) is not None:
                 continue
             db.execute(statement)
         # Check before COMMIT so a failed migration can be rolled back as one unit.

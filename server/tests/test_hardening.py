@@ -46,6 +46,8 @@ class OwnershipHardeningTests(unittest.TestCase):
             store, _, page_id, region_id, formula_id = HardeningFixture.create(Path(tmp))
             old_flag = config.MATH_ALLOW_DEV_USER_HEADER
             try:
+                # The development identity header is opt-in even in tests.
+                config.MATH_ALLOW_DEV_USER_HEADER = True
                 with patch.object(math_routes, "_get_store", return_value=store):
                     client = TestClient(app)
                     page_response = client.get(f"/api/v1/math-pages/{page_id}", headers={"X-User-Id": "owner"})

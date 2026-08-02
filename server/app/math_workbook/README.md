@@ -1,5 +1,9 @@
 # Math workbook storage
 
+## 身份边界
+
+临时开发身份默认关闭（fail-closed）。未设置 `APP_ENV` 时按 `production` 处理；只有 `APP_ENV=development` 或 `APP_ENV=test`，并且显式设置 `MATH_ALLOW_DEV_USER_HEADER=true` 时，数学接口才接受 `X-User-Id`。`production`、`staging` 等环境即使开关为 `true` 也不会启用。正式认证适配器尚未接入，因此未满足上述开发条件时接口返回 `MATH_AUTH_REQUIRED`。
+
 Run schema migration explicitly before enabling the math APIs:
 
 `python -m app.math_workbook.migrations.runner --database .data/math_workbook/math_workbook.sqlite3`
