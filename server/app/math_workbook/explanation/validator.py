@@ -173,6 +173,11 @@ def validate_explanation(data: dict, input_data: dict) -> dict:
     trace_steps = trace.get("steps")
     if not isinstance(trace_steps, list) or len(trace_steps) > MAX_STEPS:
         _fail("MODEL_RESPONSE_TRACE_MISMATCH")
+    if any(
+        not isinstance(step, dict) or step.get("rule_id") not in TRACE_RULE_IDS
+        for step in trace_steps
+    ):
+        _fail("MODEL_RESPONSE_TRACE_MISMATCH")
     _text(data["problem_restatement"])
     _check_prose_constraints(data["problem_restatement"], input_data)
     for item in (data["step_explanations"], data["knowledge_point_explanations"], data["verification_explanations"], data["common_mistakes"], data["limitations"]):
