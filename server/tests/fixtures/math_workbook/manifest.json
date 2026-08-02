@@ -1,0 +1,8 @@
+{
+  "sample_id": "synthetic_colored_ink_page",
+  "image_path": "generated-at-test-time",
+  "expected_regions": ["printed_problem_area", "handwritten_solution_area"],
+  "expected_formula_blocks": [],
+  "contains_colored_handwriting": true,
+  "notes": "Synthetic fixture validates segmentation only; it makes no OCR accuracy claim."
+}

@@ -1,0 +1,106 @@
+name: Math Workbook CI
+
+on:
+  pull_request:
+    paths:
+      - "server/**"
+      - "backend/**"
+      - "docs/security/**"
+      - "CuoTiBen/README_zh.md"
+      - ".github/workflows/math-workbook-ci.yml"
+  workflow_dispatch:
+  push:
+    branches: [main, agent/math-workbook-pr4-remote-code]
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python math workbook
+    runs-on: ubuntu-latest
+    env:
+      AI_STUDIO_API_URL: http://example.invalid
+      AI_STUDIO_ACCESS_TOKEN: ci-placeholder
+      APP_ENV: test
+      MATH_ALLOW_DEV_USER_HEADER: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: server/requirements.txt
+      - name: Install pinned server dependencies
+        run: python -m pip install -r server/requirements.txt
+      - name: Python tests
+        working-directory: server
+        run: python -m unittest discover -s tests
+      - name: Compile Python sources
+        run: find server/app server/tests -type f -name '*.py' ! -name '._*' ! -path '*/__pycache__/*' -print0 | xargs -0 python -m py_compile
+      - name: Migration smoke test
+        working-directory: server
+        run: |
+          db_path=$(mktemp)
+          python -m app.math_workbook.migrations.runner --database "$db_path"
+          python - <<'PY' "$db_path"
+          import sqlite3, sys
+          with sqlite3.connect(sys.argv[1]) as db:
+              assert db.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 11
+              assert db.execute("PRAGMA foreign_key_check").fetchall() == []
+      - name: Migration integrity tests
+        working-directory: server
+        run: |
+          python -m unittest \
+            tests.test_migration_runner \
+            tests.test_hardening.MigrationAtomicityTests \
+            tests.test_explanation_a5.DeletionAndMigrationA5Tests
+      - name: Diff whitespace check
+        run: git diff --check
+
+  node:
+    name: Node backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Install locked dependencies
+        working-directory: backend
+        run: npm ci
+      - name: Node tests
+        working-directory: backend
+        run: npm test
+
+  security:
+    name: Secret and dependency audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Secret scan (real findings block CI)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Python dependency audit (known vulnerabilities block CI)
+        run: |
+          python -m pip install pip-audit==2.7.3
+          pip-audit -r server/requirements.txt --strict
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Node dependency audit (high and critical severity block CI)
+        working-directory: backend
+        run: |
+          npm ci
+          npm audit --audit-level=high
