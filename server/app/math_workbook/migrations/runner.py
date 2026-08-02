@@ -4,7 +4,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-MIGRATIONS = [(1, "0001_initial.sql"), (2, "0002_phase2_foundation.sql"), (3, "0003_parse_artifacts.sql"), (4, "0004_sympy_build_artifacts.sql"), (5, "0005_candidate_solution_results.sql"), (6, "0006_solver_execution_metadata.sql"), (7, "0007_verification_reports_v2.sql"), (8, "0008_rebuild_verification_reports.sql"), (9, "0009_math_explanations.sql")]
+MIGRATIONS = [(1, "0001_initial.sql"), (2, "0002_phase2_foundation.sql"), (3, "0003_parse_artifacts.sql"), (4, "0004_sympy_build_artifacts.sql"), (5, "0005_candidate_solution_results.sql"), (6, "0006_solver_execution_metadata.sql"), (7, "0007_verification_reports_v2.sql"), (8, "0008_rebuild_verification_reports.sql"), (9, "0009_math_explanations.sql"), (10, "0010_math_explanation_retention.sql")]
 
 def upgrade(database_path: str, migrations_dir: Path | None = None) -> int:
     root = migrations_dir or Path(__file__).parent

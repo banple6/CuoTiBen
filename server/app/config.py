@@ -44,9 +44,9 @@ MATH_WORKBOOK_DB_PATH: str = os.environ.get(
     "MATH_WORKBOOK_DB_PATH",
     f"{MATH_WORKBOOK_STORAGE_ROOT}/math_workbook.sqlite3",
 )
-MATH_EXPLANATION_PROVIDER: str = os.environ.get("MATH_EXPLANATION_PROVIDER", "mock")
+MATH_EXPLANATION_PROVIDER: str = os.environ.get("MATH_EXPLANATION_PROVIDER", "mock").strip().lower()
 MATH_EXPLANATION_BASE_URL: str = os.environ.get("MATH_EXPLANATION_BASE_URL", "https://api.deepseek.com")
-MATH_EXPLANATION_API_KEY: str = os.environ.get("MATH_EXPLANATION_API_KEY", "")
+MATH_EXPLANATION_API_KEY: str = os.environ.get("MATH_EXPLANATION_API_KEY", os.environ.get("DEEPSEEK_API_KEY", ""))
 MATH_EXPLANATION_MODEL: str = os.environ.get("MATH_EXPLANATION_MODEL", "deepseek-chat")
 MATH_EXPLANATION_MODEL_VERSION: str = os.environ.get("MATH_EXPLANATION_MODEL_VERSION", "configured")
 MATH_EXPLANATION_TEMPERATURE: float = float(os.environ.get("MATH_EXPLANATION_TEMPERATURE", "0.1"))
@@ -57,3 +57,12 @@ MATH_EXPLANATION_CONNECT_TIMEOUT: float = float(os.environ.get("MATH_EXPLANATION
 MATH_EXPLANATION_READ_TIMEOUT: float = float(os.environ.get("MATH_EXPLANATION_READ_TIMEOUT", "25"))
 MATH_EXPLANATION_WRITE_TIMEOUT: float = float(os.environ.get("MATH_EXPLANATION_WRITE_TIMEOUT", "5"))
 MATH_EXPLANATION_MAX_RESPONSE_BYTES: int = int(os.environ.get("MATH_EXPLANATION_MAX_RESPONSE_BYTES", str(64 * 1024)))
+MATH_EXPLANATION_PRICING_VERSION: str = os.environ.get("MATH_EXPLANATION_PRICING_VERSION", "2026-08")
+
+def _optional_price(name: str) -> float | None:
+    raw = os.environ.get(name, "").strip()
+    return float(raw) if raw else None
+
+MATH_EXPLANATION_INPUT_PRICE_PER_MILLION: float | None = _optional_price("MATH_EXPLANATION_INPUT_PRICE_PER_MILLION")
+MATH_EXPLANATION_OUTPUT_PRICE_PER_MILLION: float | None = _optional_price("MATH_EXPLANATION_OUTPUT_PRICE_PER_MILLION")
+MATH_EXPLANATION_LIVE_TEST: bool = os.environ.get("MATH_EXPLANATION_LIVE_TEST", "0") == "1"

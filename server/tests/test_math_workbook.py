@@ -99,9 +99,9 @@ class MathWorkbookTests(unittest.TestCase):
             con = sqlite3.connect(db)
             con.executescript((Path(__file__).parents[1] / "app/math_workbook/migrations/0001_initial.sql").read_text())
             con.commit(); con.close()
-            self.assertEqual(upgrade(str(db)), 9); self.assertEqual(upgrade(str(db)), 9)
+            self.assertEqual(upgrade(str(db)), 10); self.assertEqual(upgrade(str(db)), 10)
             with sqlite3.connect(db) as check:
-                self.assertEqual(check.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 9)
+                self.assertEqual(check.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 10)
                 self.assertTrue(check.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='math_processing_jobs'").fetchone())
 
 

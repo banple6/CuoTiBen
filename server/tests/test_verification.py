@@ -53,7 +53,7 @@ class VerificationTests(unittest.TestCase):
         result=IsolatedVerifierExecutor(total_timeout_ms=30,worker_target=slow_worker).execute(request);self.assertEqual(result['status'],'timeout');self.assertTrue(result['timed_out']);self.assertFalse(result['worker_exit_code'] is None)
     def test_migration_v8_indexes_foreign_keys_and_unique_shape(self):
         with tempfile.TemporaryDirectory() as d:
-            db=d+'/x.sqlite';self.assertEqual(upgrade(db),9)
+            db=d+'/x.sqlite';self.assertEqual(upgrade(db),10)
             with sqlite3.connect(db) as con:
                 columns={row[1] for row in con.execute('PRAGMA table_info(math_verification_reports)')};self.assertIn('candidate_solution_result_id',columns);self.assertIn('checks_json',columns)
                 foreign={row[2] for row in con.execute('PRAGMA foreign_key_list(math_verification_reports)')};self.assertIn('math_problems',foreign);self.assertIn('math_candidate_solution_results',foreign)

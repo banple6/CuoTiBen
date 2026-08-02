@@ -30,7 +30,8 @@ from app.math_workbook.solving.errors import SolverError
 from app.math_workbook.execution.solver_executor import IsolatedSolverExecutor
 from app.math_workbook.execution.verifier_executor import IsolatedVerifierExecutor
 from app.math_workbook.verification.engine import VERIFIER_VERSION, required_checks, validate_report
-from app.math_workbook.explanation.prompt import PROMPT_ID, PROMPT_VERSION, prompt_metadata, SCHEMA_VERSION as EXPLANATION_SCHEMA_VERSION
+from app.math_workbook.explanation.prompt import PROMPT_ID, PROMPT_VERSION, prompt_metadata, SCHEMA_VERSION as EXPLANATION_SCHEMA_VERSION, TRACE_VERSION as EXPLANATION_TRACE_VERSION, RENDERER_VERSION as EXPLANATION_RENDERER_VERSION
+from app.math_workbook.explanation.trace import build_deterministic_trace, attach_trace_binding
 from app.math_workbook.explanation.validator import validate_explanation
 
 
@@ -191,17 +192,22 @@ class MathWorkbookStore:
     def update_problem(self,ident:str,user_id:str,expected_revision:int,changes:dict)->dict:
         allowed={'problem_bbox','problem_type_hint','requires_review','review_reasons','variable_domains','sources'}
         if set(changes)-allowed:raise ValueError('unsupported problem fields')
+        changes = dict(changes)
         with self._connect(immediate=True) as db:
             row=db.execute("SELECT * FROM math_problems WHERE id=? AND user_id=?",(ident,user_id)).fetchone()
             if not row: raise KeyError(ident)
             if row['revision'] != expected_revision: raise RevisionConflict('expected_revision does not match current revision')
             sources_changed = 'sources' in changes
+            math_input_changed = sources_changed or 'variable_domains' in changes
             if sources_changed:
                 self._validate_problem_scope(db,user_id,row['import_id'],row['page_id'],changes['sources'])
                 self._replace_sources(db,ident,changes.pop('sources'))
             fields=[];values=[]
             for k,v in changes.items(): fields.append(('variable_domains_json' if k=='variable_domains' else k)+"=?");values.append(json.dumps(v) if k in {'problem_bbox','review_reasons','variable_domains'} else v)
-            if fields: db.execute("UPDATE math_problems SET "+','.join(fields)+",revision=revision+1,source_revision=source_revision+1,expected_revision=expected_revision+1,parse_status='not_started',solve_status='not_started',verification_status='not_started',updated_at=? WHERE id=?",(*values,utc_now(),ident))
+            if fields:
+                source_clause = ",source_revision=source_revision+1" if math_input_changed else ""
+                state_clause = ",parse_status='not_started',solve_status='not_started',verification_status='not_started'" if math_input_changed else ""
+                db.execute("UPDATE math_problems SET "+','.join(fields)+",revision=revision+1"+source_clause+",expected_revision=expected_revision+1"+state_clause+",updated_at=? WHERE id=?",(*values,utc_now(),ident))
             elif sources_changed: db.execute("UPDATE math_problems SET revision=revision+1,source_revision=source_revision+1,expected_revision=expected_revision+1,parse_status='not_started',solve_status='not_started',verification_status='not_started',updated_at=? WHERE id=?",(utc_now(),ident))
         return self.get_problem(ident,user_id) or {}
 
@@ -418,7 +424,11 @@ class MathWorkbookStore:
     def evaluate_explanation_eligibility(self,ident:str,user_id:str,expected_revision:int,teaching_profile:dict)->dict:
         with self._connect() as db:
             p,_=self._problem_input(db,ident,user_id);reasons=[]
-            if p['revision']!=expected_revision or p['source_revision']!=expected_revision:reasons.append('EXPLANATION_INPUT_CHANGED')
+            # ``revision`` is the optimistic-lock token supplied by the
+            # client.  ``source_revision`` is the immutable mathematical
+            # input revision and may legitimately lag after a metadata-only
+            # problem edit.
+            if p['revision']!=expected_revision:reasons.append('EXPLANATION_INPUT_CHANGED')
             if p['requires_review']:reasons.append('BLOCKING_REVIEW_REQUIRED')
             verification=db.execute("SELECT * FROM math_verification_reports WHERE problem_id=? AND input_source_revision=? ORDER BY created_at DESC LIMIT 1",(ident,p['source_revision'])).fetchone()
             if not verification:reasons.append('NO_CURRENT_VERIFIED_REPORT')
@@ -457,6 +467,11 @@ class MathWorkbookStore:
         gate=self.evaluate_explanation_eligibility(ident,user_id,expected_revision,teaching_profile)
         if not gate['eligible']:raise ValueError(json.dumps({k:v for k,v in gate.items() if k not in {'problem','verification','candidate','parse','build','analysis'}}))
         candidate=json.loads(gate['candidate']['candidate_result_json']);ir=json.loads(gate['parse']['problem_ir_json']);normalized=json.loads(gate['parse']['normalized_input'] or '[]')
+        canonical=json.loads(gate['parse']['canonical_ast_json'])
+        roots=[from_dict(item) for item in canonical]
+        if len(roots) != 1:
+            raise ValueError('EXPLANATION_CANONICAL_ROOT_REQUIRED')
+        root=roots[0]
         display=normalized[0].get('original','') if normalized else ''
         values=candidate.get('values',[]);answer=''
         def display_value(item):
@@ -470,25 +485,43 @@ class MathWorkbookStore:
         elif candidate.get('candidate_type')=='two_real_candidates':answer=f"{names[0]}={display_value(values[0])} 或 {names[0]}={display_value(values[1])}" if names and len(values)>1 else ''
         elif candidate.get('candidate_type')=='no_solution_candidate':answer='无实数解'
         elif candidate.get('candidate_type')=='identity_candidate':answer='恒等成立'
-        elif candidate.get('candidate_type')=='interval_candidate':answer='见已验证区间候选'
+        elif candidate.get('candidate_type')=='interval_candidate':
+            interval=candidate.get('interval') or {};name=names[0] if names else 'x'
+            lower,upper=interval.get('lower'),interval.get('upper')
+            if lower:
+                bound=display_value(lower) if isinstance(lower,dict) and 'value' in lower else lower.get('display_latex','')
+                answer=f"{name} {'≥' if lower.get('inclusive') else '>'} {bound}"
+            elif upper:
+                bound=display_value(upper) if isinstance(upper,dict) and 'value' in upper else upper.get('display_latex','')
+                answer=f"{name} {'≤' if upper.get('inclusive') else '<'} {bound}"
+            else: answer='恒真或恒假需由验证报告说明'
         passed=[c['type'] for c in json.loads(gate['verification']['checks_json'] or '[]') if c.get('status')=='passed']
-        trace=candidate.get('solver_trace',[])
+        deterministic=build_deterministic_trace(root,candidate,ir)
+        required=list(required_checks(candidate.get('candidate_type')))
         def public_ast(value):
             if isinstance(value, dict):
                 return {key: public_ast(item) for key, item in value.items() if key not in {'source_formula_id', 'source_span'}}
             if isinstance(value, list):
                 return [public_ast(item) for item in value]
             return value
-        input_data={'problem_id':ident,'source_revision':gate['source_revision'],'problem_type':candidate.get('candidate_type'),'confirmed_problem':{'display_latex':display,'structured_ast':public_ast(json.loads(gate['parse']['canonical_ast_json']))},'variables':ir.get('variables',[]),'verified_result':{'status':'verified','is_verified':True,'candidate_type':candidate.get('candidate_type'),'values':values},'deterministic_trace':trace,'verification_summary':{'status':'verified','passed_checks':passed},'teaching_profile':teaching_profile,'answer_latex':answer}
-        input_hash = request_hash(input_data)
+        input_data={'schema_version':EXPLANATION_SCHEMA_VERSION,'prompt_version':PROMPT_VERSION,'trace_version':EXPLANATION_TRACE_VERSION,'renderer_version':EXPLANATION_RENDERER_VERSION,'problem_id':ident,'source_revision':gate['source_revision'],'problem_type':candidate.get('candidate_type'),'knowledge_point_ids':[candidate.get('candidate_type','math')],'confirmed_problem':{'display_latex':display,'structured_ast':public_ast(canonical)},'variables':ir.get('variables',[]),'verified_result':{'status':'verified','is_verified':True,'candidate_type':candidate.get('candidate_type'),'values':values},'deterministic_trace':deterministic,'verification_summary':{'status':'verified','required_checks':required,'passed_checks':sorted(set(passed))},'teaching_profile':teaching_profile,'answer_latex':answer}
+        input_hash = request_hash({**input_data,'deterministic_trace':{**deterministic,'binding':{**deterministic.get('binding',{}),'input_hash':''}}})
+        input_data['deterministic_trace']=attach_trace_binding(deterministic,problem_id=ident,source_revision=gate['source_revision'],candidate_solution_result_id=gate['candidate']['id'],verification_report_id=gate['verification']['id'],input_hash=input_hash)
+        input_data['input_hash'] = input_hash
         return {'gate':gate,'input':input_data,'input_hash':input_hash,'request_id':input_hash,'answer_latex':answer}
 
     def persist_explanation(self,prepared:dict,provider_name:str,model_name:str,model_version:str,raw:dict,validated:dict|None,status:str,errors:list,metrics:dict)->dict:
         gate=prepared['gate'];input_data=prepared['input'];now=utc_now();profile_hash=request_hash(input_data['teaching_profile'])
         if status == 'validated':
             try:
-                validated = validate_explanation(validated, input_data)
-                validated['final_answer_latex'] = prepared['answer_latex']; validated['answer_summary']['display_latex'] = prepared['answer_latex']
+                # Re-validate the untrusted provider payload at the storage
+                # boundary.  ``validated`` may already be the server-owned
+                # artifact returned by the route and therefore contains
+                # fields that are intentionally not accepted as model input.
+                validated = validate_explanation(raw, input_data)
+                validated['final_answer_latex'] = prepared['answer_latex']
+                if isinstance(validated.get('answer_summary'), dict):
+                    validated['answer_summary']['display_latex'] = prepared['answer_latex']
             except (TypeError, ValueError) as error:
                 status = 'rejected'; validated = None; errors = [{'code': str(error)}]
         with self._connect(immediate=True) as db:
@@ -496,9 +529,9 @@ class MathWorkbookStore:
             current_verification=db.execute("SELECT id,input_hash,candidate_solution_result_id,status,verified_result_json FROM math_verification_reports WHERE problem_id=? AND input_source_revision=? ORDER BY created_at DESC LIMIT 1",(gate['problem']['id'],gate['source_revision'])).fetchone()
             current_candidate=db.execute("SELECT id,input_hash FROM math_candidate_solution_results WHERE id=?",(gate['candidate']['id'],)).fetchone()
             current_verified = json.loads(current_verification['verified_result_json'] or 'null') if current_verification else None
-            if (current['revision']!=gate['problem']['revision'] or current['source_revision']!=gate['source_revision'] or not current_verification or current_verification['id']!=gate['verification']['id'] or current_verification['status']!='verified' or not isinstance(current_verified,dict) or not current_verified.get('is_verified',False) or current_verification['candidate_solution_result_id']!=gate['candidate']['id'] or current_verification['input_hash']!=gate['verification']['input_hash'] or not current_candidate or current_candidate['input_hash']!=gate['candidate']['input_hash']):
+            if (not current or current['revision']!=gate['problem']['revision'] or current['source_revision']!=gate['source_revision'] or not current_verification or current_verification['id']!=gate['verification']['id'] or current_verification['status']!='verified' or not isinstance(current_verified,dict) or not current_verified.get('is_verified',False) or current_verification['candidate_solution_result_id']!=gate['candidate']['id'] or current_verification['input_hash']!=gate['verification']['input_hash'] or not current_candidate or current_candidate['input_hash']!=gate['candidate']['input_hash']):
                 status='stale';errors=[{'code':'EXPLANATION_INPUT_CHANGED'}];validated=None
-            existing=db.execute("SELECT * FROM math_explanations WHERE verification_report_id=? AND input_hash=? AND provider=? AND model_name=? AND prompt_version=? AND schema_version=? AND teaching_profile_hash=?",(gate['verification']['id'],prepared['input_hash'],provider_name,model_name,PROMPT_VERSION,EXPLANATION_SCHEMA_VERSION,profile_hash)).fetchone()
+            existing=db.execute("SELECT * FROM math_explanations WHERE verification_report_id=? AND input_hash=? AND provider=? AND model_name=? AND model_version=? AND prompt_version=? AND schema_version=? AND teaching_profile_hash=? AND trace_version=? AND renderer_version=?",(gate['verification']['id'],prepared['input_hash'],provider_name,model_name,model_version,PROMPT_VERSION,EXPLANATION_SCHEMA_VERSION,profile_hash,EXPLANATION_TRACE_VERSION,EXPLANATION_RENDERER_VERSION)).fetchone()
             if existing:
                 cached = self._decode(dict(existing))
                 if status == 'stale':
@@ -507,8 +540,13 @@ class MathWorkbookStore:
                 cached['cache_hit'] = 1
                 return cached
             prompt = prompt_metadata()
-            ident=str(uuid.uuid4());db.execute("INSERT INTO math_explanations(id,problem_id,verification_report_id,candidate_solution_result_id,user_id,request_id,input_source_revision,input_hash,provider,model_name,model_version,prompt_id,prompt_version,prompt_content_hash,prompt_created_at,schema_version,teaching_profile_hash,status,explanation_input_json,raw_model_response_json,validated_explanation_json,warnings_json,errors_json,input_tokens,output_tokens,estimated_cost,duration_ms,cache_hit,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(ident,gate['problem']['id'],gate['verification']['id'],gate['candidate']['id'],gate['problem']['user_id'],prepared['request_id'],gate['source_revision'],prepared['input_hash'],provider_name,model_name,model_version,PROMPT_ID,PROMPT_VERSION,prompt['content_hash'],prompt['created_at'],EXPLANATION_SCHEMA_VERSION,profile_hash,status,json.dumps(input_data,ensure_ascii=False),json.dumps(raw,ensure_ascii=False),json.dumps(validated,ensure_ascii=False) if validated else None,json.dumps([]),json.dumps(errors),metrics.get('input_tokens'),metrics.get('output_tokens'),metrics.get('estimated_cost'),metrics.get('duration_ms',0),int(metrics.get('cache_hit',False)),now))
-            return self._decode(dict(db.execute("SELECT * FROM math_explanations WHERE id=?",(ident,)).fetchone()))
+            quality = validated.get('quality', {}) if isinstance(validated, dict) else {}
+            error_code = (errors[0].get('code') if errors and isinstance(errors[0], dict) else None)
+            columns = "id,problem_id,verification_report_id,candidate_solution_result_id,user_id,request_id,input_source_revision,input_hash,provider,model_name,model_version,prompt_id,prompt_version,prompt_content_hash,prompt_created_at,schema_version,trace_version,renderer_version,teaching_profile_hash,status,explanation_input_json,raw_model_response_json,validated_explanation_json,quality_json,warnings_json,errors_json,error_code,input_tokens,output_tokens,cached_tokens,provider_request_id,actual_model_name,pricing_version,estimated_cost,duration_ms,attempts,cache_hit,created_at"
+            explanation_id = str(uuid.uuid4())
+            values = (explanation_id,gate['problem']['id'],gate['verification']['id'],gate['candidate']['id'],gate['problem']['user_id'],prepared['request_id'],gate['source_revision'],prepared['input_hash'],provider_name,model_name,model_version,PROMPT_ID,PROMPT_VERSION,prompt['content_hash'],prompt['created_at'],EXPLANATION_SCHEMA_VERSION,EXPLANATION_TRACE_VERSION,EXPLANATION_RENDERER_VERSION,profile_hash,status,json.dumps(input_data,ensure_ascii=False),json.dumps(raw,ensure_ascii=False),json.dumps(validated,ensure_ascii=False) if validated else None,json.dumps(quality,ensure_ascii=False),json.dumps([]),json.dumps(errors,ensure_ascii=False),error_code,metrics.get('input_tokens'),metrics.get('output_tokens'),metrics.get('cached_tokens'),metrics.get('provider_request_id'),metrics.get('actual_model_name'),metrics.get('pricing_version'),metrics.get('estimated_cost'),metrics.get('duration_ms',0),metrics.get('attempts',1),int(metrics.get('cache_hit',False)),now)
+            db.execute(f"INSERT INTO math_explanations({columns}) VALUES({','.join('?' for _ in values)})", values)
+            return self._decode(dict(db.execute("SELECT * FROM math_explanations WHERE id=?",(explanation_id,)).fetchone()))
 
     def current_explanation(self,ident:str,user_id:str)->dict|None:
         with self._connect() as db:
@@ -517,8 +555,198 @@ class MathWorkbookStore:
             if not verification or verification['status']!='verified': return None
             verified=json.loads(verification['verified_result_json'] or 'null')
             if not isinstance(verified,dict) or not verified.get('is_verified',False): return None
-            row=db.execute("SELECT * FROM math_explanations WHERE problem_id=? AND input_source_revision=? AND verification_report_id=? AND status='validated' ORDER BY created_at DESC LIMIT 1",(ident,p['source_revision'],verification['id'])).fetchone()
+            row=db.execute("SELECT * FROM math_explanations WHERE problem_id=? AND input_source_revision=? AND verification_report_id=? AND status='validated' AND schema_version=? AND trace_version=? AND renderer_version=? ORDER BY created_at DESC LIMIT 1",(ident,p['source_revision'],verification['id'],EXPLANATION_SCHEMA_VERSION,EXPLANATION_TRACE_VERSION,EXPLANATION_RENDERER_VERSION)).fetchone()
             return self._decode(dict(row)) if row else None
+
+    def _safe_delete_paths(self, paths: set[str]) -> int:
+        """Remove only files contained by the configured workbook root."""
+        root = self.storage_root.resolve()
+        deleted = 0
+        for raw in paths:
+            if not raw:
+                continue
+            try:
+                path = Path(raw).expanduser().resolve(strict=False)
+                if root not in path.parents or not path.is_file():
+                    continue
+                path.unlink()
+                deleted += 1
+            except (OSError, RuntimeError):
+                # A failed cleanup is observable through orphan_files(); it
+                # must never turn a committed database deletion into a retry.
+                continue
+        return deleted
+
+    @staticmethod
+    def _row_ids(db: sqlite3.Connection, table: str, column: str, values: list[str]) -> list[str]:
+        if not values:
+            return []
+        placeholders = ",".join("?" for _ in values)
+        return [str(row[0]) for row in db.execute(f"SELECT id FROM {table} WHERE {column} IN ({placeholders})", values)]
+
+    def _delete_problem_rows(self, db: sqlite3.Connection, problem_id: str, paths: set[str]) -> dict[str, int]:
+        """Delete one problem graph while foreign-key checks remain enabled."""
+        problem = db.execute("SELECT * FROM math_problems WHERE id=?", (problem_id,)).fetchone()
+        if not problem:
+            return {}
+        paths.add(problem["problem_crop_path"])
+        parse_ids = self._row_ids(db, "math_parse_results", "problem_id", [problem_id])
+        build_ids = self._row_ids(db, "math_sympy_build_results", "problem_id", [problem_id])
+        analysis_ids = self._row_ids(db, "math_analysis_reports", "problem_id", [problem_id])
+        candidate_ids = self._row_ids(db, "math_candidate_solution_results", "problem_id", [problem_id])
+        verification_ids = self._row_ids(db, "math_verification_reports", "problem_id", [problem_id])
+        solve_ids = self._row_ids(db, "math_solve_results", "problem_id", [problem_id])
+        child_ids = parse_ids + build_ids + analysis_ids + candidate_ids + verification_ids + solve_ids + [problem_id]
+        if child_ids:
+            marks = ",".join("?" for _ in child_ids)
+            db.execute(f"DELETE FROM math_processing_jobs WHERE resource_id IN ({marks})", child_ids)
+            idempotency_deleted = db.execute(f"DELETE FROM math_idempotency_records WHERE resource_id IN ({marks})", child_ids).rowcount
+        else:
+            idempotency_deleted = 0
+        counts: dict[str, int] = {"math_idempotency_records": idempotency_deleted}
+        for table, column, ids in (
+            ("math_explanations", "verification_report_id", verification_ids),
+            ("math_verification_reports", "id", verification_ids),
+            ("math_candidate_solution_results", "id", candidate_ids),
+            ("math_analysis_reports", "id", analysis_ids),
+            ("math_sympy_build_results", "id", build_ids),
+            ("math_solve_results", "id", solve_ids),
+            ("math_parse_results", "id", parse_ids),
+        ):
+            if not ids:
+                continue
+            marks = ",".join("?" for _ in ids)
+            cursor = db.execute(f"DELETE FROM {table} WHERE {column} IN ({marks})", ids)
+            counts[table] = cursor.rowcount
+        cursor = db.execute("DELETE FROM math_problem_sources WHERE problem_id=?", (problem_id,)); counts["math_problem_sources"] = cursor.rowcount
+        cursor = db.execute("DELETE FROM math_problems WHERE id=?", (problem_id,)); counts["math_problems"] = cursor.rowcount
+        return counts
+
+    def delete_problem(self, problem_id: str, user_id: str) -> dict[str, Any]:
+        """Controlled, owned problem deletion.  No single explanation delete API exists."""
+        paths: set[str] = set()
+        with self._connect(immediate=True) as db:
+            problem = db.execute("SELECT * FROM math_problems WHERE id=? AND user_id=?", (problem_id, user_id)).fetchone()
+            if not problem:
+                raise KeyError(problem_id)
+            counts = self._delete_problem_rows(db, problem_id, paths)
+        counts["files"] = self._safe_delete_paths(paths)
+        counts["problem_id"] = problem_id
+        return counts
+
+    def delete_import(self, import_id: str, user_id: str) -> dict[str, Any]:
+        """Delete an owned import and every page/formula/problem artifact below it."""
+        paths: set[str] = set()
+        total: dict[str, int] = {}
+        with self._connect(immediate=True) as db:
+            imported = db.execute("SELECT * FROM math_imports WHERE id=? AND user_id=?", (import_id, user_id)).fetchone()
+            if not imported:
+                raise KeyError(import_id)
+            paths.add(imported["source_file_path"])
+            page_ids = [str(row[0]) for row in db.execute("SELECT id FROM math_pages WHERE import_id=?", (import_id,))]
+            problem_ids = [str(row[0]) for row in db.execute("SELECT id FROM math_problems WHERE import_id=?", (import_id,))]
+            region_ids = self._row_ids(db, "math_regions", "page_id", page_ids)
+            block_ids = self._row_ids(db, "math_source_blocks", "page_id", page_ids)
+            formula_ids = self._row_ids(db, "math_formula_candidates", "page_id", page_ids)
+            if page_ids:
+                marks = ",".join("?" for _ in page_ids)
+                paths.update(value for (value,) in db.execute(f"SELECT raw_json_path FROM math_raw_parse_results WHERE page_id IN ({marks})", page_ids) if value)
+            for table, column, ids, path_columns in (
+                ("math_pages", "id", page_ids, ("original_image_path", "normalized_image_path", "print_view_path", "handwriting_view_path", "handwriting_mask_path")),
+                ("math_regions", "id", region_ids, ("crop_path",)),
+                ("math_source_blocks", "id", block_ids, ("crop_path",)),
+                ("math_formula_candidates", "id", formula_ids, ("crop_path",)),
+            ):
+                if ids:
+                    marks = ",".join("?" for _ in ids)
+                    for row in db.execute(f"SELECT {','.join(path_columns)} FROM {table} WHERE {column} IN ({marks})", ids):
+                        paths.update(value for value in row if value)
+            for problem_id in problem_ids:
+                for key, value in self._delete_problem_rows(db, problem_id, paths).items():
+                    if isinstance(value, int): total[key] = total.get(key, 0) + value
+            if formula_ids:
+                marks = ",".join("?" for _ in formula_ids)
+                total["math_formula_revisions"] = db.execute(f"DELETE FROM math_formula_revisions WHERE formula_id IN ({marks})", formula_ids).rowcount
+                total["math_formula_candidates"] = db.execute(f"DELETE FROM math_formula_candidates WHERE id IN ({marks})", formula_ids).rowcount
+            if block_ids:
+                marks = ",".join("?" for _ in block_ids); total["math_source_blocks"] = db.execute(f"DELETE FROM math_source_blocks WHERE id IN ({marks})", block_ids).rowcount
+            if region_ids:
+                marks = ",".join("?" for _ in region_ids); total["math_regions"] = db.execute(f"DELETE FROM math_regions WHERE id IN ({marks})", region_ids).rowcount
+            if page_ids:
+                marks = ",".join("?" for _ in page_ids)
+                total["math_raw_parse_results"] = db.execute(f"DELETE FROM math_raw_parse_results WHERE page_id IN ({marks})", page_ids).rowcount
+                total["math_pages"] = db.execute(f"DELETE FROM math_pages WHERE id IN ({marks})", page_ids).rowcount
+                db.execute(f"DELETE FROM math_processing_jobs WHERE resource_id IN ({marks})", page_ids)
+            resource_ids = [import_id] + page_ids + region_ids + block_ids + formula_ids
+            if resource_ids:
+                marks = ",".join("?" for _ in resource_ids)
+                total["math_processing_jobs"] = total.get("math_processing_jobs", 0) + db.execute(f"DELETE FROM math_processing_jobs WHERE resource_id IN ({marks})", resource_ids).rowcount
+                total["math_idempotency_records"] = total.get("math_idempotency_records", 0) + db.execute(f"DELETE FROM math_idempotency_records WHERE resource_id IN ({marks})", resource_ids).rowcount
+            total["math_imports"] = db.execute("DELETE FROM math_imports WHERE id=?", (import_id,)).rowcount
+        total["files"] = self._safe_delete_paths(paths)
+        total["import_id"] = import_id
+        return total
+
+    def delete_user_data(self, user_id: str) -> dict[str, Any]:
+        """Privacy purge for all workbook records owned by a user."""
+        if not user_id or not user_id.strip():
+            raise ValueError("USER_ID_REQUIRED")
+        paths: set[str] = set(); total: dict[str, int] = {}
+        with self._connect(immediate=True) as db:
+            import_ids = [str(row[0]) for row in db.execute("SELECT id FROM math_imports WHERE user_id=?", (user_id,))]
+            problem_ids = [str(row[0]) for row in db.execute("SELECT id FROM math_problems WHERE user_id=?", (user_id,))]
+            page_ids: list[str] = []; region_ids: list[str] = []; block_ids: list[str] = []; formula_ids: list[str] = []
+            for import_id in import_ids:
+                row = db.execute("SELECT source_file_path FROM math_imports WHERE id=?", (import_id,)).fetchone()
+                if row: paths.add(row[0])
+                page_ids.extend(str(x[0]) for x in db.execute("SELECT id FROM math_pages WHERE import_id=?", (import_id,)))
+                for problem_id in [str(x[0]) for x in db.execute("SELECT id FROM math_problems WHERE import_id=?", (import_id,))]:
+                    if problem_id not in problem_ids: problem_ids.append(problem_id)
+            if page_ids:
+                marks = ",".join("?" for _ in page_ids)
+                for row in db.execute(f"SELECT original_image_path,normalized_image_path,print_view_path,handwriting_view_path,handwriting_mask_path FROM math_pages WHERE id IN ({marks})", page_ids): paths.update(value for value in row if value)
+                for value, in db.execute(f"SELECT raw_json_path FROM math_raw_parse_results WHERE page_id IN ({marks})", page_ids):
+                    if value: paths.add(value)
+                region_ids = self._row_ids(db, "math_regions", "page_id", page_ids)
+                block_ids = self._row_ids(db, "math_source_blocks", "page_id", page_ids)
+                formula_ids = self._row_ids(db, "math_formula_candidates", "page_id", page_ids)
+            if region_ids:
+                marks = ",".join("?" for _ in region_ids)
+                for value, in db.execute(f"SELECT crop_path FROM math_regions WHERE id IN ({marks})", region_ids):
+                    if value: paths.add(value)
+            if block_ids:
+                marks = ",".join("?" for _ in block_ids)
+                for value, in db.execute(f"SELECT crop_path FROM math_source_blocks WHERE id IN ({marks})", block_ids):
+                    if value: paths.add(value)
+            if formula_ids:
+                marks = ",".join("?" for _ in formula_ids)
+                for value, in db.execute(f"SELECT crop_path FROM math_formula_candidates WHERE id IN ({marks})", formula_ids):
+                    if value: paths.add(value)
+            resource_ids = import_ids + page_ids + region_ids + block_ids + formula_ids + problem_ids
+            if resource_ids:
+                marks = ",".join("?" for _ in resource_ids)
+                total["math_processing_jobs"] = db.execute(f"DELETE FROM math_processing_jobs WHERE resource_id IN ({marks})", resource_ids).rowcount
+            for problem_id in problem_ids:
+                for key, value in self._delete_problem_rows(db, problem_id, paths).items():
+                    if isinstance(value, int): total[key] = total.get(key, 0) + value
+            if formula_ids:
+                marks = ",".join("?" for _ in formula_ids)
+                total["math_formula_revisions"] = db.execute(f"DELETE FROM math_formula_revisions WHERE formula_id IN ({marks})", formula_ids).rowcount
+                total["math_formula_candidates"] = db.execute(f"DELETE FROM math_formula_candidates WHERE id IN ({marks})", formula_ids).rowcount
+            if block_ids:
+                marks = ",".join("?" for _ in block_ids); total["math_source_blocks"] = db.execute(f"DELETE FROM math_source_blocks WHERE id IN ({marks})", block_ids).rowcount
+            if region_ids:
+                marks = ",".join("?" for _ in region_ids); total["math_regions"] = db.execute(f"DELETE FROM math_regions WHERE id IN ({marks})", region_ids).rowcount
+            if import_ids:
+                marks = ",".join("?" for _ in import_ids)
+                if page_ids:
+                    pm = ",".join("?" for _ in page_ids); db.execute(f"DELETE FROM math_raw_parse_results WHERE page_id IN ({pm})", page_ids); db.execute(f"DELETE FROM math_pages WHERE id IN ({pm})", page_ids)
+                total["math_imports"] = db.execute(f"DELETE FROM math_imports WHERE id IN ({marks})", import_ids).rowcount
+            total["math_explanations"] = total.get("math_explanations", 0) + db.execute("DELETE FROM math_explanations WHERE user_id=?", (user_id,)).rowcount
+            total["math_idempotency_records"] = db.execute("DELETE FROM math_idempotency_records WHERE user_id=?", (user_id,)).rowcount
+        total["files"] = self._safe_delete_paths(paths)
+        total["user_id"] = user_id
+        return total
 
     def get_formula(self,i:str)->dict|None:return self._one('math_formula_candidates',i)
     def get_region(self,i:str)->dict|None:return self._one('math_regions',i)
@@ -542,7 +770,7 @@ class MathWorkbookStore:
         return [str(p) for p in self.storage_root.rglob('*') if p.is_file() and str(p) not in referenced and p.suffix!='.tmp']
     @staticmethod
     def _decode(row:dict)->dict:
-        for k in ('bbox','polygon','review_reasons','transform_metadata','raw_summary','variable_domains_json','response_body','report_json','artifact_json','symbol_table_json','warnings_json','errors_json','tokens_json','raw_ast_json','canonical_ast_json','normalized_input','problem_ir_json','ast_json','candidate_result_json','constraints_snapshot_json','verification_plan_json','checks_json','verified_result_json','explanation_input_json','raw_model_response_json','validated_explanation_json'):
+        for k in ('bbox','polygon','review_reasons','transform_metadata','raw_summary','variable_domains_json','response_body','report_json','artifact_json','symbol_table_json','warnings_json','errors_json','tokens_json','raw_ast_json','canonical_ast_json','normalized_input','problem_ir_json','ast_json','candidate_result_json','constraints_snapshot_json','verification_plan_json','checks_json','verified_result_json','explanation_input_json','raw_model_response_json','validated_explanation_json','quality_json'):
             if isinstance(row.get(k),str):
                 try:row[k]=json.loads(row[k])
                 except json.JSONDecodeError:pass

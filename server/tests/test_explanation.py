@@ -107,7 +107,8 @@ class ExplanationTests(unittest.TestCase):
             self.assertNotEqual(first["id"], store.persist_explanation(prepared, "deepseek", "deepseek-chat", "v2", raw, valid, "validated", [], {})["id"])
             with sqlite3.connect(root / "db.sqlite") as con:
                 with self.assertRaises(sqlite3.IntegrityError): con.execute("UPDATE math_explanations SET status='failed' WHERE id=?", (first["id"],))
-                with self.assertRaises(sqlite3.IntegrityError): con.execute("DELETE FROM math_explanations WHERE id=?", (first["id"],))
+                con.execute("DELETE FROM math_explanations WHERE id=?", (first["id"],))
+                self.assertIsNone(con.execute("SELECT 1 FROM math_explanations WHERE id=?", (first["id"],)).fetchone())
 
     def test_explanation_api_returns_only_validated_public_artifact(self):
         from fastapi.testclient import TestClient
@@ -134,14 +135,14 @@ class ExplanationTests(unittest.TestCase):
 
     def test_migration_explanation_columns_indexes_and_triggers(self):
         with tempfile.TemporaryDirectory() as tmp:
-            db = Path(tmp) / "db.sqlite"; self.assertEqual(upgrade(str(db)), 9)
+            db = Path(tmp) / "db.sqlite"; self.assertEqual(upgrade(str(db)), 10)
             with sqlite3.connect(db) as con:
                 cols = {row[1] for row in con.execute("PRAGMA table_info(math_explanations)")}
                 self.assertTrue({"user_id", "request_id", "prompt_id", "prompt_content_hash", "cache_hit"}.issubset(cols))
                 indexes = {row[1] for row in con.execute("PRAGMA index_list(math_explanations)")}
                 self.assertIn("idx_math_explanations_current", indexes); self.assertIn("idx_math_explanations_request", indexes)
                 triggers = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
-                self.assertIn("math_explanations_no_update", triggers); self.assertIn("math_explanations_no_delete", triggers)
+                self.assertIn("math_explanations_no_update", triggers); self.assertNotIn("math_explanations_no_delete", triggers)
 
     def test_deepseek_provider_retries_with_same_request_id_and_bounds_response(self):
         from app.math_workbook.explanation.provider import DeepSeekExplanationProvider, ExplanationProviderError
@@ -185,12 +186,12 @@ class ExplanationTests(unittest.TestCase):
 
         class TimeoutClient(Client):
             async def post(self, url, json, headers): raise provider_module.httpx.ReadTimeout("read timeout")
-        old_retries = config.MATH_EXPLANATION_MAX_RETRIES; config.MATH_EXPLANATION_MAX_RETRIES = 1
+        old_retries, old_key = config.MATH_EXPLANATION_MAX_RETRIES, config.MATH_EXPLANATION_API_KEY; config.MATH_EXPLANATION_MAX_RETRIES, config.MATH_EXPLANATION_API_KEY = 1, "test-only-key"
         try:
             with patch.object(provider_module.httpx, "AsyncClient", TimeoutClient):
                 with self.assertRaisesRegex(ExplanationProviderError, "PROVIDER_TIMEOUT"): asyncio.run(DeepSeekExplanationProvider().generate_explanation(request, "timeout"))
         finally:
-            config.MATH_EXPLANATION_MAX_RETRIES = old_retries
+            config.MATH_EXPLANATION_MAX_RETRIES, config.MATH_EXPLANATION_API_KEY = old_retries, old_key
 
 
 if __name__ == "__main__":

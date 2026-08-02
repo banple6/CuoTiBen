@@ -102,9 +102,21 @@ def verify(request):
         if degree!=1:return _report('inconclusive',checks+[_check('inequality_direction','inconclusive'),_check('inequality_boundary','inconclusive'),_check('solution_completeness','inconclusive')],ctype)
         a,b=poly.all_coeffs();boundary=-b/a;less=isinstance(expr,(sympy.StrictLessThan,sympy.LessThan));inclusive=isinstance(expr,(sympy.LessThan,sympy.GreaterThan))
         if a<0:less=not less
-        expected={'type':'interval','lower':None,'upper':{'value':{'kind':'rational','numerator':int(boundary.p),'denominator':int(boundary.q)} if boundary.is_Rational else None,'inclusive':inclusive}} if less else {'type':'interval','lower':{'value':{'kind':'rational','numerator':int(boundary.p),'denominator':int(boundary.q)} if boundary.is_Rational else None,'inclusive':inclusive},'upper':None}
+        if boundary.is_Integer:
+            boundary_payload = {'kind': 'integer', 'value': int(boundary)}
+        elif boundary.is_Rational:
+            boundary_payload = {'kind': 'rational', 'numerator': int(boundary.p), 'denominator': int(boundary.q)}
+        else:
+            boundary_payload = None
+        expected={'type':'interval','lower':None,'upper':{'value':boundary_payload,'inclusive':inclusive}} if less else {'type':'interval','lower':{'value':boundary_payload,'inclusive':inclusive},'upper':None}
         actual=candidate.get('interval',{})
-        def sig(bound): return None if bound is None else (bound.get('value'),bound.get('inclusive'))
+        def value_sig(value):
+            if not isinstance(value, dict): return value
+            kind=value.get('kind')
+            if kind=='integer': return ('rational', int(value.get('value', 0)), 1)
+            if kind=='rational': return ('rational', int(value.get('numerator', 0)), int(value.get('denominator', 1)))
+            return tuple(sorted(value.items()))
+        def sig(bound): return None if bound is None else (value_sig(bound.get('value')),bound.get('inclusive'))
         boundary_pass=sig(actual.get('lower'))==sig(expected.get('lower')) and sig(actual.get('upper'))==sig(expected.get('upper'))
         checks.extend([_check('inequality_direction','passed' if boundary_pass else 'failed'),_check('inequality_boundary','passed' if boundary_pass else 'failed'),_check('solution_completeness','passed' if boundary_pass else 'failed')]);return _report_from(checks,ctype)
     return _report('inconclusive',checks+[_check('solution_completeness','inconclusive')],ctype)

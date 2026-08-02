@@ -35,13 +35,28 @@ def _public_explanation(row: dict) -> dict:
         "verification_report_id": row["verification_report_id"],
         "input_source_revision": row["input_source_revision"],
         "provider": row["provider"],
+        "model": row["model_name"],
         "model_name": row["model_name"],
         "model_version": row["model_version"],
         "prompt_id": row["prompt_id"],
         "prompt_version": row["prompt_version"],
         "schema_version": row["schema_version"],
+        "trace_version": row.get("trace_version"),
+        "renderer_version": row.get("renderer_version"),
         "status": row["status"],
         "validated_explanation_json": row.get("validated_explanation_json") if row["status"] == "validated" else None,
+        "quality": row.get("quality_json") if row["status"] == "validated" else None,
+        "error_code": row.get("error_code"),
+        "usage": {
+            "input_tokens": row.get("input_tokens"),
+            "output_tokens": row.get("output_tokens"),
+            "cached_tokens": row.get("cached_tokens"),
+            "estimated_cost": row.get("estimated_cost"),
+            "attempts": row.get("attempts"),
+            "provider_request_id": row.get("provider_request_id"),
+            "actual_model_name": row.get("actual_model_name"),
+            "pricing_version": row.get("pricing_version"),
+        },
         "input_tokens": row.get("input_tokens"),
         "output_tokens": row.get("output_tokens"),
         "estimated_cost": row.get("estimated_cost"),
@@ -155,11 +170,21 @@ async def create_math_import(file: UploadFile = File(...), source_type: str = "i
 
 
 @router.get("/math-imports/{import_id}")
-async def get_math_import(import_id: str):
+async def get_math_import(import_id: str, user_id: str = Header(default="anonymous", alias="X-User-Id")):
     result = _get_store().get_import(import_id)
+    if result and result.get("user_id") != user_id:
+        result = None
     if not result:
         raise HTTPException(404, "数学导入不存在")
     return public_payload(result)
+
+
+@router.delete("/math-imports/{import_id}")
+async def delete_math_import(import_id: str, user_id: str = Header(default="anonymous", alias="X-User-Id")):
+    try:
+        return _get_store().delete_import(import_id, user_id)
+    except KeyError as error:
+        raise HTTPException(404, "数学导入不存在") from error
 
 
 @router.get("/math-pages/{page_id}")
@@ -220,6 +245,22 @@ async def get_math_problem(problem_id: str, user_id: str = Header(default="anony
     if not result:
         raise HTTPException(404, "题目不存在")
     return result
+
+
+@router.delete("/math-problems/{problem_id}")
+async def delete_math_problem(problem_id: str, user_id: str = Header(default="anonymous", alias="X-User-Id")):
+    try:
+        return _get_store().delete_problem(problem_id, user_id)
+    except KeyError as error:
+        raise HTTPException(404, "题目不存在") from error
+
+
+@router.delete("/math-account")
+async def delete_math_account(user_id: str = Header(default="anonymous", alias="X-User-Id")):
+    try:
+        return _get_store().delete_user_data(user_id)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
 
 
 @router.patch("/math-problems/{problem_id}")
@@ -309,13 +350,19 @@ async def create_math_explanation(problem_id: str, payload: ExplanationRequest, 
     except ValueError as error: raise HTTPException(409,str(error)) from error
     started=time.monotonic();provider=explanation_provider();raw={};validated=None;status='failed';errors=[]
     try:
-        raw=await provider.generate_explanation(prepared['input'], prepared['request_id']);validated=validate_explanation(raw,prepared['input']);validated['final_answer_latex']=prepared['answer_latex'];validated['answer_summary']['display_latex']=prepared['answer_latex'];status='validated'
+        raw=await provider.generate_explanation(prepared['input'], prepared['request_id']);validated=validate_explanation(raw,prepared['input']);validated['final_answer_latex']=prepared['answer_latex'];
+        if isinstance(validated.get('answer_summary'), dict): validated['answer_summary']['display_latex']=prepared['answer_latex']
+        status='validated'
     except (ExplanationProviderError,ValueError,TypeError) as error:
-        code=getattr(error,'code',type(error).__name__);errors=[{'code':code}];status='timeout' if code=='PROVIDER_TIMEOUT' else 'rejected' if not isinstance(error,ExplanationProviderError) else 'failed'
+        code=getattr(error,'code',type(error).__name__);errors=[{'code':code}]
+        if code == 'PROVIDER_TIMEOUT': status = 'timeout'
+        elif code.startswith('MODEL_RESPONSE_') or not isinstance(error, ExplanationProviderError): status = 'rejected'
+        else: status = 'failed'
     metrics={**getattr(provider,'last_metrics',{}),'duration_ms':int((time.monotonic()-started)*1000)}
     result=store.persist_explanation(prepared,config.MATH_EXPLANATION_PROVIDER,config.MATH_EXPLANATION_MODEL,config.MATH_EXPLANATION_MODEL_VERSION,raw,validated,status,errors,metrics)
     current=result["status"]=='validated' and result.get('input_source_revision')==prepared['gate']['source_revision']
-    return {"status":result["status"],"explanation":result.get("validated_explanation_json") if current else None,"artifact":_public_explanation(result),"is_verified":current,"verification_status":"verified" if current else "stale"}
+    public = _public_explanation(result)
+    return {"status":result["status"],"provider":public["provider"],"model":public["model"],"prompt_version":public["prompt_version"],"schema_version":public["schema_version"],"trace_version":public["trace_version"],"renderer_version":public["renderer_version"],"quality":public["quality"],"usage":public["usage"],"explanation":result.get("validated_explanation_json") if current else None,"artifact":public,"is_verified":current,"verification_status":"verified" if current else "stale"}
 
 
 @router.get("/math-problems/{problem_id}/explanation")

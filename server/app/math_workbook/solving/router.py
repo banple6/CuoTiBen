@@ -84,7 +84,11 @@ def routing_report(expr,classification,features,symbols):
                 if len(symbols)!=1:reasons.append('symbol_count_not_one')
                 else:
                     degree=sympy.Poly(expr.lhs-expr.rhs,symbols[0]).degree();wanted=1 if solver.solver_id=='linear_equation' else 2
-                    matched=degree==wanted;reasons=[] if matched else [f'polynomial_degree_not_{wanted}']
+                    # A zero-degree polynomial is the complete linear
+                    # equation degeneracy (identity/no-solution), not an
+                    # unsupported class.
+                    matched=(degree in (0, 1)) if solver.solver_id=='linear_equation' else degree==wanted
+                    reasons=[] if matched else [f'polynomial_degree_not_{wanted}']
             else:matched=solver.supports(classification,features);reasons=[] if matched else ['classification_not_supported']
         except Exception:reasons=['structural_analysis_failed']
         evaluated.append({'solver_id':solver.solver_id+'_v1','matched':matched,'reasons':reasons})

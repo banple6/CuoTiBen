@@ -52,7 +52,7 @@ class SympyBridgeTests(unittest.TestCase):
             for version,filename in MIGRATIONS[:7]:
                 con.executescript((Path(__file__).parents[1]/'app/math_workbook/migrations'/filename).read_text());con.execute('INSERT INTO schema_migrations(version) VALUES(?)',(version,))
             con.commit();con.execute("PRAGMA foreign_keys=OFF");con.execute("INSERT INTO math_verification_reports(id,problem_id,solve_result_id,input_solve_hash,verifier_version,status,report_json,created_at,revision) VALUES('old','p','s','h','legacy','inconclusive','{}','now',1)");con.commit();con.close()
-            self.assertEqual(upgrade(str(db)),9)
+            self.assertEqual(upgrade(str(db)),10)
             with sqlite3.connect(db) as check:self.assertEqual(check.execute("SELECT report_json FROM math_verification_reports WHERE id='old'").fetchone()[0],'{}')
     def test_verified_explanation_gate_mock_and_stale(self):
         with tempfile.TemporaryDirectory() as d:
