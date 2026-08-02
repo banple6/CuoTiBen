@@ -7,6 +7,8 @@ from pathlib import Path
 
 from PIL import Image, ImageFilter
 
+from app.math_workbook.imaging.image_limits import open_image_checked
+
 
 @dataclass(frozen=True, slots=True)
 class InkSegmentationResult:
@@ -21,7 +23,7 @@ class InkSegmentationResult:
 
 def segment_colored_ink(normalized_path: Path, output_dir: Path) -> InkSegmentationResult:
     """Separate high-chroma pen marks without assuming a fixed red RGB value."""
-    with Image.open(normalized_path) as source:
+    with open_image_checked(normalized_path) as source:
         image = source.convert("RGB")
     hsv = image.convert("HSV")
     pixels = list(hsv.getdata())

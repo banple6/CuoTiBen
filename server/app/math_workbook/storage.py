@@ -181,18 +181,57 @@ class MathWorkbookStore:
 
     def reserve_idempotency(self,user_id:str,operation:str,key:str,body:Any)->dict:
         digest=request_hash(body); now=utc_now()
+        expires_at = (datetime.now(timezone.utc) + timedelta(days=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
         with self._connect(immediate=True) as db:
             row=db.execute("SELECT * FROM math_idempotency_records WHERE user_id=? AND operation_type=? AND idempotency_key=?",(user_id,operation,key)).fetchone()
             if row:
                 result=self._decode(dict(row))
                 if result['request_hash'] != digest: raise IdempotencyConflict('Idempotency-Key was reused with another request body')
+                expired = result.get('status') == 'processing' and (
+                    not result.get('expires_at') or result['expires_at'] <= now
+                )
+                if result.get('status') == 'failed' or expired:
+                    # The immediate transaction makes this conditional claim
+                    # atomic: two callers cannot both reclaim one attempt.
+                    reclaimed = db.execute(
+                        """UPDATE math_idempotency_records
+                           SET status='processing', response_status=NULL,
+                               resource_type=NULL, resource_id=NULL,
+                               response_body=NULL, updated_at=?,
+                               expires_at=?, attempt_count=attempt_count+1,
+                               last_error_code=NULL, last_failed_at=NULL
+                           WHERE id=? AND request_hash=?
+                             AND (status='failed' OR (status='processing' AND (expires_at IS NULL OR expires_at<=?)))""",
+                        (now, expires_at, result['id'], digest, now),
+                    )
+                    if reclaimed.rowcount == 1:
+                        result = self._decode(dict(db.execute("SELECT * FROM math_idempotency_records WHERE id=?", (result['id'],)).fetchone()))
+                        result['created'] = True
+                        result['reclaimed'] = True
+                        return result
                 result['created'] = False
+                result['reclaimed'] = False
                 return result
-            ident=str(uuid.uuid4()); db.execute("INSERT INTO math_idempotency_records(id,user_id,operation_type,idempotency_key,request_hash,status,created_at,updated_at,expires_at) VALUES(?,?,?,?,?,'processing',?,?,?)",(ident,user_id,operation,key,digest,now,now,(datetime.now(timezone.utc)+timedelta(days=1)).strftime('%Y-%m-%dT%H:%M:%SZ')))
-            return {'id':ident,'request_hash':digest,'status':'processing','created':True}
+            ident=str(uuid.uuid4()); db.execute("INSERT INTO math_idempotency_records(id,user_id,operation_type,idempotency_key,request_hash,status,attempt_count,created_at,updated_at,expires_at) VALUES(?,?,?,?,?,'processing',1,?,?,?)",(ident,user_id,operation,key,digest,now,now,expires_at))
+            return {'id':ident,'request_hash':digest,'status':'processing','attempt_count':1,'created':True,'reclaimed':False}
 
-    def finish_idempotency(self,record_id:str,status:int,resource_type:str,resource_id:str,body:dict)->None:
-        with self._connect() as db: db.execute("UPDATE math_idempotency_records SET status='completed',response_status=?,resource_type=?,resource_id=?,response_body=?,updated_at=? WHERE id=?",(status,resource_type,resource_id,json.dumps(body),utc_now(),record_id))
+    def finish_idempotency(self,record_id:str,status:int,resource_type:str,resource_id:str,body:dict,attempt_count:int|None=None)->bool:
+        predicate = "id=? AND status='processing'" + (" AND attempt_count=?" if attempt_count is not None else "")
+        params: list[Any] = [status, resource_type, resource_id, json.dumps(body, ensure_ascii=False), utc_now(), record_id]
+        if attempt_count is not None:
+            params.append(attempt_count)
+        with self._connect(immediate=True) as db:
+            return db.execute(f"UPDATE math_idempotency_records SET status='completed',response_status=?,resource_type=?,resource_id=?,response_body=?,updated_at=?,expires_at=NULL,last_error_code=NULL,last_failed_at=NULL WHERE {predicate}",tuple(params)).rowcount == 1
+
+    def fail_idempotency(self,record_id:str,response_status:int,error_code:str,attempt_count:int|None=None)->bool:
+        if not isinstance(error_code, str) or not error_code.isidentifier() or not error_code.isupper():
+            error_code = "MATH_IMPORT_FAILED"
+        predicate = "id=? AND status='processing'" + (" AND attempt_count=?" if attempt_count is not None else "")
+        params: list[Any] = [response_status, utc_now(), utc_now(), error_code, record_id]
+        if attempt_count is not None:
+            params.append(attempt_count)
+        with self._connect(immediate=True) as db:
+            return db.execute(f"UPDATE math_idempotency_records SET status='failed',response_status=?,resource_type=NULL,resource_id=NULL,response_body=NULL,updated_at=?,last_failed_at=?,last_error_code=? WHERE {predicate}",tuple(params)).rowcount == 1
 
     def enqueue_job(self,resource_type:str,resource_id:str,job_type:str)->str:
         ident,now=str(uuid.uuid4()),utc_now()
@@ -429,23 +468,95 @@ class MathWorkbookStore:
     def verify_problem(self,ident:str,user_id:str,expected_revision:int)->dict:
         gate=self.evaluate_verification_eligibility(ident,user_id,expected_revision)
         if not gate['eligible']:raise ValueError(json.dumps({k:v for k,v in gate.items() if k not in {'problem','candidate','parse','build','analysis'}}))
+        # Snapshot all worker input while holding only the short read
+        # transaction used by eligibility checks.  No SQLite transaction is
+        # kept open while the isolated verifier runs.
+        candidate,parse_row,build,analysis = (
+            dict(gate['candidate']),
+            dict(gate['parse']),
+            dict(gate['build']),
+            dict(gate['analysis']),
+        )
+        hash_value = candidate['input_hash']
+        request = {
+            'protocol_version':'1',
+            'canonical_ast':json.loads(parse_row['canonical_ast_json']),
+            'problem_ir':json.loads(parse_row['problem_ir_json']),
+            'analysis':json.loads(analysis['report_json']),
+            'constraints_snapshot':json.loads(candidate['constraints_snapshot_json']),
+            'candidate':json.loads(candidate['candidate_result_json']),
+        }
+        with self._connect() as db:
+            existing = db.execute(
+                "SELECT * FROM math_verification_reports WHERE candidate_solution_result_id=? AND input_hash=? AND verifier_version=?",
+                (candidate['id'], hash_value, VERIFIER_VERSION),
+            ).fetchone()
+        if existing:
+            return self._decode(dict(existing))
+
+        # This call intentionally occurs outside any database transaction.
+        execution = IsolatedVerifierExecutor().execute(request)
+        if execution.get('status') == 'timeout':
+            result = {'status':'timeout','checks':[],'verification_plan':{},'verified_result':None,'warnings':[],'errors':[{'code':'VERIFIER_TIMEOUT'}]}
+        else:
+            result = execution.get('result', {'status':'failed','checks':[],'verification_plan':{},'verified_result':None,'warnings':[],'errors':execution.get('errors',[])})
+        if result.get('status') == 'checks_passed':
+            result['status'] = 'verified'
+            result['verified_result'] = {'status':'verified','is_verified':True}
+        if not validate_report(result, request['candidate'].get('candidate_type')):
+            result = {'status':'failed','checks':result.get('checks',[]),'verification_plan':result.get('verification_plan',{}),'verified_result':None,'warnings':[],'errors':[{'code':'INVALID_VERIFICATION_REPORT'}]}
+
         with self._connect(immediate=True) as db:
-            candidate,parse_row,build,analysis=gate['candidate'],gate['parse'],gate['build'],gate['analysis'];hash_value=candidate['input_hash']
-            existing=db.execute("SELECT * FROM math_verification_reports WHERE candidate_solution_result_id=? AND input_hash=? AND verifier_version=?",(candidate['id'],hash_value,VERIFIER_VERSION)).fetchone()
-            if existing:return self._decode(dict(existing))
-            request={'protocol_version':'1','canonical_ast':json.loads(parse_row['canonical_ast_json']),'problem_ir':json.loads(parse_row['problem_ir_json']),'analysis':json.loads(analysis['report_json']),'constraints_snapshot':json.loads(candidate['constraints_snapshot_json']),'candidate':json.loads(candidate['candidate_result_json'])}
-            execution=IsolatedVerifierExecutor().execute(request)
-            if execution.get('status')=='timeout':result={'status':'timeout','checks':[],'verification_plan':{},'verified_result':None,'warnings':[],'errors':[{'code':'VERIFIER_TIMEOUT'}]}
-            else:result=execution.get('result',{'status':'failed','checks':[],'verification_plan':{},'verified_result':None,'warnings':[],'errors':execution.get('errors',[])})
-            if result.get('status')=='checks_passed':
-                result['status']='verified';result['verified_result']={'status':'verified','is_verified':True}
-            if not validate_report(result, json.loads(candidate['candidate_result_json']).get('candidate_type')):
-                result={'status':'failed','checks':result.get('checks',[]),'verification_plan':result.get('verification_plan',{}),'verified_result':None,'warnings':[],'errors':[{'code':'INVALID_VERIFICATION_REPORT'}]}
-            # Revision is checked again under the parent transaction before persisting a verdict.
-            current=db.execute("SELECT revision,source_revision FROM math_problems WHERE id=?",(ident,)).fetchone()
-            if current['revision']!=expected_revision or current['source_revision']!=gate['source_revision']:result={'status':'inconclusive','checks':[],'verification_plan':{},'verified_result':None,'warnings':[],'errors':[{'code':'VERIFICATION_INPUT_CHANGED'}]}
-            rid=str(uuid.uuid4());db.execute("INSERT INTO math_verification_reports(id,problem_id,candidate_solution_result_id,parse_result_id,build_result_id,analysis_report_id,input_source_revision,input_hash,verifier_version,status,verification_plan_json,checks_json,verified_result_json,report_json,warnings_json,errors_json,duration_ms,execution_mode,worker_exit_code,timed_out,termination_method,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(rid,ident,candidate['id'],parse_row['id'],build['id'],analysis['id'],gate['source_revision'],hash_value,VERIFIER_VERSION,result['status'],json.dumps(result['verification_plan']),json.dumps(result['checks']),json.dumps(result['verified_result']),json.dumps(result),json.dumps(result.get('warnings',[])),json.dumps(result.get('errors',[])),execution.get('duration_ms',0),execution.get('execution_mode','isolated_process'),execution.get('worker_exit_code'),int(execution.get('timed_out',False)),execution.get('termination_method','none'),utc_now()))
-            return self._decode(dict(db.execute("SELECT * FROM math_verification_reports WHERE id=?",(rid,)).fetchone()))
+            # Re-read every parent binding under the short write transaction.
+            # This is the TOCTOU barrier: a report based on an old snapshot can
+            # never become the current verified artifact.
+            current = db.execute("SELECT revision,source_revision FROM math_problems WHERE id=? AND user_id=?", (ident, user_id)).fetchone()
+            current_candidate = db.execute("SELECT * FROM math_candidate_solution_results WHERE id=?", (candidate['id'],)).fetchone()
+            current_parse = db.execute("SELECT * FROM math_parse_results WHERE id=?", (parse_row['id'],)).fetchone()
+            current_build = db.execute("SELECT * FROM math_sympy_build_results WHERE id=?", (build['id'],)).fetchone()
+            current_analysis = db.execute("SELECT * FROM math_analysis_reports WHERE id=?", (analysis['id'],)).fetchone()
+            current_latest_candidate = db.execute("SELECT id FROM math_candidate_solution_results WHERE problem_id=? AND input_source_revision=? ORDER BY created_at DESC LIMIT 1", (ident, gate['source_revision'])).fetchone()
+            input_changed = (
+                current is None
+                or current['revision'] != expected_revision
+                or current['source_revision'] != gate['source_revision']
+                or current_latest_candidate is None
+                or current_latest_candidate['id'] != candidate['id']
+                or current_candidate is None
+                or current_candidate['input_source_revision'] != gate['source_revision']
+                or current_candidate['input_hash'] != hash_value
+                or current_parse is None
+                or current_parse['input_source_revision'] != gate['source_revision']
+                or current_build is None
+                or current_build['source_revision'] != gate['source_revision']
+                or current_build['input_ast_hash'] != hash_value
+                or current_analysis is None
+                or current_analysis['source_revision'] != gate['source_revision']
+                or current_candidate['parse_result_id'] != parse_row['id']
+                or current_candidate['build_result_id'] != build['id']
+                or current_candidate['analysis_report_id'] != analysis['id']
+            )
+            if input_changed:
+                result = {'status':'inconclusive','checks':[],'verification_plan':{},'verified_result':None,'warnings':[],'errors':[{'code':'VERIFICATION_INPUT_CHANGED'}]}
+            if current is None:
+                # The parent was deleted while the worker ran.  There is no
+                # valid row to persist, but returning an inconclusive result
+                # keeps the old worker output out of all current views.
+                return result
+            existing = db.execute("SELECT * FROM math_verification_reports WHERE candidate_solution_result_id=? AND input_hash=? AND verifier_version=?", (candidate['id'], hash_value, VERIFIER_VERSION)).fetchone()
+            if existing:
+                return self._decode(dict(existing))
+            rid = str(uuid.uuid4())
+            try:
+                db.execute("INSERT INTO math_verification_reports(id,problem_id,candidate_solution_result_id,parse_result_id,build_result_id,analysis_report_id,input_source_revision,input_hash,verifier_version,status,verification_plan_json,checks_json,verified_result_json,report_json,warnings_json,errors_json,duration_ms,execution_mode,worker_exit_code,timed_out,termination_method,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (rid,ident,candidate['id'],parse_row['id'],build['id'],analysis['id'],gate['source_revision'],hash_value,VERIFIER_VERSION,result['status'],json.dumps(result['verification_plan']),json.dumps(result['checks']),json.dumps(result['verified_result']),json.dumps(result),json.dumps(result.get('warnings',[])),json.dumps(result.get('errors',[])),execution.get('duration_ms',0),execution.get('execution_mode','isolated_process'),execution.get('worker_exit_code'),int(execution.get('timed_out',False)),execution.get('termination_method','none'),utc_now()))
+            except sqlite3.IntegrityError:
+                # Concurrent equal verifications may both finish the worker;
+                # the unique key makes the loser reuse the winner's artifact.
+                existing = db.execute("SELECT * FROM math_verification_reports WHERE candidate_solution_result_id=? AND input_hash=? AND verifier_version=?", (candidate['id'], hash_value, VERIFIER_VERSION)).fetchone()
+                if existing:
+                    return self._decode(dict(existing))
+                raise
+            return self._decode(dict(db.execute("SELECT * FROM math_verification_reports WHERE id=?", (rid,)).fetchone()))
 
     def current_verification(self,ident:str,user_id:str)->dict|None:
         with self._connect() as db:

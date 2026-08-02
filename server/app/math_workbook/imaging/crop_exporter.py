@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PIL import Image
+from app.math_workbook.imaging.image_limits import open_image_checked
 
 
 def export_crop(image_path: Path, bbox: tuple[float, float, float, float], destination: Path) -> str:
     x, y, width, height = bbox
-    with Image.open(image_path) as image:
+    with open_image_checked(image_path) as image:
         left = max(0, int(x))
         top = max(0, int(y))
         right = min(image.width, max(left + 1, int(x + width)))

@@ -34,6 +34,9 @@ APP_HOST: str = os.environ.get("APP_HOST", "0.0.0.0")
 APP_PORT: int = int(os.environ.get("APP_PORT", "8900"))
 APP_LOG_LEVEL: str = os.environ.get("APP_LOG_LEVEL", "info")
 MAX_UPLOAD_SIZE: int = int(os.environ.get("MAX_UPLOAD_SIZE", str(20 * 1024 * 1024)))
+MATH_MAX_IMAGE_WIDTH: int = int(os.environ.get("MATH_MAX_IMAGE_WIDTH", "12000"))
+MATH_MAX_IMAGE_HEIGHT: int = int(os.environ.get("MATH_MAX_IMAGE_HEIGHT", "12000"))
+MATH_MAX_IMAGE_PIXELS: int = int(os.environ.get("MATH_MAX_IMAGE_PIXELS", "25000000"))
 APP_ENV: str = os.environ.get("APP_ENV", "production").strip().lower()
 MATH_ALLOW_DEV_USER_HEADER: bool = (
     APP_ENV in {"development", "test"}

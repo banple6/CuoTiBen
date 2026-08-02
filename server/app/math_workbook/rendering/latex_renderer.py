@@ -63,6 +63,47 @@ def _wrap(text: str, node: Node, parent: int, *, right: bool = False) -> str:
     return text
 
 
+def _is_numeric_atom(node: Node) -> bool:
+    """Whether *node* is a scalar literal that can be a coefficient.
+
+    This is intentionally based on AST node types rather than rendered text.
+    In particular, a fraction is not treated as a coefficient here: keeping
+    ``\\frac{1}{2}\\cdot\\frac{3}{4}`` explicit avoids an ambiguous display.
+    """
+
+    if isinstance(node, (IntegerNode, DecimalNode)):
+        return True
+    return isinstance(node, NegateNode) and isinstance(node.operand, (IntegerNode, DecimalNode))
+
+
+def _is_group(node: Node) -> bool:
+    return isinstance(node, (AddNode, SubtractNode))
+
+
+def _can_juxtapose(left: Node, right: Node) -> bool:
+    """Return whether implicit multiplication is unambiguous for this AST.
+
+    The safe whitelist is deliberately conservative: a scalar literal may sit
+    before a symbol/power/root/group, and two grouped factors may be adjacent.
+    Every other pair receives an explicit ``\\cdot``.
+    """
+
+    if _is_numeric_atom(left) and isinstance(right, (SymbolNode, PowerNode, SquareRootNode)):
+        return True
+    if _is_numeric_atom(left) and _is_group(right):
+        return True
+    return _is_group(left) and _is_group(right)
+
+
+def _multiply_wrap(text: str, node: Node, *, right: bool) -> str:
+    """Wrap multiplication operands without parenthesizing a fraction."""
+
+    child = _precedence(node)
+    if child < 30 or (right and isinstance(node, NegateNode)) or (right and child == 30 and not isinstance(node, DivideNode)):
+        return f"({text})"
+    return text
+
+
 def _render(node: Node) -> str:
     if isinstance(node, IntegerNode):
         return str(node.value)
@@ -85,11 +126,10 @@ def _render(node: Node) -> str:
         right = _wrap(_render(node.right), node.right, 20, right=True)
         return f"{left}-{right}"
     if isinstance(node, MultiplyNode):
-        left = _wrap(_render(node.left), node.left, 30)
-        right = _wrap(_render(node.right), node.right, 30, right=True)
-        # The canonical syntax uses implicit multiplication.  Parentheses are
-        # supplied by _wrap for sums, relations and nested products.
-        return f"{left}{right}"
+        left = _multiply_wrap(_render(node.left), node.left, right=False)
+        right = _multiply_wrap(_render(node.right), node.right, right=True)
+        operator = "" if _can_juxtapose(node.left, node.right) else r"\cdot"
+        return f"{left}{operator}{right}"
     if isinstance(node, DivideNode):
         return f"\\frac{{{_render(node.left)}}}{{{_render(node.right)}}}"
     if isinstance(node, PowerNode):

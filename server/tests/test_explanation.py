@@ -140,7 +140,7 @@ class ExplanationTests(unittest.TestCase):
 
     def test_migration_explanation_columns_indexes_and_triggers(self):
         with tempfile.TemporaryDirectory() as tmp:
-            db = Path(tmp) / "db.sqlite"; self.assertEqual(upgrade(str(db)), 10)
+            db = Path(tmp) / "db.sqlite"; self.assertEqual(upgrade(str(db)), 11)
             with sqlite3.connect(db) as con:
                 cols = {row[1] for row in con.execute("PRAGMA table_info(math_explanations)")}
                 self.assertTrue({"user_id", "request_id", "prompt_id", "prompt_content_hash", "cache_hit"}.issubset(cols))

@@ -108,7 +108,7 @@ class MigrationAtomicityTests(unittest.TestCase):
             with sqlite3.connect(db_path) as db:
                 self.assertIsNotNone(db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='math_explanations'").fetchone())
                 self.assertIsNone(db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='math_explanations_v9'").fetchone())
-            self.assertEqual(runner.upgrade(str(db_path)), 10)
+            self.assertEqual(runner.upgrade(str(db_path)), 11)
             with sqlite3.connect(db_path) as db:
                 self.assertEqual(db.execute("PRAGMA foreign_key_check").fetchall(), [])
 
@@ -122,7 +122,7 @@ class MigrationAtomicityTests(unittest.TestCase):
             for process in processes:
                 process.join(30)
                 self.assertEqual(process.exitcode, 0)
-            self.assertEqual(runner.current_version(db_path), 10)
+            self.assertEqual(runner.current_version(db_path), 11)
             with sqlite3.connect(db_path) as db:
                 self.assertEqual(db.execute("PRAGMA foreign_key_check").fetchall(), [])
 

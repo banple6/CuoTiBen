@@ -20,6 +20,7 @@ MIGRATIONS = [
     (8, "0008_rebuild_verification_reports.sql"),
     (9, "0009_math_explanations.sql"),
     (10, "0010_math_explanation_retention.sql"),
+    (11, "0011_idempotency_recovery.sql"),
 ]
 
 _FOREIGN_KEYS_RE = re.compile(r"^\s*PRAGMA\s+foreign_keys\s*=", re.IGNORECASE)

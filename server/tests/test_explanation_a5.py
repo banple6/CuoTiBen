@@ -164,7 +164,7 @@ class DeletionAndMigrationA5Tests(unittest.TestCase):
     def test_migration_v10_fk_trigger_unique_and_foreign_key_check(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = str(Path(tmp) / "db.sqlite")
-            self.assertEqual(upgrade(db_path), 10)
+            self.assertEqual(upgrade(db_path), 11)
             with sqlite3.connect(db_path) as db:
                 foreign_keys = {(row[2], row[6]) for row in db.execute("PRAGMA foreign_key_list(math_explanations)")}
                 self.assertEqual(foreign_keys, {("math_problems", "CASCADE"), ("math_verification_reports", "CASCADE"), ("math_candidate_solution_results", "CASCADE")})
@@ -191,7 +191,7 @@ class DeletionAndMigrationA5Tests(unittest.TestCase):
                 db.execute("INSERT INTO math_verification_reports(id,problem_id,candidate_solution_result_id,parse_result_id,build_result_id,analysis_report_id,input_source_revision,input_hash,verifier_version,status,report_json,created_at) VALUES('v','p','c','pr','b','a',1,'h','v','verified','{}','now')")
                 db.execute("INSERT INTO math_explanations(id,problem_id,verification_report_id,candidate_solution_result_id,user_id,request_id,input_source_revision,input_hash,provider,model_name,model_version,prompt_id,prompt_version,prompt_content_hash,prompt_created_at,schema_version,teaching_profile_hash,status,explanation_input_json,created_at) VALUES('e','p','v','c','u','r',1,'h','mock','mock','1','old','1','ph','now','1','th','validated','{}','now')")
                 db.commit()
-            self.assertEqual(upgrade(db_path), 10)
+            self.assertEqual(upgrade(db_path), 11)
             with sqlite3.connect(db_path) as db:
                 row = db.execute("SELECT id,problem_id,user_id,status,schema_version,trace_version,renderer_version FROM math_explanations WHERE id='e'").fetchone()
                 self.assertEqual(row, ('e','p','u','validated','1','1','1'))

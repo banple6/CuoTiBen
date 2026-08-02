@@ -9,10 +9,9 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from PIL import Image
-
 from app.math_workbook.formula_recognizer import PPStructureFormulaRecognizer
 from app.math_workbook.imaging.crop_exporter import export_crop
+from app.math_workbook.imaging.image_limits import open_image_checked
 from app.math_workbook.imaging.ink_segmenter import segment_colored_ink
 from app.math_workbook.imaging.page_normalizer import normalize_page, write_transform_metadata
 from app.math_workbook.quality import formula_quality_flags
@@ -34,28 +33,38 @@ class MathWorkbookService:
         import_dir = self.store.storage_root / "imports"
         import_dir.mkdir(parents=True, exist_ok=True)
         import_id = self.store.create_import(source_type, "", user_id or "anonymous")
-        page_dir = import_dir / import_id / "page_0"
-        page_dir.mkdir(parents=True, exist_ok=True)
-        original_path = page_dir / f"original{file_path.suffix.lower() or '.img'}"
-        temporary_path = original_path.with_suffix(original_path.suffix + ".tmp")
-        shutil.copyfile(file_path, temporary_path)
-        os.replace(temporary_path, original_path)
-        self.store.set_import_source(import_id, user_id or "anonymous", original_path)
+        try:
+            page_dir = import_dir / import_id / "page_0"
+            page_dir.mkdir(parents=True, exist_ok=True)
+            original_path = page_dir / f"original{file_path.suffix.lower() or '.img'}"
+            temporary_path = original_path.with_suffix(original_path.suffix + ".tmp")
+            shutil.copyfile(file_path, temporary_path)
+            os.replace(temporary_path, original_path)
+            self.store.set_import_source(import_id, user_id or "anonymous", original_path)
 
-        page_id = self.store.create_page(import_id, 0, str(original_path), {}, "needs_review")
-        normalized = normalize_page(original_path, page_dir / "normalized.png")
-        write_transform_metadata(page_dir / "transform.json", normalized.transform_metadata)
-        ink = segment_colored_ink(Path(normalized.normalized_path), page_dir)
-        metadata = {**normalized.transform_metadata, "ink_segmentation": ink.parameters, "mask_coverage_ratio": ink.mask_coverage_ratio}
-        self.store.update_page_views(page_id, normalized=normalized.normalized_path, print_view=ink.print_view_path, handwriting_view=ink.handwriting_view_path, mask=ink.handwriting_mask_path, width=normalized.width, height=normalized.height, metadata=metadata, status=ink.segmentation_status)
+            page_id = self.store.create_page(import_id, 0, str(original_path), {}, "needs_review")
+            normalized = normalize_page(original_path, page_dir / "normalized.png")
+            write_transform_metadata(page_dir / "transform.json", normalized.transform_metadata)
+            ink = segment_colored_ink(Path(normalized.normalized_path), page_dir)
+            metadata = {**normalized.transform_metadata, "ink_segmentation": ink.parameters, "mask_coverage_ratio": ink.mask_coverage_ratio}
+            self.store.update_page_views(page_id, normalized=normalized.normalized_path, print_view=ink.print_view_path, handwriting_view=ink.handwriting_view_path, mask=ink.handwriting_mask_path, width=normalized.width, height=normalized.height, metadata=metadata, status=ink.segmentation_status)
 
-        raw_result = await call_pp_structure_v3(original_path.read_bytes(), filename)
-        self.store.save_raw_result(page_id, "paddleocr", "PP-StructureV3", raw_result)
-        candidates = extract_layout_candidates(raw_result)
-        self._segment_candidates(import_id, page_id, page_dir, normalized, ink, candidates)
-        self.store.complete_import(import_id)
-        logger.info("[MATH] import_id=%s page_id=%s stage=import status=ready candidates=%d", import_id, page_id, len(candidates))
-        return self.store.get_import(import_id) or {}
+            raw_result = await call_pp_structure_v3(original_path.read_bytes(), filename)
+            self.store.save_raw_result(page_id, "paddleocr", "PP-StructureV3", raw_result)
+            candidates = extract_layout_candidates(raw_result)
+            self._segment_candidates(import_id, page_id, page_dir, normalized, ink, candidates)
+            self.store.complete_import(import_id)
+            logger.info("[MATH] import_id=%s page_id=%s stage=import status=ready candidates=%d", import_id, page_id, len(candidates))
+            return self.store.get_import(import_id) or {}
+        except Exception:
+            # A failed import must not leave a committed graph or image tree
+            # behind.  The store performs the controlled, owned cascade and
+            # removes only paths belonging to this import.
+            try:
+                self.store.delete_import(import_id, user_id or "anonymous")
+            except Exception:
+                logger.exception("[MATH] failed import cleanup import_id=%s", import_id)
+            raise
 
     def _segment_candidates(self, import_id: str, page_id: str, page_dir: Path, normalized: Any, ink: Any, candidates: list[dict]) -> None:
         color_rows = handwriting_row_bounds(Path(ink.handwriting_mask_path))
@@ -121,7 +130,7 @@ def coerce_bbox(value: Any) -> tuple[float, float, float, float] | None:
 
 
 def handwriting_row_bounds(mask_path: Path) -> list[tuple[float, float, float, float]]:
-    with Image.open(mask_path) as mask:
+    with open_image_checked(mask_path) as mask:
         pixels = mask.convert("L")
         width, height = pixels.size
         rows = [sum(pixels.getpixel((x, y)) > 0 for x in range(width)) for y in range(height)]

@@ -208,9 +208,15 @@ async def create_math_import(file: UploadFile = File(...), source_type: str = "i
         try:
             result = await _get_service().import_page(temp_path, file.filename or temp_path.name, source_type, user_id)
         except ValueError as error:
+            if record and record.get("created"):
+                _get_store().fail_idempotency(record["id"], 422, _public_error_code(error, "MATH_IMPORT_REJECTED"), record.get("attempt_count"))
             raise HTTPException(422, detail=_public_error_code(error, "MATH_IMPORT_REJECTED")) from error
+        except Exception as error:
+            if record and record.get("created"):
+                _get_store().fail_idempotency(record["id"], 502, "MATH_IMPORT_FAILED", record.get("attempt_count"))
+            raise HTTPException(502, detail="MATH_IMPORT_FAILED") from error
     if record:
-        _get_store().finish_idempotency(record["id"], 201, "math_import", result["id"], result)
+        _get_store().finish_idempotency(record["id"], 201, "math_import", result["id"], result, record.get("attempt_count"))
     return public_payload(result)
 
 

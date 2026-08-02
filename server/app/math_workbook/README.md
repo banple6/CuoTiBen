@@ -14,7 +14,14 @@ SQLite job claiming uses `BEGIN IMMEDIATE`, a five-second SQLite busy timeout, a
 
 `Idempotency-Key` is optional for the import endpoint. When supplied it is scoped by user and operation and is persisted with a hash of source type, original filename, and file SHA-256. A reused key with a different request is rejected.
 
-第五阶段 A.5 的教学讲解只接受当前 `verified` VerificationReport。数据库迁移至 10 后启用：
+Import reservations use `processing`, `completed`, and `failed` states. A failed
+reservation or an expired `processing` reservation can be atomically reclaimed
+by the same user, operation, key, and request hash; each attempt is counted.
+The importer removes its committed file/row graph when preprocessing or the
+upstream parser fails. Decoded math images are checked before conversion with
+`MATH_MAX_IMAGE_WIDTH`, `MATH_MAX_IMAGE_HEIGHT`, and `MATH_MAX_IMAGE_PIXELS`.
+
+第五阶段 A.5 的教学讲解只接受当前 `verified` VerificationReport。数据库迁移至 11 后启用：
 
 `POST /api/v1/math-problems/{id}/explanation`
 

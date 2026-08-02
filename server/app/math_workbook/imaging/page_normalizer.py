@@ -6,7 +6,9 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+from PIL import ImageEnhance, ImageFilter, ImageOps
+
+from app.math_workbook.imaging.image_limits import open_image_checked
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,7 +26,7 @@ def normalize_page(original_path: Path, output_path: Path) -> NormalizedPageImag
     Perspective correction is intentionally not guessed in phase one: incorrectly
     rectifying a photographed formula page damages its evidence chain.
     """
-    with Image.open(original_path) as source:
+    with open_image_checked(original_path) as source:
         image = ImageOps.exif_transpose(source).convert("RGB")
         image = image.filter(ImageFilter.MedianFilter(size=3))
         image = ImageEnhance.Contrast(image).enhance(1.08)
