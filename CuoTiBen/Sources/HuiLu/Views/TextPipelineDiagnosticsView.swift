@@ -638,6 +638,10 @@ private enum DiagnosticsEventParser {
         switch (scope, errorCode ?? "") {
         case (.sentence, "MODEL_CONFIG_MISSING"):
             return "AI 精讲获取失败，已展示本地骨架。"
+        case (.sentence, "MODEL_QUOTA_EXHAUSTED"):
+            return "AI 精讲额度不足，已展示本地骨架。"
+        case (.sentence, "MODEL_AUTH_FAILED"):
+            return "AI 精讲鉴权失败，已展示本地骨架。"
         case (.sentence, "UPSTREAM_503"), (.sentence, "UPSTREAM_TIMEOUT"), (.sentence, "NETWORK_UNAVAILABLE"):
             return "AI 精讲获取失败，已展示本地骨架。"
         case (.sentence, "INVALID_MODEL_RESPONSE"):
@@ -656,6 +660,10 @@ private enum DiagnosticsEventParser {
             return "当前正文不足，已展示本地结构骨架。"
         case (.passage, "MODEL_CONFIG_MISSING"):
             return "AI 地图分析暂未配置，已展示本地结构骨架。"
+        case (.passage, "MODEL_QUOTA_EXHAUSTED"):
+            return "AI 地图分析额度不足，已展示本地结构骨架。"
+        case (.passage, "MODEL_AUTH_FAILED"):
+            return "AI 地图分析鉴权失败，已展示本地结构骨架。"
         case (.passage, "UPSTREAM_503"), (.passage, "UPSTREAM_TIMEOUT"), (.passage, "NETWORK_UNAVAILABLE"):
             return "AI 地图分析暂不可用，已展示本地结构骨架。"
         case (.passage, "INVALID_MODEL_RESPONSE"):

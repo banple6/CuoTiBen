@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { __testables } from "../src/services/explainSentenceService.js";
+import {
+  __testables,
+  buildExplainSentencePrompt
+} from "../src/services/explainSentenceService.js";
 
 const {
   normalizeExplainResult,
@@ -93,4 +96,33 @@ test("normalizeExplainResult replaces legacy sentence core markup and keeps gram
   assert.equal(result.grammar_focus[0].title_zh, "时间状语从句");
   assert.match(result.grammar_focus[0].function, /时间背景|主句判断/);
   assert.doesNotMatch(result.grammar_focus[0].explanation_zh, /temporal clause/i);
+});
+
+test("buildExplainSentencePrompt stays compact while preserving response contract fields", () => {
+  const prompt = buildExplainSentencePrompt({
+    title: "debug",
+    sentence: "However, after several storms damaged the harbour and reduced the quantity of fish available near the shore, local leaders began to consider whether a heritage resort might become an integral part of the island's forthcoming development plan.",
+    context: "For decades, fishing and small-scale trade were the predominant sources of income.",
+    paragraph_theme: "local economy changes",
+    paragraph_role: "support",
+    question_prompt: ""
+  });
+
+  assert.ok(prompt.length < 2_200, `prompt is too long: ${prompt.length}`);
+
+  for (const requiredField of [
+    "original_sentence",
+    "faithful_translation",
+    "teaching_interpretation",
+    "core_skeleton",
+    "chunk_layers",
+    "grammar_focus",
+    "contextual_vocabulary",
+    "misreading_traps",
+    "exam_paraphrase_routes",
+    "simpler_rewrite",
+    "mini_check"
+  ]) {
+    assert.match(prompt, new RegExp(requiredField));
+  }
 });

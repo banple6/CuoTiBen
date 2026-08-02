@@ -603,6 +603,82 @@ final class AppViewModel: ObservableObject {
         parseSessionInfos[document.id]
     }
 
+    func retryMaterialProcessing(for document: SourceDocument) async {
+        guard let liveDocument = sourceDocuments.first(where: { $0.id == document.id }) else { return }
+
+        if liveDocument.processingStatus == .ready {
+            await loadStructuredSource(for: liveDocument, force: true)
+            return
+        }
+
+        guard liveDocument.processingStatus == .failed else { return }
+
+        var retryingDocument = liveDocument
+        retryingDocument.processingStatus = .parsing
+        retryingDocument.lastProcessingError = nil
+        replaceSourceDocument(with: retryingDocument)
+        structuredSourceErrors[document.id] = nil
+        structuredSourceStages[document.id] = .extracting
+
+        if await recoverImportedDocumentWithLocalFallback(
+            retryingDocument,
+            parseError: ImportError.copyFailed("用户重试解析")
+        ) != nil {
+            return
+        }
+
+        var failedDocument = liveDocument
+        failedDocument.processingStatus = .failed
+        failedDocument.lastProcessingError = "重试解析失败，请查看诊断。"
+        replaceSourceDocument(with: failedDocument)
+        structuredSourceStages[document.id] = .failed
+        structuredSourceErrors[document.id] = "请求失败，可重试：重试解析失败，请查看诊断。"
+    }
+
+    var recentImportedDocuments: [SourceDocument] {
+        sourceDocuments.sorted { $0.importDate > $1.importDate }
+    }
+
+    var processingDocuments: [SourceDocument] {
+        let activeStages: Set<StructuredLoadingStage> = [
+            .extracting,
+            .uploading,
+            .parsing,
+            .normalizing,
+            .grouping,
+            .classifying,
+            .buildingPreview,
+            .buildingTree,
+            .aiEnriching,
+            .failed,
+            .timedOut
+        ]
+
+        return sourceDocuments
+            .filter { document in
+                document.processingStatus == .imported
+                    || document.processingStatus == .parsing
+                    || document.processingStatus == .failed
+                    || structuredSourceLoadingIDs.contains(document.id)
+                    || activeStages.contains(structuredSourceStages[document.id] ?? .idle)
+            }
+            .sorted { $0.importDate > $1.importDate }
+    }
+
+    var continueLearningDocument: SourceDocument? {
+        let candidates = sourceDocuments
+            .filter { document in
+                document.processingStatus == .ready && structuredSources[document.id] != nil
+            }
+            .sorted { lhs, rhs in
+                let lhsVisited = workbenchProgress[lhs.id]?.lastVisitedAt ?? lhs.importDate
+                let rhsVisited = workbenchProgress[rhs.id]?.lastVisitedAt ?? rhs.importDate
+                return lhsVisited > rhsVisited
+            }
+
+        return candidates.first ?? englishDocumentsForWorkbench().first
+    }
+
     func loadStructuredSource(for document: SourceDocument, force: Bool = false) async {
         guard document.processingStatus == .ready else { return }
         guard force || structuredSources[document.id] == nil else { return }

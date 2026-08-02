@@ -11,6 +11,21 @@ const INVALID_RESPONSE_PATTERNS = [
   /choices/i,
   /completion/i
 ];
+const QUOTA_PATTERNS = [
+  /额度不足/i,
+  /余额不足/i,
+  /insufficient\s+(quota|balance|credits?)/i,
+  /quota\s+(exceeded|exhausted|insufficient)/i,
+  /balance/i,
+  /credits?\s+(exhausted|insufficient)/i
+];
+const AUTH_PATTERNS = [
+  /invalid\s+(api\s*)?key/i,
+  /unauthorized/i,
+  /forbidden/i,
+  /authentication/i,
+  /authorization/i
+];
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -46,6 +61,26 @@ function classifyError(error) {
   }
 
   const status = typeof error?.status === "number" ? error.status : 502;
+  const message = typeof error?.message === "string" ? error.message.trim() : "";
+  const looksLikeQuotaError = status === 402 || QUOTA_PATTERNS.some((pattern) => pattern.test(message));
+  if ((status === 402 || status === 403) && looksLikeQuotaError) {
+    return {
+      statusCode: 402,
+      code: "MODEL_QUOTA_EXHAUSTED",
+      message: "AI 模型网关额度不足，请充值或更换 API Key。",
+      retryable: false
+    };
+  }
+  const looksLikeAuthError = status === 401
+    || (status === 403 && AUTH_PATTERNS.some((pattern) => pattern.test(message)));
+  if (looksLikeAuthError) {
+    return {
+      statusCode: status === 403 ? 403 : 401,
+      code: "MODEL_AUTH_FAILED",
+      message: "AI 模型网关鉴权失败，请检查 API Key。",
+      retryable: false
+    };
+  }
   if (status === 429) {
     return {
       statusCode: 429,
@@ -70,7 +105,6 @@ function classifyError(error) {
       retryable: true
     };
   }
-  const message = typeof error?.message === "string" ? error.message.trim() : "";
   const looksLikeInvalidProviderResponse = status === 200
     || INVALID_RESPONSE_PATTERNS.some((pattern) => pattern.test(message));
   if (looksLikeInvalidProviderResponse) {
@@ -99,6 +133,7 @@ export async function requestGeminiCompletion({
   requestID,
   breakerKey,
   timeoutMs,
+  maxAttempts = 3,
   invoke
 }) {
   const breaker = geminiCircuitBreaker.beforeRequest(breakerKey);
@@ -114,8 +149,9 @@ export async function requestGeminiCompletion({
   }
 
   let lastClassified = null;
+  const totalAttempts = Math.max(1, Math.min(Number(maxAttempts) || 3, 3));
 
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 0; attempt < totalAttempts; attempt += 1) {
     try {
       const completion = await withTimeout(() => invoke(), timeoutMs);
       geminiCircuitBreaker.recordSuccess(breakerKey);
@@ -128,7 +164,7 @@ export async function requestGeminiCompletion({
       lastClassified = classified;
       geminiCircuitBreaker.recordFailure(breakerKey);
 
-      if (classified.retryable && attempt < 2) {
+      if (classified.retryable && attempt < totalAttempts - 1) {
         await sleep(backoffMs(attempt));
         continue;
       }
@@ -150,6 +186,6 @@ export async function requestGeminiCompletion({
     retryable: Boolean(lastClassified?.retryable),
     fallbackAvailable: true,
     requestID,
-    retryCount: 3
+    retryCount: totalAttempts
   });
 }

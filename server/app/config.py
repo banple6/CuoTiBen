@@ -34,3 +34,26 @@ APP_HOST: str = os.environ.get("APP_HOST", "0.0.0.0")
 APP_PORT: int = int(os.environ.get("APP_PORT", "8900"))
 APP_LOG_LEVEL: str = os.environ.get("APP_LOG_LEVEL", "info")
 MAX_UPLOAD_SIZE: int = int(os.environ.get("MAX_UPLOAD_SIZE", str(20 * 1024 * 1024)))
+
+# ── 数学错题页（独立于英语资料解析链路） ──
+MATH_WORKBOOK_STORAGE_ROOT: str = os.environ.get(
+    "MATH_WORKBOOK_STORAGE_ROOT",
+    ".data/math_workbook",
+)
+MATH_WORKBOOK_DB_PATH: str = os.environ.get(
+    "MATH_WORKBOOK_DB_PATH",
+    f"{MATH_WORKBOOK_STORAGE_ROOT}/math_workbook.sqlite3",
+)
+MATH_EXPLANATION_PROVIDER: str = os.environ.get("MATH_EXPLANATION_PROVIDER", "mock")
+MATH_EXPLANATION_BASE_URL: str = os.environ.get("MATH_EXPLANATION_BASE_URL", "https://api.deepseek.com")
+MATH_EXPLANATION_API_KEY: str = os.environ.get("MATH_EXPLANATION_API_KEY", "")
+MATH_EXPLANATION_MODEL: str = os.environ.get("MATH_EXPLANATION_MODEL", "deepseek-chat")
+MATH_EXPLANATION_MODEL_VERSION: str = os.environ.get("MATH_EXPLANATION_MODEL_VERSION", "configured")
+MATH_EXPLANATION_TEMPERATURE: float = float(os.environ.get("MATH_EXPLANATION_TEMPERATURE", "0.1"))
+MATH_EXPLANATION_MAX_TOKENS: int = int(os.environ.get("MATH_EXPLANATION_MAX_TOKENS", "1200"))
+MATH_EXPLANATION_MAX_RETRIES: int = int(os.environ.get("MATH_EXPLANATION_MAX_RETRIES", "2"))
+MATH_EXPLANATION_TOTAL_TIMEOUT: float = float(os.environ.get("MATH_EXPLANATION_TOTAL_TIMEOUT", "30"))
+MATH_EXPLANATION_CONNECT_TIMEOUT: float = float(os.environ.get("MATH_EXPLANATION_CONNECT_TIMEOUT", "5"))
+MATH_EXPLANATION_READ_TIMEOUT: float = float(os.environ.get("MATH_EXPLANATION_READ_TIMEOUT", "25"))
+MATH_EXPLANATION_WRITE_TIMEOUT: float = float(os.environ.get("MATH_EXPLANATION_WRITE_TIMEOUT", "5"))
+MATH_EXPLANATION_MAX_RESPONSE_BYTES: int = int(os.environ.get("MATH_EXPLANATION_MAX_RESPONSE_BYTES", str(64 * 1024)))

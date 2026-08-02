@@ -6,10 +6,16 @@ import UIKit
 
 struct LibraryView: View {
     @EnvironmentObject var viewModel: AppViewModel
+    let showsEmbeddedSidebar: Bool
+
     @State private var searchText = ""
     @State private var selectedFilter: LibraryFilter = .recent
     @State private var selectedDocument: SourceDocument?
     @State private var showingImport = false
+
+    init(showsEmbeddedSidebar: Bool = true) {
+        self.showsEmbeddedSidebar = showsEmbeddedSidebar
+    }
 
     private var isPad: Bool {
         UIDevice.current.userInterfaceIdiom == .pad
@@ -257,9 +263,11 @@ private extension LibraryView {
             .ignoresSafeArea()
 
             HStack(spacing: 0) {
-                ArchivistLibrarySideRail(onImport: {
-                    showingImport = true
-                })
+                if showsEmbeddedSidebar {
+                    ArchivistLibrarySideRail(onImport: {
+                        showingImport = true
+                    })
+                }
 
                 VStack(spacing: 0) {
                     ArchivistLibraryTopBar(
@@ -753,7 +761,24 @@ struct LibraryDocumentCard: View {
     }
 
     private var materialModeLabel: String {
-        structuredSource?.passageAnalysisDiagnostics?.materialMode.rawValue ?? "pending"
+        guard let mode = structuredSource?.passageAnalysisDiagnostics?.materialMode else {
+            return liveDocument.processingStatus == .failed ? "未识别资料" : "等待识别"
+        }
+
+        switch mode {
+        case .passageReading:
+            return "英文正文"
+        case .learningMaterial:
+            return "学习讲义"
+        case .vocabularyNotes:
+            return "词汇注释"
+        case .questionSheet:
+            return "题目练习"
+        case .auxiliaryOnlyMap:
+            return "辅助资料"
+        case .insufficientText:
+            return "正文不足"
+        }
     }
 
     private var parseStatusText: String {
@@ -810,10 +835,10 @@ struct LibraryDocumentCard: View {
 
                 VStack(alignment: .leading, spacing: 10) {
                     documentLine(icon: "doc", text: "\(liveDocument.documentType.displayName) · \(liveDocument.pageCount) 页")
-                    documentLine(icon: "shippingbox", text: "materialMode=\(materialModeLabel)")
+                    documentLine(icon: "shippingbox", text: materialModeLabel)
                     documentLine(icon: "rectangle.text.magnifyingglass", text: parseStatusText)
                     documentLine(icon: "clock", text: "最近导入 \(formattedImportDate)")
-                    documentLine(icon: "chart.line.uptrend.xyaxis", text: "progress=\(progressText)")
+                    documentLine(icon: "chart.line.uptrend.xyaxis", text: "解析进度 \(progressText)")
                 }
 
                 HStack {

@@ -63,6 +63,8 @@ struct AIServiceResponseMeta: Codable, Equatable, Hashable {
 enum AIStructuredErrorKind: String, Equatable, Hashable {
     case invalidRequest
     case modelConfigMissing
+    case modelQuotaExhausted
+    case modelAuthFailed
     case upstream503
     case upstreamTimeout
     case invalidModelResponse
@@ -83,7 +85,7 @@ struct AIStructuredError: Error, Equatable, Hashable, LocalizedError {
 
     var shouldUseLocalFallback: Bool {
         switch kind {
-        case .modelConfigMissing, .upstream503, .upstreamTimeout, .invalidModelResponse, .networkUnavailable:
+        case .modelConfigMissing, .modelQuotaExhausted, .modelAuthFailed, .upstream503, .upstreamTimeout, .invalidModelResponse, .networkUnavailable:
             return true
         case .invalidRequest, .payloadTooLarge, .unknown:
             return fallbackAvailable
@@ -94,6 +96,10 @@ struct AIStructuredError: Error, Equatable, Hashable, LocalizedError {
         switch kind {
         case .modelConfigMissing:
             return "AI 精讲获取失败，已展示本地骨架。"
+        case .modelQuotaExhausted:
+            return "AI 精讲额度不足，已展示本地骨架。"
+        case .modelAuthFailed:
+            return "AI 精讲鉴权失败，已展示本地骨架。"
         case .upstream503, .upstreamTimeout, .networkUnavailable:
             return "AI 精讲获取失败，已展示本地骨架。"
         case .invalidModelResponse:
@@ -116,6 +122,10 @@ struct AIStructuredError: Error, Equatable, Hashable, LocalizedError {
         switch kind {
         case .modelConfigMissing:
             return "AI 地图分析暂未配置，已展示本地结构骨架。"
+        case .modelQuotaExhausted:
+            return "AI 地图分析额度不足，已展示本地结构骨架。"
+        case .modelAuthFailed:
+            return "AI 地图分析鉴权失败，已展示本地结构骨架。"
         case .upstream503, .upstreamTimeout, .networkUnavailable:
             if errorCode == "BACKEND_NOT_CONFIGURED" {
                 return "AI 后端未配置，已展示本地结构骨架。"
@@ -219,6 +229,10 @@ struct AIStructuredError: Error, Equatable, Hashable, LocalizedError {
             return .invalidRequest
         case "MODEL_CONFIG_MISSING":
             return .modelConfigMissing
+        case "MODEL_QUOTA_EXHAUSTED":
+            return .modelQuotaExhausted
+        case "MODEL_AUTH_FAILED":
+            return .modelAuthFailed
         case "UPSTREAM_503":
             return .upstream503
         case "UPSTREAM_TIMEOUT":
@@ -240,6 +254,10 @@ struct AIStructuredError: Error, Equatable, Hashable, LocalizedError {
             return "请求参数无效。"
         case .modelConfigMissing:
             return "AI 服务配置缺失。"
+        case .modelQuotaExhausted:
+            return "AI 模型额度不足。"
+        case .modelAuthFailed:
+            return "AI 模型鉴权失败。"
         case .upstream503:
             return "AI 服务暂时繁忙。"
         case .upstreamTimeout:

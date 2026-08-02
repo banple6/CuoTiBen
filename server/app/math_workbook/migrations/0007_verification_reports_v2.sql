@@ -1,0 +1,18 @@
+ALTER TABLE math_verification_reports ADD COLUMN candidate_solution_result_id TEXT REFERENCES math_candidate_solution_results(id);
+ALTER TABLE math_verification_reports ADD COLUMN parse_result_id TEXT REFERENCES math_parse_results(id);
+ALTER TABLE math_verification_reports ADD COLUMN build_result_id TEXT REFERENCES math_sympy_build_results(id);
+ALTER TABLE math_verification_reports ADD COLUMN analysis_report_id TEXT REFERENCES math_analysis_reports(id);
+ALTER TABLE math_verification_reports ADD COLUMN input_source_revision INTEGER;
+ALTER TABLE math_verification_reports ADD COLUMN input_hash TEXT;
+ALTER TABLE math_verification_reports ADD COLUMN verification_plan_json TEXT;
+ALTER TABLE math_verification_reports ADD COLUMN checks_json TEXT;
+ALTER TABLE math_verification_reports ADD COLUMN verified_result_json TEXT;
+ALTER TABLE math_verification_reports ADD COLUMN warnings_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE math_verification_reports ADD COLUMN errors_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE math_verification_reports ADD COLUMN duration_ms INTEGER;
+ALTER TABLE math_verification_reports ADD COLUMN execution_mode TEXT;
+ALTER TABLE math_verification_reports ADD COLUMN worker_exit_code INTEGER;
+ALTER TABLE math_verification_reports ADD COLUMN timed_out INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE math_verification_reports ADD COLUMN termination_method TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_math_verify_dedupe ON math_verification_reports(candidate_solution_result_id,input_hash,verifier_version);
+CREATE INDEX IF NOT EXISTS idx_math_verify_current ON math_verification_reports(problem_id,input_source_revision,created_at);
