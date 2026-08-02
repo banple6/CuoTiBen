@@ -46,7 +46,7 @@ jobs:
           python - <<'PY' "$db_path"
           import sqlite3, sys
           with sqlite3.connect(sys.argv[1]) as db:
-              assert db.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 10
+              assert db.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 11
               assert db.execute("PRAGMA foreign_key_check").fetchall() == []
       - name: Migration integrity tests
         working-directory: server
