@@ -40,6 +40,7 @@ TRACE_RULE_IDS = frozenset(
     {
         "evaluate_exact_expression",
         "normalize_linear_equation",
+        "subtract_variable_term_both_sides",
         "subtract_constant_both_sides",
         "divide_both_sides_by_coefficient",
         "linear_unique_solution",
@@ -56,6 +57,29 @@ TRACE_RULE_IDS = frozenset(
         "deterministic_solver_summary",
     }
 )
+
+# Human-readable documentation for the immutable rule identifiers.  These
+# descriptions are server-owned metadata: a provider may explain a rule that
+# appears in a trace, but it can never create a new rule identifier.
+TRACE_RULE_DESCRIPTIONS = {
+    "evaluate_exact_expression": "evaluate the exact numeric expression",
+    "normalize_linear_equation": "normalize a linear equation without changing its solution set",
+    "subtract_variable_term_both_sides": "subtract the same variable term from both sides",
+    "subtract_constant_both_sides": "subtract the same constant from both sides",
+    "divide_both_sides_by_coefficient": "divide both sides by a non-zero coefficient",
+    "linear_unique_solution": "state the unique linear solution",
+    "linear_identity_conclusion": "conclude that a linear identity holds for every permitted value",
+    "linear_no_solution_conclusion": "conclude that a linear equation has no permitted solution",
+    "normalize_to_standard_form": "normalize a quadratic equation to standard form",
+    "extract_quadratic_coefficients": "extract the quadratic coefficients",
+    "quadratic_discriminant": "compute the quadratic discriminant",
+    "quadratic_no_real_discriminant": "use a negative discriminant to rule out real roots",
+    "quadratic_formula_root": "evaluate one root from the quadratic formula",
+    "inequality_constant_truth": "evaluate a constant inequality",
+    "divide_by_positive_coefficient": "divide an inequality by a positive coefficient",
+    "divide_by_negative_and_reverse_relation": "divide by a negative coefficient and reverse the relation",
+    "deterministic_solver_summary": "summarize a server-verified result",
+}
 
 
 def _span() -> dict[str, int]:
@@ -159,6 +183,8 @@ def validate_trace_artifact(trace: Any, expected_trace_version: str = TRACE_VERS
             raise ValueError("TRACE_INVALID")
         if step["index"] != expected_index or step["rule_id"] not in TRACE_RULE_IDS:
             raise ValueError("TRACE_INVALID")
+        if step["rule_id"] not in TRACE_RULE_DESCRIPTIONS:
+            raise ValueError("TRACE_INVALID")
         if not isinstance(step["before_ast"], dict) or not isinstance(step["after_ast"], dict):
             raise ValueError("TRACE_INVALID")
         if not isinstance(step["before_latex"], str) or not isinstance(step["after_latex"], str):
@@ -247,7 +273,12 @@ def _symbol_from_ir(root: Node, problem_ir: dict[str, Any]) -> SymbolNode | None
 def _numeric_trace(root: Node, problem_ir: dict[str, Any]) -> list[dict[str, Any]]:
     table = SymbolTable(problem_ir.get("variables", []))
     expression = AstSympyBuilder(table).build(root)
-    value = sympy.cancel(expression)
+    # The safe AST builder deliberately constructs powers with
+    # ``evaluate=False``.  ``doit``/``simplify`` is still exact here (the
+    # numeric solver route has already established that no symbols remain),
+    # and is required for values such as ``2^10`` to become the deterministic
+    # integer 1024 rather than an unevaluated ``2**10``.
+    value = sympy.cancel(sympy.simplify(expression.doit()))
     after = _from_sympy(value)
     return [_step(1, "evaluate_exact_expression", root, after, {"value": _value_payload(value)}, "exact_arithmetic")]
 
@@ -269,24 +300,74 @@ def _linear_equation_trace(root: Node, candidate: dict[str, Any], problem_ir: di
         steps.append(_step(2, rule, standard, standard, {"candidate_type": candidate.get("candidate_type", "")}, "solution_completeness"))
         return steps
     a, b = coeffs
+    left = sympy.expand(expression.lhs)
+    right = sympy.expand(expression.rhs)
+    right_coefficient = sympy.cancel(right.coeff(sym, 1))
+    left_constant = sympy.cancel(left.subs(sym, 0))
+    right_constant = sympy.cancel(right.subs(sym, 0))
     term = _linear_term(a, symbol)
-    target = _equation(term, _from_sympy(-b))
-    left_constant = sympy.cancel(expression.lhs.subs(sym, 0))
-    right_constant = sympy.cancel(expression.rhs.subs(sym, 0))
-    moved_constant = left_constant if left_constant != 0 else right_constant
     steps: list[dict[str, Any]] = []
-    if b != 0 or render_latex(target) != render_latex(root):
-        steps.append(_step(1, "subtract_constant_both_sides", root, target, {"constant": _value_payload(moved_constant)}, "equation_balance"))
-    else:
-        steps.append(_step(1, "normalize_linear_equation", root, target, {"coefficient": _value_payload(a)}, "equation_normalization"))
+
+    # Move the variable term from the right side first.  The previous trace
+    # jumped directly to ``(left_coefficient-right_coefficient)x = ...`` and
+    # labelled that jump as a constant subtraction, which was not an
+    # authentic elementary transformation for equations containing x on both
+    # sides.
+    current: Node = root
+    if right_coefficient != 0:
+        variable_after = _equation(
+            _add_constant(term, left_constant),
+            _from_sympy(right_constant),
+        )
+        steps.append(
+            _step(
+                len(steps) + 1,
+                "subtract_variable_term_both_sides",
+                current,
+                variable_after,
+                {
+                    "coefficient": _value_payload(right_coefficient),
+                    "side": "right",
+                    "term": _value_payload(right_coefficient * sym),
+                },
+                "equation_balance",
+            )
+        )
+        current = variable_after
+
+    target = _equation(term, _from_sympy(right_constant - left_constant))
+    if left_constant != 0:
+        steps.append(
+            _step(
+                len(steps) + 1,
+                "subtract_constant_both_sides",
+                current,
+                target,
+                {"constant": _value_payload(left_constant), "side": "left"},
+                "equation_balance",
+            )
+        )
+        current = target
+    elif not steps or render_latex(current) != render_latex(target):
+        steps.append(
+            _step(
+                len(steps) + 1,
+                "normalize_linear_equation",
+                current,
+                target,
+                {"coefficient": _value_payload(a), "constant": _value_payload(right_constant)},
+                "equation_normalization",
+            )
+        )
+        current = target
     values = [_candidate_sympy(item) for item in candidate.get("values", [])]
     value = values[0] if values else sympy.cancel(-b / a)
     if a != 1:
         solved = _equation(_symbol(symbol.name), _from_sympy(value))
-        steps.append(_step(len(steps) + 1, "divide_both_sides_by_coefficient", target, solved, {"coefficient": _value_payload(a)}, "equation_balance_nonzero_divisor"))
-    elif render_latex(target) != render_latex(_equation(_symbol(symbol.name), _from_sympy(value))):
+        steps.append(_step(len(steps) + 1, "divide_both_sides_by_coefficient", current, solved, {"coefficient": _value_payload(a)}, "equation_balance_nonzero_divisor"))
+    elif render_latex(current) != render_latex(_equation(_symbol(symbol.name), _from_sympy(value))):
         solved = _equation(_symbol(symbol.name), _from_sympy(value))
-        steps.append(_step(len(steps) + 1, "linear_unique_solution", target, solved, {"value": _value_payload(value)}, "solution_completeness"))
+        steps.append(_step(len(steps) + 1, "linear_unique_solution", current, solved, {"value": _value_payload(value)}, "solution_completeness"))
     return steps
 
 

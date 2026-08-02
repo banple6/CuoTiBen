@@ -104,6 +104,23 @@ def _multiply_wrap(text: str, node: Node, *, right: bool) -> str:
     return text
 
 
+def _exponent_requires_braces(node: Node) -> bool:
+    """Return whether an exponent must be grouped for an unambiguous TeX token.
+
+    TeX consumes exactly one token after ``^``.  A one-digit integer and a
+    single symbol are therefore safe without braces, while a multi-digit
+    number, decimal, unary sign, fraction, or compound expression is not.
+    Keeping this decision on AST types (rather than rendered strings) avoids
+    accidentally treating text inside a symbol or literal as syntax.
+    """
+
+    if isinstance(node, IntegerNode):
+        return node.value < 0 or abs(node.value) >= 10
+    if isinstance(node, SymbolNode):
+        return not (len(node.name) == 1 or node.name.startswith("\\"))
+    return True
+
+
 def _render(node: Node) -> str:
     if isinstance(node, IntegerNode):
         return str(node.value)
@@ -137,7 +154,7 @@ def _render(node: Node) -> str:
         if isinstance(node.base, (NegateNode, AddNode, SubtractNode, MultiplyNode, DivideNode)):
             base = f"({base})"
         exponent = _render(node.exponent)
-        if isinstance(node.exponent, (AddNode, SubtractNode, MultiplyNode, DivideNode, NegateNode)):
+        if _exponent_requires_braces(node.exponent):
             exponent = f"{{{exponent}}}"
         return f"{base}^{exponent}"
     if isinstance(node, SquareRootNode):

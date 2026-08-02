@@ -31,7 +31,7 @@ from app.math_workbook.execution.solver_executor import IsolatedSolverExecutor
 from app.math_workbook.execution.verifier_executor import IsolatedVerifierExecutor
 from app.math_workbook.verification.engine import VERIFIER_VERSION, required_checks, validate_report
 from app.math_workbook.explanation.prompt import PROMPT_ID, PROMPT_VERSION, prompt_metadata, SCHEMA_VERSION as EXPLANATION_SCHEMA_VERSION, TRACE_VERSION as EXPLANATION_TRACE_VERSION, RENDERER_VERSION as EXPLANATION_RENDERER_VERSION
-from app.math_workbook.explanation.trace import attach_trace_binding, validate_trace_artifact
+from app.math_workbook.explanation.trace import TRACE_RULE_DESCRIPTIONS, attach_trace_binding, validate_trace_artifact
 from app.math_workbook.explanation.validator import validate_explanation
 
 
@@ -420,42 +420,188 @@ class MathWorkbookStore:
     def solve_problem(self,ident:str,user_id:str,expected_revision:int)->dict:
         gate=self.evaluate_solve_eligibility(ident,user_id,expected_revision)
         if not gate['eligible']:raise ValueError(json.dumps({k:v for k,v in gate.items() if k not in {'problem','parse','build','analysis'}}))
+        # Freeze every solver input while holding only the short read
+        # transaction above.  The isolated process must never run while a
+        # SQLite write transaction is open: slow or stuck mathematics must not
+        # block unrelated imports, edits, deletes, or idempotency writes.
+        parse_row = dict(gate['parse'])
+        build_row = dict(gate['build'])
+        analysis_row = dict(gate['analysis'])
+        report = json.loads(analysis_row['report_json'])
+        roots = [from_dict(x) for x in json.loads(parse_row['canonical_ast_json'])]
+        if len(roots) != 1:
+            raise ValueError('UNSUPPORTED_PROBLEM_CLASS')
+        problem_ir = json.loads(parse_row['problem_ir_json'])
+        primary = report['classification']['primary']
+        features = report['structural_features']
+        solver_id = {'numeric_expression_candidate':'numeric_exact','single_symbol_inequality_candidate':'linear_inequality'}.get(primary)
+        if primary in {'single_symbol_equation_candidate','polynomial_equation_candidate'}:
+            solver_id = 'quadratic_equation' if features.get('max_observed_integer_power') == 2 else 'linear_equation'
+
+        worker_request = {
+            'protocol_version':'1',
+            'solver_id':solver_id,
+            'canonical_ast':json.loads(parse_row['canonical_ast_json']),
+            'problem_ir':problem_ir,
+            'analysis':{'structural_features':features},
+            'constraints_snapshot':report['domain_constraints'],
+            'limits':{},
+        }
+        try:
+            # Deliberately outside _connect(immediate=True).
+            execution = IsolatedSolverExecutor().execute(worker_request)
+            if execution['status'] == 'timeout':
+                raise SolverError('SOLVER_TIMEOUT', {})
+            if execution['status'] == 'failed':
+                error = execution.get('errors') or [{'code':'WORKER_FAILED'}]
+                raise SolverError(error[0].get('code', 'WORKER_FAILED'), {})
+            candidate = execution['candidate_result']
+            status = candidate['status']
+            errors = execution.get('errors', [])
+            duration = execution['duration_ms']
+            solver = type('S',(),{'solver_id':solver_id,'solver_version':SOLVER_VERSION})()
+        except (SolverError, ValueError) as error:
+            code = error.code if isinstance(error, SolverError) else str(error)
+            solver = type('S',(),{'solver_id':'none','solver_version':SOLVER_VERSION})()
+            candidate = {
+                'status':'unsupported' if code in {'UNSUPPORTED_PROBLEM_CLASS','NO_SOLVER_MATCH'} else 'inconclusive',
+                'candidate_type':'none','values':[],'requires_checks':[],
+            }
+            status = candidate['status']
+            duration = execution.get('duration_ms', 0) if 'execution' in locals() else 0
+            errors = [error.as_dict() if isinstance(error, SolverError) else {'code':code}]
+            execution = {
+                'execution_mode':'isolated_process',
+                'worker_exit_code':None,
+                'timed_out':code == 'SOLVER_TIMEOUT',
+                'termination_method':'terminate' if code == 'SOLVER_TIMEOUT' else 'none',
+            }
+        candidate['original_domain_constraints'] = report['domain_constraints']
+        candidate['requires_independent_verification'] = True
+
+        # Re-acquire a short write transaction and perform the TOCTOU check.
+        # Any change to the problem revision, source revision, or parent
+        # artifact IDs invalidates the worker output.
         with self._connect(immediate=True) as db:
-            parse_row=gate['parse'];analysis=gate['analysis'];report=json.loads(analysis['report_json']);roots=[from_dict(x) for x in json.loads(parse_row['canonical_ast_json'])]
-            if len(roots)!=1:raise ValueError('UNSUPPORTED_PROBLEM_CLASS')
-            problem_ir=json.loads(parse_row['problem_ir_json'])
-            primary=report['classification']['primary'];features=report['structural_features']
-            solver_id={'numeric_expression_candidate':'numeric_exact','single_symbol_inequality_candidate':'linear_inequality'}.get(primary)
-            if primary in {'single_symbol_equation_candidate','polynomial_equation_candidate'}:solver_id='quadratic_equation' if features.get('max_observed_integer_power')==2 else 'linear_equation'
+            current = db.execute("SELECT revision,source_revision FROM math_problems WHERE id=? AND user_id=?", (ident, user_id)).fetchone()
+            current_parse = db.execute("SELECT id,input_source_revision FROM math_parse_results WHERE problem_id=? AND input_source_revision=? AND status='parsed' ORDER BY created_at DESC LIMIT 1", (ident, gate['source_revision'])).fetchone()
+            current_build = db.execute("SELECT id,source_revision,input_ast_hash FROM math_sympy_build_results WHERE problem_id=? AND source_revision=? AND status='built' ORDER BY created_at DESC LIMIT 1", (ident, gate['source_revision'])).fetchone()
+            current_analysis = db.execute("SELECT id,source_revision FROM math_analysis_reports WHERE problem_id=? AND source_revision=? AND status='analyzed' ORDER BY created_at DESC LIMIT 1", (ident, gate['source_revision'])).fetchone()
+            if (
+                current is None
+                or current['revision'] != expected_revision
+                or current['source_revision'] != gate['source_revision']
+                or current_parse is None or current_parse['id'] != parse_row['id']
+                or current_build is None or current_build['id'] != build_row['id'] or current_build['input_ast_hash'] != gate['input_hash']
+                or current_analysis is None or current_analysis['id'] != analysis_row['id']
+            ):
+                raise ValueError('SOLVE_INPUT_CHANGED')
+            existing = db.execute("SELECT * FROM math_candidate_solution_results WHERE problem_id=? AND analysis_report_id=? AND input_hash=? AND solver_id=? AND solver_version=? AND sympy_version=?", (ident,analysis_row['id'],gate['input_hash'],solver.solver_id,solver.solver_version,SYMPY_VERSION)).fetchone()
+            if existing:
+                return self._decode(dict(existing))
+            rid = str(uuid.uuid4())
             try:
-                worker_request={'protocol_version':'1','solver_id':solver_id,'canonical_ast':json.loads(parse_row['canonical_ast_json']),'problem_ir':problem_ir,'analysis':{'structural_features':features},'constraints_snapshot':report['domain_constraints'],'limits':{}}
-                execution=IsolatedSolverExecutor().execute(worker_request)
-                if execution['status']=='timeout':raise SolverError('SOLVER_TIMEOUT',{})
-                if execution['status']=='failed':raise SolverError(execution['errors'][0]['code'],{})
-                candidate=execution['candidate_result'];status=candidate['status'];errors=execution.get('errors',[]);duration=execution['duration_ms'];solver=type('S',(),{'solver_id':solver_id,'solver_version':SOLVER_VERSION})()
-            except SolverError as error:
-                solver=type('S',(),{'solver_id':'none','solver_version':SOLVER_VERSION})();candidate={'status':'unsupported' if error.code in {'UNSUPPORTED_PROBLEM_CLASS','NO_SOLVER_MATCH'} else 'inconclusive','candidate_type':'none','values':[],'requires_checks':[]};status=candidate['status'];duration=0;errors=[error.as_dict()]
-                execution={'execution_mode':'isolated_process','worker_exit_code':None,'timed_out':error.code=='SOLVER_TIMEOUT','termination_method':'terminate' if error.code=='SOLVER_TIMEOUT' else 'none'}
-            candidate['original_domain_constraints']=report['domain_constraints'];candidate['requires_independent_verification']=True
-            existing=db.execute("SELECT * FROM math_candidate_solution_results WHERE problem_id=? AND analysis_report_id=? AND input_hash=? AND solver_id=? AND solver_version=? AND sympy_version=?",(ident,analysis['id'],gate['input_hash'],solver.solver_id,solver.solver_version,SYMPY_VERSION)).fetchone()
-            if existing:return self._decode(dict(existing))
-            rid=str(uuid.uuid4());db.execute("INSERT INTO math_candidate_solution_results(id,problem_id,parse_result_id,build_result_id,analysis_report_id,input_source_revision,input_hash,solver_id,solver_version,sympy_version,status,problem_classification,candidate_result_json,constraints_snapshot_json,warnings_json,errors_json,duration_ms,created_at,execution_mode,worker_exit_code,timed_out,termination_method) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(rid,ident,parse_row['id'],gate['build']['id'],analysis['id'],gate['source_revision'],gate['input_hash'],solver.solver_id,solver.solver_version,SYMPY_VERSION,status,report['classification']['primary'],json.dumps(candidate),json.dumps(report['domain_constraints']),json.dumps([]),json.dumps(errors),duration,utc_now(),execution['execution_mode'],execution['worker_exit_code'],int(execution['timed_out']),execution['termination_method']))
+                db.execute("INSERT INTO math_candidate_solution_results(id,problem_id,parse_result_id,build_result_id,analysis_report_id,input_source_revision,input_hash,solver_id,solver_version,sympy_version,status,problem_classification,candidate_result_json,constraints_snapshot_json,warnings_json,errors_json,duration_ms,created_at,execution_mode,worker_exit_code,timed_out,termination_method) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (rid,ident,parse_row['id'],build_row['id'],analysis_row['id'],gate['source_revision'],gate['input_hash'],solver.solver_id,solver.solver_version,SYMPY_VERSION,status,report['classification']['primary'],json.dumps(candidate),json.dumps(report['domain_constraints']),json.dumps([]),json.dumps(errors),duration,utc_now(),execution['execution_mode'],execution['worker_exit_code'],int(execution['timed_out']),execution['termination_method']))
+            except sqlite3.IntegrityError:
+                # Equal concurrent workers are allowed to run, but the unique
+                # key defines one logical candidate and the loser reuses it.
+                existing = db.execute("SELECT * FROM math_candidate_solution_results WHERE problem_id=? AND analysis_report_id=? AND input_hash=? AND solver_id=? AND solver_version=? AND sympy_version=?", (ident,analysis_row['id'],gate['input_hash'],solver.solver_id,solver.solver_version,SYMPY_VERSION)).fetchone()
+                if existing:
+                    return self._decode(dict(existing))
+                raise
             return self._decode(dict(db.execute("SELECT * FROM math_candidate_solution_results WHERE id=?",(rid,)).fetchone()))
 
     def current_candidate_solution(self,ident:str,user_id:str)->dict|None:
+        return self.current_solution_state(ident, user_id)['current_result']
+
+    def current_verification_for_candidate(self, problem_id: str, user_id: str, candidate_id: str) -> dict | None:
+        """Return only the report bound to the current candidate lineage."""
+
+        state = self.current_solution_state(problem_id, user_id, candidate_id)
+        candidate = state['current_result']
+        if candidate is None:
+            return None
         with self._connect() as db:
-            p,_=self._problem_input(db,ident,user_id);row=db.execute("SELECT * FROM math_candidate_solution_results WHERE problem_id=? AND input_source_revision=? ORDER BY created_at DESC LIMIT 1",(ident,p['source_revision'])).fetchone();return self._decode(dict(row)) if row else None
+            problem, _ = self._problem_input(db, problem_id, user_id)
+            row = db.execute("""SELECT * FROM math_verification_reports
+                WHERE problem_id=? AND input_source_revision=?
+                  AND candidate_solution_result_id=? AND input_hash=?
+                  AND verifier_version=?
+                ORDER BY created_at DESC LIMIT 1""", (problem_id, problem['source_revision'], candidate['id'], candidate['input_hash'], VERIFIER_VERSION)).fetchone()
+            return self._decode(dict(row)) if row else None
+
+    def current_solution_state(self, ident: str, user_id: str, candidate_id: str | None = None) -> dict[str, Any]:
+        """Return the candidate and verification report for the current lineage.
+
+        A report is current only when all of its immutable parents match the
+        problem's current source revision, the current parse/build/analysis
+        IDs, the candidate ID, the candidate input hash, and this server's
+        verifier version.  This prevents an old verified row from being
+        mistaken for the result of a newly edited or re-solved problem.
+        """
+
+        with self._connect() as db:
+            problem, _ = self._problem_input(db, ident, user_id)
+            parse_row = db.execute("SELECT * FROM math_parse_results WHERE problem_id=? AND input_source_revision=? AND status='parsed' ORDER BY created_at DESC LIMIT 1", (ident, problem['source_revision'])).fetchone()
+            build_row = db.execute("SELECT * FROM math_sympy_build_results WHERE problem_id=? AND source_revision=? AND status='built' ORDER BY created_at DESC LIMIT 1", (ident, problem['source_revision'])).fetchone()
+            analysis_row = db.execute("SELECT * FROM math_analysis_reports WHERE problem_id=? AND source_revision=? AND status='analyzed' ORDER BY created_at DESC LIMIT 1", (ident, problem['source_revision'])).fetchone()
+            candidate = None
+            if parse_row and build_row and analysis_row:
+                candidate_sql = """SELECT * FROM math_candidate_solution_results
+                    WHERE problem_id=? AND input_source_revision=?
+                      AND parse_result_id=? AND build_result_id=? AND analysis_report_id=?
+                      AND input_hash=?"""
+                params = (ident, problem['source_revision'], parse_row['id'], build_row['id'], analysis_row['id'], build_row['input_ast_hash'])
+                if candidate_id is not None:
+                    candidate_sql += " AND id=?"
+                    params += (candidate_id,)
+                candidate_sql += " ORDER BY created_at DESC LIMIT 1"
+                row = db.execute(candidate_sql, params).fetchone()
+                candidate = self._decode(dict(row)) if row else None
+
+            verification = None
+            if candidate is not None:
+                row = db.execute("""SELECT * FROM math_verification_reports
+                    WHERE problem_id=? AND input_source_revision=?
+                      AND candidate_solution_result_id=? AND input_hash=?
+                      AND verifier_version=?
+                    ORDER BY created_at DESC LIMIT 1""", (ident, problem['source_revision'], candidate['id'], candidate['input_hash'], VERIFIER_VERSION)).fetchone()
+                verification = self._decode(dict(row)) if row else None
+
+            verification_status = 'not_started'
+            is_verified = False
+            state: dict[str, Any] = {
+                'current_result': candidate,
+                'historical_results': [],
+                'verification_status': verification_status,
+                'is_verified': is_verified,
+            }
+            if verification is not None:
+                verified_result = verification.get('verified_result_json')
+                if isinstance(verified_result, dict) and verification.get('status') == 'verified' and verified_result.get('is_verified') is True:
+                    verification_status, is_verified = 'verified', True
+                else:
+                    verification_status = str(verification.get('status') or 'failed')
+                state['verification_status'] = verification_status
+                state['is_verified'] = is_verified
+                state['verification_report_id'] = verification['id']
+            return state
 
     def evaluate_verification_eligibility(self,ident:str,user_id:str,expected_revision:int)->dict:
         with self._connect() as db:
             p,_=self._problem_input(db,ident,user_id);reasons=[]
             if p['revision']!=expected_revision:reasons.append('STALE_INPUT')
-            candidate=db.execute("SELECT * FROM math_candidate_solution_results WHERE problem_id=? AND input_source_revision=? ORDER BY created_at DESC LIMIT 1",(ident,p['source_revision'])).fetchone()
+            parse=db.execute("SELECT * FROM math_parse_results WHERE problem_id=? AND input_source_revision=? AND status='parsed' ORDER BY created_at DESC LIMIT 1",(ident,p['source_revision'])).fetchone()
+            build=db.execute("SELECT * FROM math_sympy_build_results WHERE problem_id=? AND source_revision=? AND status='built' ORDER BY created_at DESC LIMIT 1",(ident,p['source_revision'])).fetchone()
+            analysis=db.execute("SELECT * FROM math_analysis_reports WHERE problem_id=? AND source_revision=? AND status='analyzed' ORDER BY created_at DESC LIMIT 1",(ident,p['source_revision'])).fetchone()
+            candidate = None
+            if parse and build and analysis:
+                candidate = db.execute("""SELECT * FROM math_candidate_solution_results
+                    WHERE problem_id=? AND input_source_revision=?
+                      AND parse_result_id=? AND build_result_id=? AND analysis_report_id=?
+                      AND input_hash=? ORDER BY created_at DESC LIMIT 1""", (ident,p['source_revision'],parse['id'],build['id'],analysis['id'],build['input_ast_hash'])).fetchone()
             if not candidate:reasons.append('NO_CURRENT_CANDIDATE_RESULT')
             elif candidate['status']!='candidate':reasons.append('CANDIDATE_NOT_VERIFIABLE')
-            parse=db.execute("SELECT * FROM math_parse_results WHERE id=?",(candidate['parse_result_id'],)).fetchone() if candidate else None
-            build=db.execute("SELECT * FROM math_sympy_build_results WHERE id=?",(candidate['build_result_id'],)).fetchone() if candidate else None
-            analysis=db.execute("SELECT * FROM math_analysis_reports WHERE id=?",(candidate['analysis_report_id'],)).fetchone() if candidate else None
             if not parse or parse['input_source_revision']!=p['source_revision']:reasons.append('NO_CURRENT_PARSE_RESULT')
             if not build or build['source_revision']!=p['source_revision']:reasons.append('NO_CURRENT_BUILD_RESULT')
             if not analysis or analysis['source_revision']!=p['source_revision']:reasons.append('NO_CURRENT_ANALYSIS_REPORT')
@@ -559,8 +705,11 @@ class MathWorkbookStore:
             return self._decode(dict(db.execute("SELECT * FROM math_verification_reports WHERE id=?", (rid,)).fetchone()))
 
     def current_verification(self,ident:str,user_id:str)->dict|None:
-        with self._connect() as db:
-            p,_=self._problem_input(db,ident,user_id);row=db.execute("SELECT * FROM math_verification_reports WHERE problem_id=? AND input_source_revision=? ORDER BY created_at DESC LIMIT 1",(ident,p['source_revision'])).fetchone();return self._decode(dict(row)) if row else None
+        state = self.current_solution_state(ident, user_id)
+        candidate = state['current_result']
+        if not candidate:
+            return None
+        return self.current_verification_for_candidate(ident, user_id, candidate['id'])
 
     def evaluate_explanation_eligibility(self,ident:str,user_id:str,expected_revision:int,teaching_profile:dict)->dict:
         with self._connect() as db:
@@ -658,7 +807,7 @@ class MathWorkbookStore:
             if isinstance(value, list):
                 return [public_ast(item) for item in value]
             return value
-        input_data={'schema_version':EXPLANATION_SCHEMA_VERSION,'prompt_version':PROMPT_VERSION,'trace_version':EXPLANATION_TRACE_VERSION,'renderer_version':EXPLANATION_RENDERER_VERSION,'problem_id':ident,'source_revision':gate['source_revision'],'problem_type':candidate.get('candidate_type'),'knowledge_point_ids':[candidate.get('candidate_type','math')],'confirmed_problem':{'display_latex':display,'structured_ast':public_ast(canonical)},'variables':ir.get('variables',[]),'verified_result':{'status':'verified','is_verified':True,'candidate_type':candidate.get('candidate_type'),'values':values},'deterministic_trace':deterministic,'verification_summary':{'status':'verified','required_checks':required,'passed_checks':sorted(set(passed))},'teaching_profile':teaching_profile,'answer_latex':answer}
+        input_data={'schema_version':EXPLANATION_SCHEMA_VERSION,'prompt_version':PROMPT_VERSION,'trace_version':EXPLANATION_TRACE_VERSION,'renderer_version':EXPLANATION_RENDERER_VERSION,'problem_id':ident,'source_revision':gate['source_revision'],'problem_type':candidate.get('candidate_type'),'knowledge_point_ids':[candidate.get('candidate_type','math')],'confirmed_problem':{'display_latex':display,'structured_ast':public_ast(canonical)},'variables':ir.get('variables',[]),'verified_result':{'status':'verified','is_verified':True,'candidate_type':candidate.get('candidate_type'),'values':values},'deterministic_trace':deterministic,'trace_rule_descriptions':dict(sorted(TRACE_RULE_DESCRIPTIONS.items())),'verification_summary':{'status':'verified','required_checks':required,'passed_checks':sorted(set(passed))},'teaching_profile':teaching_profile,'answer_latex':answer}
         input_hash = request_hash({**input_data,'deterministic_trace':{**deterministic,'binding':{**deterministic.get('binding',{}),'input_hash':''}}})
         if existing_binding is not None and existing_binding.get('input_hash') not in {None, '', input_hash}:
             raise ValueError('TRACE_INPUT_CHANGED')

@@ -360,9 +360,17 @@ async def get_math_ir(problem_id: str, user_id: str = Depends(require_math_user)
 
 @router.post("/math-problems/{problem_id}/solve")
 async def solve_math_problem(problem_id: str, payload: SolveRequest, user_id: str = Depends(require_math_user)):
+    store = _get_store()
     try:
-        result = _get_store().solve_problem(problem_id, user_id, payload.expected_revision)
-        return {**result, "verification_status": "not_started", "is_verified": False, "execution": {"mode": result.get("execution_mode", "isolated_process"), "timed_out": bool(result.get("timed_out", False))}}
+        result = store.solve_problem(problem_id, user_id, payload.expected_revision)
+        state = store.current_solution_state(problem_id, user_id, result.get("id"))
+        return {
+            **result,
+            "verification_status": state["verification_status"],
+            "is_verified": state["is_verified"],
+            **({"verification_report_id": state["verification_report_id"]} if state.get("verification_report_id") else {}),
+            "execution": {"mode": result.get("execution_mode", "isolated_process"), "timed_out": bool(result.get("timed_out", False))},
+        }
     except KeyError as error:
         raise HTTPException(404, "题目不存在") from error
     except ValueError as error:
@@ -371,15 +379,12 @@ async def solve_math_problem(problem_id: str, payload: SolveRequest, user_id: st
 
 @router.get("/math-problems/{problem_id}/solution")
 async def get_math_solution(problem_id: str, user_id: str = Depends(require_math_user)):
+    store = _get_store()
     try:
-        result = _get_store().current_candidate_solution(problem_id, user_id)
+        state = store.current_solution_state(problem_id, user_id)
     except KeyError as error:
         raise HTTPException(404, "题目不存在") from error
-    if not result:
-        if not _get_store().get_problem(problem_id, user_id):
-            raise HTTPException(404, "题目不存在")
-        return {"current_result": None, "historical_results": [], "verification_status": "not_started", "is_verified": False}
-    return {"current_result": result, "verification_status": "not_started", "is_verified": False}
+    return state
 
 
 @router.post("/math-problems/{problem_id}/verify")
@@ -395,15 +400,18 @@ async def verify_math_problem(problem_id: str, payload: VerificationRequest, use
 
 @router.get("/math-problems/{problem_id}/verification")
 async def get_math_verification(problem_id: str, user_id: str = Depends(require_math_user)):
+    store = _get_store()
     try:
-        result = _get_store().current_verification(problem_id, user_id)
+        result = store.current_verification(problem_id, user_id)
     except KeyError as error:
         raise HTTPException(404, "题目不存在") from error
     if not result:
-        if not _get_store().get_problem(problem_id, user_id):
+        if not store.get_problem(problem_id, user_id):
             raise HTTPException(404, "题目不存在")
-        return {"current_report": None, "historical_reports": [], "is_verified": False}
-    return {"current_report": result, "is_verified": result["status"] == "verified"}
+        return {"current_report": None, "historical_reports": [], "verification_status": "not_started", "is_verified": False}
+    verified_result = result.get("verified_result_json")
+    is_verified = result.get("status") == "verified" and isinstance(verified_result, dict) and verified_result.get("is_verified") is True
+    return {"current_report": result, "verification_status": "verified" if is_verified else result.get("status", "failed"), "is_verified": is_verified}
 
 
 @router.post("/math-problems/{problem_id}/explanation")
