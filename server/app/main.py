@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import config
 from app.routes.document_parse import router as parse_router
+from app.routes.math_workbook import router as math_workbook_router
 
 logging.basicConfig(
     level=getattr(logging, config.APP_LOG_LEVEL.upper(), logging.INFO),
@@ -40,7 +41,7 @@ app.add_middleware(
 )
 
 app.include_router(parse_router)
-
+app.include_router(math_workbook_router)
 
 @app.get("/health")
 async def health():
