@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime, timezone
 
 
 PROMPT_ID = "verified-math-teaching"
@@ -33,9 +32,11 @@ step_explanations 的数量必须与 deterministic_trace.steps 完全一致，in
 
 PROMPT_CONTENT_HASH = hashlib.sha256(SYSTEM_PROMPT.encode("utf-8")).hexdigest()
 LEGACY_PROMPT_CONTENT_HASH = hashlib.sha256(LEGACY_SYSTEM_PROMPT.encode("utf-8")).hexdigest()
-# The creation timestamp is metadata, not a prompt input.  A stable process
-# value prevents two requests in one process from changing the input hash.
-PROMPT_CREATED_AT = datetime.now(timezone.utc).isoformat()
+# The creation timestamp is metadata, not a prompt input.  It must be stable
+# across processes so the same prompt identity can be audited and historical
+# rows remain readable after a deploy.  Keep this value fixed for prompt v2;
+# changing it would create a new prompt identity without changing the text.
+PROMPT_CREATED_AT = "2026-08-02T00:00:00Z"
 
 
 def prompt_metadata(version: str = PROMPT_VERSION) -> dict[str, str]:

@@ -46,6 +46,34 @@ def _stable_request_id(request: dict, request_id: str | None) -> str:
     return hashlib.sha256(json.dumps(request, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()[:32]
 
 
+def _provider_request_identity(body: dict[str, Any], response: Any) -> tuple[str | None, str]:
+    """Return an upstream request id and its evidence source.
+
+    ``X-Request-ID``/``Request-ID`` are response headers owned by the
+    provider.  The body id is accepted only from the documented response
+    fields.  A local id is deliberately never used as a provider id: doing so
+    makes an absent upstream id look like a successful correlation.
+    """
+
+    headers = getattr(response, "headers", {}) or {}
+    normalized: dict[str, Any] = {}
+    try:
+        items = headers.items()
+    except AttributeError:
+        items = ()
+    for key, value in items:
+        normalized[str(key).lower()] = value
+    for key in ("x-request-id", "request-id"):
+        value = normalized.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip(), key
+    for key in ("id", "request_id", "requestId"):
+        value = body.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip(), "response-body-id"
+    return None, "none"
+
+
 def _duplicate_reject(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -90,6 +118,8 @@ class MockExplanationProvider:
             "cached_tokens": None,
             "estimated_cost": 0.0,
             "provider_request_id": None,
+            "provider_request_id_source": "none",
+            "client_request_id": None,
             "actual_model_name": "mock",
             "pricing_version": None,
             "attempts": 1,
@@ -100,7 +130,13 @@ class MockExplanationProvider:
         steps = trace.get("steps", []) if isinstance(trace, dict) else (trace if isinstance(trace, list) else [])
         passed_checks = request.get("verification_summary", {}).get("passed_checks", request.get("passed_checks", []))
         request_id = _stable_request_id(request, request_id)
-        self.last_metrics.update({"request_id": request_id, "provider_request_id": request_id, "attempts": 1})
+        self.last_metrics.update({
+            "request_id": request_id,
+            "client_request_id": request_id,
+            "provider_request_id": None,
+            "provider_request_id_source": "none",
+            "attempts": 1,
+        })
         # Keep the legacy shape available to old unit callers that did not
         # provide a v2 request.  Real explanation requests always carry v2.
         if request.get("schema_version") != "2":
@@ -145,15 +181,16 @@ class DeepSeekExplanationProvider:
         estimated_cost = None
         if isinstance(input_tokens, int) and isinstance(output_tokens, int) and config.MATH_EXPLANATION_INPUT_PRICE_PER_MILLION is not None and config.MATH_EXPLANATION_OUTPUT_PRICE_PER_MILLION is not None:
             estimated_cost = input_tokens / 1_000_000 * config.MATH_EXPLANATION_INPUT_PRICE_PER_MILLION + output_tokens / 1_000_000 * config.MATH_EXPLANATION_OUTPUT_PRICE_PER_MILLION
-        headers = getattr(response, "headers", {}) or {}
-        provider_request_id = headers.get("x-request-id") or headers.get("X-Request-ID") or headers.get("request-id") or headers.get("Request-ID") or body.get("id") or request_id
+        provider_request_id, provider_request_id_source = _provider_request_identity(body, response)
         return {
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "cached_tokens": cached_tokens,
             "estimated_cost": estimated_cost,
             "provider_request_id": provider_request_id,
-            "actual_model_name": body.get("model") or config.MATH_EXPLANATION_MODEL,
+            "provider_request_id_source": provider_request_id_source,
+            "client_request_id": request_id,
+            "actual_model_name": body.get("model") if isinstance(body.get("model"), str) and body.get("model").strip() else None,
             "pricing_version": config.MATH_EXPLANATION_PRICING_VERSION,
             "duration_ms": duration_ms,
             "request_id": request_id,
@@ -165,8 +202,10 @@ class DeepSeekExplanationProvider:
         if not config.MATH_EXPLANATION_API_KEY:
             self.last_metrics = {
                 "request_id": request_id,
+                "client_request_id": request_id,
                 "provider_request_id": None,
-                "actual_model_name": config.MATH_EXPLANATION_MODEL,
+                "provider_request_id_source": "none",
+                "actual_model_name": None,
                 "pricing_version": config.MATH_EXPLANATION_PRICING_VERSION,
                 "attempts": 0,
                 "input_tokens": None,
@@ -252,13 +291,16 @@ class DeepSeekExplanationProvider:
         self.last_metrics = {
             "duration_ms": int((time.monotonic() - started) * 1000),
             "request_id": request_id,
-            "provider_request_id": request_id,
+            "client_request_id": request_id,
+            "provider_request_id": None,
+            "provider_request_id_source": "none",
             "attempts": attempts,
             "input_tokens": None,
             "output_tokens": None,
             "cached_tokens": None,
             "estimated_cost": None,
             "pricing_version": config.MATH_EXPLANATION_PRICING_VERSION,
+            "actual_model_name": None,
         }
         raise error
 
