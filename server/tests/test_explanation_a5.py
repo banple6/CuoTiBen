@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
+import os
 import sqlite3
 import tempfile
 import unittest
@@ -80,6 +82,97 @@ class RendererAndTraceTests(unittest.TestCase):
 
 
 class ProviderAndValidatorA5Tests(unittest.TestCase):
+    def test_prompt_v2_metadata_is_stable_across_reload(self):
+        import app.math_workbook.explanation.prompt as prompt
+
+        expected = (prompt.PROMPT_CONTENT_HASH, prompt.PROMPT_VERSION, prompt.SCHEMA_VERSION, prompt.PROMPT_CREATED_AT)
+        self.assertEqual(prompt.PROMPT_CREATED_AT, "2026-08-02T00:00:00Z")
+        importlib.reload(prompt)
+        self.assertEqual((prompt.PROMPT_CONTENT_HASH, prompt.PROMPT_VERSION, prompt.SCHEMA_VERSION, prompt.PROMPT_CREATED_AT), expected)
+
+    def test_provider_request_id_requires_upstream_evidence(self):
+        import app.math_workbook.explanation.provider as provider_module
+
+        class Response:
+            def __init__(self, headers):
+                self.headers = headers
+
+        base = {"model": "deepseek-chat", "usage": {"prompt_tokens": 2, "completion_tokens": 3}}
+        for headers, body, expected, source in (
+            ({"x-request-id": "up-x"}, base, "up-x", "x-request-id"),
+            ({"request-id": "up-r"}, base, "up-r", "request-id"),
+            ({}, {**base, "id": "body-id"}, "body-id", "response-body-id"),
+            ({}, base, None, "none"),
+        ):
+            metrics = provider_module.DeepSeekExplanationProvider._usage_metrics(body, Response(headers), "client-stable", 4, 1)
+            self.assertEqual(metrics["provider_request_id"], expected)
+            self.assertEqual(metrics["provider_request_id_source"], source)
+            self.assertEqual(metrics["client_request_id"], "client-stable")
+            self.assertEqual(metrics["request_id"], "client-stable")
+
+    def test_mock_provider_never_fakes_provider_request_id(self):
+        provider = MockExplanationProvider()
+        asyncio.run(provider.generate_explanation({"schema_version": "2", "deterministic_trace": {"steps": []}}, "client-stable"))
+        self.assertIsNone(provider.last_metrics["provider_request_id"])
+        self.assertEqual(provider.last_metrics["provider_request_id_source"], "none")
+        self.assertEqual(provider.last_metrics["client_request_id"], "client-stable")
+
+    def test_canary_failure_codes_are_stable_and_key_guard_is_explicit(self):
+        from tests.live_test_deepseek_explanation import _guard, _stable_error_code
+
+        with patch.dict(os.environ, {"MATH_EXPLANATION_LIVE_TEST": "0", "MATH_EXPLANATION_PROVIDER": "deepseek"}, clear=False):
+            self.assertIn("LIVE_TEST", _guard())
+        with patch.dict(os.environ, {"MATH_EXPLANATION_LIVE_TEST": "1", "MATH_EXPLANATION_PROVIDER": "deepseek"}, clear=True):
+            self.assertEqual(_guard(), "API key not configured")
+        for code, expected in (
+            ("PROVIDER_HTTP_401", "CANARY_HTTP_FAILED"),
+            ("PROVIDER_HTTP_429", "CANARY_RATE_LIMITED"),
+            ("MODEL_RESPONSE_DUPLICATE_FIELD", "CANARY_DUPLICATE_FIELD"),
+            ("MODEL_RESPONSE_TOO_LARGE", "CANARY_RESPONSE_TOO_LARGE"),
+            ("MODEL_RESPONSE_TRACE_MISMATCH", "CANARY_TRACE_MISMATCH"),
+        ):
+            self.assertEqual(_stable_error_code(ExplanationProviderError(code)), expected)
+
+    def test_canary_mocked_production_chain_persists_and_hides_failed_current(self):
+        from app import config
+        from app.math_workbook.explanation.provider import DeepSeekExplanationProvider
+        from tests.live_test_deepseek_explanation import _run_sample
+
+        async def valid_generate(provider, request, request_id=None):
+            provider.last_metrics = {
+                "client_request_id": request_id,
+                "provider_request_id": "upstream-test-id",
+                "provider_request_id_source": "response-body-id",
+                "attempts": 1,
+                "input_tokens": 7,
+                "output_tokens": 9,
+                "cached_tokens": 0,
+                "estimated_cost": 0.0,
+                "duration_ms": 1,
+                "actual_model_name": "deepseek-chat",
+            }
+            return await MockExplanationProvider().generate_explanation(request, request_id)
+
+        async def failed_generate(provider, request, request_id=None):
+            provider.last_metrics = {"client_request_id": request_id, "provider_request_id": None, "provider_request_id_source": "none", "attempts": 1, "duration_ms": 1}
+            raise ExplanationProviderError("PROVIDER_HTTP_401")
+
+        old_provider = config.MATH_EXPLANATION_PROVIDER
+        config.MATH_EXPLANATION_PROVIDER = "deepseek"
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                with patch.object(DeepSeekExplanationProvider, "generate_explanation", valid_generate):
+                    valid = asyncio.run(_run_sample({"sample_id": "linear_unique", "formula": "2x+3=7"}, Path(tmp) / "valid"))
+                self.assertEqual(valid["status"], "CANARY_VALIDATED")
+                self.assertTrue(valid["persisted"]); self.assertTrue(valid["readback"]); self.assertTrue(valid["cross_user_read_rejected"])
+                self.assertEqual(valid["metrics"]["provider_request_id_source"], "response-body-id")
+                with patch.object(DeepSeekExplanationProvider, "generate_explanation", failed_generate):
+                    failed = asyncio.run(_run_sample({"sample_id": "linear_no_solution", "formula": "0x=1"}, Path(tmp) / "failed"))
+                self.assertEqual(failed["status"], "CANARY_HTTP_FAILED")
+                self.assertTrue(failed["persisted"]); self.assertTrue(failed["failure_current_hidden"])
+        finally:
+            config.MATH_EXPLANATION_PROVIDER = old_provider
+
     def test_json_compatibility_is_conservative(self):
         self.assertEqual(parse_model_json('{"a":1}'), {"a": 1})
         self.assertEqual(parse_model_json('```json\n{"a":1}\n```'), {"a": 1})
